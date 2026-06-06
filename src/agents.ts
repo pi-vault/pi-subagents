@@ -1,15 +1,28 @@
 import {
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
+  writeFileSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { basename, join, parse, resolve } from "node:path";
 import type {
+  AgentCreationInput,
   AgentDefinition,
   AgentDiscoveryDiagnostic,
   AgentDiscoveryResult,
   ResolvedPaths,
 } from "./types.js";
+
+export const BUILT_IN_TOOL_NAMES = [
+  "read",
+  "write",
+  "edit",
+  "bash",
+  "grep",
+  "find",
+  "ls",
+] as const;
 
 function parseStringArray(
   value: unknown,
@@ -40,12 +53,18 @@ function parseStringArray(
         });
 
         if (normalized.some((entry) => !entry)) {
-          return { ok: false, reason: `${fieldName} must not contain empty strings` };
+          return {
+            ok: false,
+            reason: `${fieldName} must not contain empty strings`,
+          };
         }
 
         return { ok: true, value: normalized };
       } catch {
-        return { ok: false, reason: `${fieldName} must be a comma-separated string or string array` };
+        return {
+          ok: false,
+          reason: `${fieldName} must be a comma-separated string or string array`,
+        };
       }
     }
 
@@ -68,16 +87,24 @@ function parseStringArray(
     }
 
     if (normalized.some((entry) => !entry)) {
-      return { ok: false, reason: `${fieldName} must not contain empty strings` };
+      return {
+        ok: false,
+        reason: `${fieldName} must not contain empty strings`,
+      };
     }
 
     return { ok: true, value: normalized };
   }
 
-  return { ok: false, reason: `${fieldName} must be a comma-separated string or string array` };
+  return {
+    ok: false,
+    reason: `${fieldName} must be a comma-separated string or string array`,
+  };
 }
 
-function parseFrontmatter(content: string):
+function parseFrontmatter(
+  content: string,
+):
   | { ok: true; frontmatter: Record<string, unknown>; systemPrompt: string }
   | { ok: false; reason: string } {
   const normalized = content.replace(/\r\n/g, "\n");
@@ -145,10 +172,35 @@ function parseFrontmatter(content: string):
   return { ok: true, frontmatter, systemPrompt };
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function normalizeOptionalString(
+  value: string | undefined,
+): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeNameForComparison(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export function discoverToolNames(
+  runtimeToolNames: readonly string[] = [],
+): string[] {
+  return [...new Set([...BUILT_IN_TOOL_NAMES, ...runtimeToolNames])].sort(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
 export function parseAgentFile(
   filePath: string,
   content: string,
-): { ok: true; agent: AgentDefinition } | { ok: false; diagnostic: AgentDiscoveryDiagnostic } {
+):
+  | { ok: true; agent: AgentDefinition }
+  | { ok: false; diagnostic: AgentDiscoveryDiagnostic } {
   const parsed = parseFrontmatter(content);
   if (!parsed.ok) {
     return {
@@ -161,7 +213,10 @@ export function parseAgentFile(
   }
 
   const { frontmatter, systemPrompt } = parsed;
-  const name = typeof frontmatter.name === "string" ? frontmatter.name.trim() : "";
+  const explicitName =
+    typeof frontmatter.name === "string" ? frontmatter.name.trim() : "";
+  const inferredName = parse(filePath).name.toLowerCase();
+  const name = explicitName || inferredName;
   if (!name) {
     return {
       ok: false,
@@ -282,7 +337,8 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
   const diagnostics = [...userResult.diagnostics, ...bundledResult.diagnostics];
 
   for (const agent of userResult.agents) {
-    if (agentsByName.has(agent.name)) {
+    const comparisonName = normalizeNameForComparison(agent.name);
+    if (agentsByName.has(comparisonName)) {
       diagnostics.push({
         path: agent.sourcePath,
         reason: `duplicate agent name "${agent.name}" skipped; first definition wins`,
@@ -290,11 +346,12 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
       continue;
     }
 
-    agentsByName.set(agent.name, agent);
+    agentsByName.set(comparisonName, agent);
   }
 
   for (const agent of bundledResult.agents) {
-    if (agentsByName.has(agent.name)) {
+    const comparisonName = normalizeNameForComparison(agent.name);
+    if (agentsByName.has(comparisonName)) {
       diagnostics.push({
         path: agent.sourcePath,
         reason: `duplicate agent name "${agent.name}" skipped; user agent wins`,
@@ -302,11 +359,145 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
       continue;
     }
 
-    agentsByName.set(agent.name, agent);
+    agentsByName.set(comparisonName, agent);
   }
 
   return {
     agents: [...agentsByName.values()],
     diagnostics,
   };
+}
+
+function serializeStringList(fieldName: string, values: string[]): string {
+  return values.length > 0
+    ? `${fieldName}: ${values.join(", ")}`
+    : `${fieldName}:`;
+}
+
+export function createAgentMarkdown(input: AgentCreationInput): string {
+  const name = normalizeOptionalString(input.name);
+  const description = input.description.trim();
+  const tools = uniqueStrings(
+    input.tools.map((value) => value.trim()).filter(Boolean),
+  );
+  const model = normalizeOptionalString(input.model);
+  const thinking = normalizeOptionalString(input.thinking);
+  const subagentAgents = uniqueStrings(
+    input.subagentAgents.map((value) => value.trim()).filter(Boolean),
+  );
+  const systemPrompt = input.systemPrompt.replace(/\r\n/g, "\n").trim();
+
+  const frontmatter = ["---"];
+  if (name) {
+    frontmatter.push(`name: ${name}`);
+  }
+  frontmatter.push(`description: ${description}`);
+  frontmatter.push(serializeStringList("tools", tools));
+  if (model) {
+    frontmatter.push(`model: ${model}`);
+  }
+  if (thinking) {
+    frontmatter.push(`thinking: ${thinking}`);
+  }
+  if (subagentAgents.length > 0) {
+    frontmatter.push(`subagent_agents: ${subagentAgents.join(", ")}`);
+  }
+  if (input.timeoutMs !== undefined) {
+    frontmatter.push(`timeout_ms: ${input.timeoutMs}`);
+  }
+  frontmatter.push("---", systemPrompt);
+
+  return `${frontmatter.join("\n")}\n`;
+}
+
+export function createAgentFile(
+  paths: ResolvedPaths,
+  input: AgentCreationInput,
+  discovery: AgentDiscoveryResult,
+  toolNames: string[],
+): AgentDefinition {
+  const name = normalizeOptionalString(input.name);
+  if (input.name !== undefined && !name) {
+    throw new Error("name must match ^[A-Za-z0-9_-]+$");
+  }
+  if (name && !/^[A-Za-z0-9_-]+$/.test(name)) {
+    throw new Error("name must match ^[A-Za-z0-9_-]+$");
+  }
+
+  const filenameSlug = name
+    ? name.toLowerCase()
+    : normalizeOptionalString(input.filenameSlug);
+  if (!filenameSlug || !/^[a-z0-9_-]+$/.test(filenameSlug)) {
+    throw new Error("filename slug must match ^[a-z0-9_-]+$");
+  }
+
+  const description = input.description.trim();
+  if (!description) {
+    throw new Error("description must be non-empty");
+  }
+
+  const systemPrompt = input.systemPrompt.replace(/\r\n/g, "\n").trim();
+  if (!systemPrompt) {
+    throw new Error("markdown body must be non-empty");
+  }
+
+  const knownToolNames = new Set(toolNames);
+  const tools = uniqueStrings(
+    input.tools.map((value) => value.trim()).filter(Boolean),
+  );
+  const unknownTools = tools.filter(
+    (toolName) => !knownToolNames.has(toolName),
+  );
+  if (unknownTools.length > 0) {
+    throw new Error(`unknown tools: ${unknownTools.join(", ")}`);
+  }
+
+  const knownAgentNames = new Set(discovery.agents.map((agent) => agent.name));
+  const subagentAgents = uniqueStrings(
+    input.subagentAgents.map((value) => value.trim()).filter(Boolean),
+  );
+  const unknownAgents = subagentAgents.filter(
+    (agentName) => !knownAgentNames.has(agentName),
+  );
+  if (unknownAgents.length > 0) {
+    throw new Error(`unknown subagent_agents: ${unknownAgents.join(", ")}`);
+  }
+
+  if (input.timeoutMs !== undefined) {
+    if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
+      throw new Error("timeout_ms must be a positive finite number");
+    }
+  }
+
+  const targetName = name ?? filenameSlug;
+  const targetNameKey = normalizeNameForComparison(targetName);
+  const existingNameKeys = new Set(
+    discovery.agents.map((agent) => normalizeNameForComparison(agent.name)),
+  );
+  if (existingNameKeys.has(targetNameKey)) {
+    throw new Error(`duplicate agent name: ${targetName}`);
+  }
+
+  mkdirSync(paths.userAgentsDir, { recursive: true });
+  const filePath = join(paths.userAgentsDir, `${filenameSlug}.md`);
+  const markdown = createAgentMarkdown({
+    name,
+    description,
+    tools,
+    model: normalizeOptionalString(input.model),
+    thinking: normalizeOptionalString(input.thinking),
+    subagentAgents,
+    timeoutMs: input.timeoutMs,
+    systemPrompt,
+  });
+  writeFileSync(filePath, markdown, { encoding: "utf8", flag: "wx" });
+
+  const parsed = parseAgentFile(filePath, markdown);
+  if (!parsed.ok) {
+    throw new Error(
+      `created invalid agent file: ${basename(filePath)}: ${parsed.diagnostic.reason}`,
+    );
+  }
+
+  return parsed.agent;
 }
