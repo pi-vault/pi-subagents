@@ -15,7 +15,7 @@ Pi-usable result:
 - Treat built-in Pi tools as:
   `read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`.
 - Use the merged tool list for tool-name validation.
-- Extend `/agents` with a create flow that writes a new markdown agent file into `$PI_CODING_AGENT_DIR/agents`.
+- Extend `/agents` with a create flow that writes a new markdown agent file into the user agent directory at `<agentDir>/agents`.
 - Create flow fields:
   `name`, `description`, `tools`, optional `model`, optional `thinking`, optional `subagent_agents`, optional `timeout_ms`, and markdown body.
 - Reject duplicate agent names.

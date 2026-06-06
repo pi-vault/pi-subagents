@@ -23,7 +23,7 @@ Go with a very minimal approach. No need to over-engineer. Calling the sub-agent
 - Manual invocation: provide `/agent <agent> <task...>` in addition to the `subagent` tool.
 - Automatic invocation: keyword-based routing is implemented as LLM guidance in the `subagent` tool description, not as an extension-side prompt interceptor.
 - Recursion control: configure a maximum recursive depth for nested subagent calls, default `2`.
-- Default agents: `scout`, `worker`, `researcher`, and `planner` are defined in this extension's bundled `agents/` folder and copied into `$PI_CODING_AGENT_DIR/agents` when the extension is installed.
+- Default agents: `scout`, `worker`, `researcher`, and `planner` are defined in this extension's bundled `agents/` folder and used as runtime fallbacks when no user-defined agent with the same name exists.
 - Tool discovery: merge Pi built-in tools with tools discovered from Pi's runtime registry.
 - Result shape: the parent-visible tool result is the child agent's final assistant text; structured metadata exists for rendering and debugging only.
 - Operational settings: use global config defaults with optional per-agent frontmatter overrides such as `timeout_ms`.
@@ -97,7 +97,7 @@ Tool description guidance must explicitly tell the parent agent:
 
 ## Agent Model
 
-Epic 1 uses markdown files in `$PI_CODING_AGENT_DIR/agents/*.md` at runtime. The extension also ships bundled default-agent markdown files in its own `agents/` folder for installation-time copying.
+Epic 1 uses markdown files in `$PI_CODING_AGENT_DIR/agents/*.md` at runtime. The extension also ships bundled default-agent markdown files in its own `agents/` folder as fallback definitions.
 
 Frontmatter schema:
 
@@ -141,9 +141,12 @@ Epic 1 starter agents:
 Add the minimal package structure:
 
 - `package.json`
+- `pnpm-workspace.yaml`
 - `tsconfig.json`
 - `biome.json`
 - `vitest.config.ts`
+- `.github/workflows/quality.yml`
+- `.github/workflows/release.yml`
 - `agents/scout.md`
 - `agents/worker.md`
 - `agents/researcher.md`
@@ -160,12 +163,31 @@ Add the minimal package structure:
 
 Exact filenames can vary slightly if the implementation stays equally small and the responsibilities remain clear.
 
+Phase 1 repo baseline:
+
+- keep the same package/tooling structure as `pi-status`
+- keep this repo's selected versions and ranges rather than forcing exact parity with `pi-status`
+- package/runtime baseline:
+  `node >=22.19.0`,
+  `@earendil-works/pi-coding-agent ^0.78.1`,
+  `@earendil-works/pi-tui ^0.78.1`,
+  `@biomejs/biome ^2.4.16`,
+  `typescript ^6.0.3`,
+  `vitest ^4.1.7`
+- keep `pnpm-workspace.yaml` with the current dependency-graph allowances:
+  `@google/genai`, `esbuild`, and `protobufjs`
+- keep `biome.json` at schema `2.4.16` with the repo's explicit JavaScript formatter settings and file includes
+- keep the GitHub workflow split used by `pi-status`:
+  `quality.yml` for pushes and pull requests to `master`, and `release.yml` for `v*` tags
+- keep workflow runtime/tooling aligned with the current `pi-status` setup:
+  `pnpm/action-setup@v4` on pnpm `11.3.0`, `actions/setup-node@v4` on Node `22`, frozen-lockfile installs, separate `lint`/`typecheck`/`test` quality steps, and release checks for `pnpm check`, `pnpm run pack:dry-run`, and tag-to-package-version parity before npm publish
+
 ### Runtime flow
 
 1. Extension loads.
-2. Extension reads config from `$PI_CODING_AGENT_DIR/extensions/subagents.json`.
-3. During extension installation, Pi copies bundled default-agent markdown files from this extension's `agents/` folder into `$PI_CODING_AGENT_DIR/agents`, creating the target directory if needed and skipping any existing files.
-4. Extension discovers agents from `$PI_CODING_AGENT_DIR/agents`.
+2. Extension resolves Pi-owned paths through `getAgentDir()`.
+3. Extension reads config from `<agentDir>/extensions/subagents.json`.
+4. Extension discovers agents from `<agentDir>/agents` and the package-bundled `agents/` directory, with user agents taking precedence on name collisions.
 5. Extension discovers available tool names from Pi's runtime registry and merges them with built-in Pi tool names.
 6. Extension registers the `subagent` tool plus `/agent` and `/agents` commands.
 7. On execution:
@@ -242,24 +264,23 @@ Rules:
 - If `subagent_agents` is present, apply that allowlist through the per-run runtime context so the child only exposes those agents.
 - If current depth equals `maxRecursiveLevel`, do not expose `subagent` to the child even if the agent frontmatter lists it.
 
-### Installation behavior
+### Bundled-agent behavior
 
-Pi install copies the extension's bundled `agents/` folder into `$PI_CODING_AGENT_DIR/agents`.
+The package ships starter agent markdown files in its own `agents/` folder.
 
 Rules:
 
-- create `$PI_CODING_AGENT_DIR/agents` if it does not exist
-- copy bundled `scout.md`, `worker.md`, `researcher.md`, and `planner.md` only when the target file is missing
-- never overwrite an existing agent file in `$PI_CODING_AGENT_DIR/agents`
-- report skipped files clearly so users know when their local agent files took precedence
-- runtime agent discovery remains single-source: only `$PI_CODING_AGENT_DIR/agents` is scanned during normal use
+- user-created agents live under `<agentDir>/agents`
+- bundled `scout.md`, `worker.md`, `researcher.md`, and `planner.md` are loaded as fallback definitions
+- if a bundled agent name conflicts with a user agent, the user agent wins
+- `/agents` must show whether an agent came from the user directory or the bundled package
 
 ### `/agents` command
 
 `/agents` provides a minimal interactive management flow for Epic 1:
 
 - list all discovered agents with name, description, tools, model, thinking level, child allowlist, and source path
-- create a new agent markdown file under `$PI_CODING_AGENT_DIR/agents`
+- create a new agent markdown file under `<agentDir>/agents`
 
 Create flow fields:
 
@@ -332,8 +353,8 @@ Required test scenarios:
 - store transcripts under `$PI_CODING_AGENT_DIR/cache/pi-subagents`
 - discover tool names from Pi runtime registry and merge with built-in tools
 - reject unknown tools before spawn
-- copy missing bundled agents into `$PI_CODING_AGENT_DIR/agents` during install
-- skip existing agent files during install without overwriting them
+- discover bundled fallback agents without copying them into the user agent directory
+- prefer user agents over bundled fallback agents on duplicate names
 - build spawn arguments for built-in tools only
 - build spawn arguments for mixed built-in and extension-registered tools
 - build and consume nested runtime context files without using environment variables
@@ -352,7 +373,7 @@ Required test scenarios:
 Manual verification:
 
 - load the extension into a local Pi environment
-- confirm install copied bundled default agents into `$PI_CODING_AGENT_DIR/agents` without overwriting existing files
+- confirm duplicate names prefer user agents over bundled fallback agents
 - confirm `subagent` appears in tool descriptions
 - confirm `/agent` runs the requested subagent in the foreground
 - confirm `/agents` lists discovered agents and creates a new agent file
@@ -380,8 +401,8 @@ These seams should exist as natural module boundaries, not as speculative interf
 - A Pi extension in this repo can be loaded and registers an `/agent` command.
 - A Pi extension in this repo can be loaded and registers an `/agents` command.
 - The tool accepts `{ agent, task, cwd? }`.
-- Agents are loaded from `$PI_CODING_AGENT_DIR/agents`.
-- Default `scout`, `planner`, `researcher`, and `worker` agent files are bundled in the extension `agents/` folder and copied into `$PI_CODING_AGENT_DIR/agents` during install.
+- Agents are loaded from `<agentDir>/agents`, with bundled fallbacks from the package `agents/` folder.
+- Default `scout`, `planner`, `researcher`, and `worker` agent files are bundled in the extension `agents/` folder and used only when the user directory does not override them.
 - Child subagents run as isolated shell-out `pi` processes.
 - Only explicitly allowlisted tools are exposed to the child.
 - Tool validation uses Pi built-ins plus tools discovered from Pi's runtime registry.
