@@ -26,7 +26,7 @@ Pi-usable result:
 - Verify renderer/debug metadata does not leak into the parent-visible result text.
 - Verify each major failure mode has a clear surfaced error.
 - Verify end-to-end Pi use for:
-  install copy, `/agents`, `/agent`, `subagent`, transcript persistence, and nested delegation.
+  bundled discovery, `/agents`, `/agent`, `subagent`, transcript persistence, and nested delegation.
 - Run manual validation on the default agents:
   `scout`, `planner`, `researcher`, and `worker`.
 
