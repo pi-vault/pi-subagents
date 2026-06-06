@@ -39,8 +39,27 @@ export interface AgentDiscoveryResult {
   diagnostics: AgentDiscoveryDiagnostic[];
 }
 
+export interface AgentCreationInput {
+  name?: string;
+  filenameSlug?: string;
+  description: string;
+  tools: string[];
+  model?: string;
+  thinking?: string;
+  subagentAgents: string[];
+  timeoutMs?: number;
+  systemPrompt: string;
+}
+
 export interface RuntimeDeps {
   resolvePaths: () => ResolvedPaths;
   loadConfig: (paths: ResolvedPaths) => LoadedConfig;
   discoverAgents: (paths: ResolvedPaths) => AgentDiscoveryResult;
+  discoverToolNames: () => string[];
+  createAgentFile: (
+    paths: ResolvedPaths,
+    input: AgentCreationInput,
+    discovery: AgentDiscoveryResult,
+    toolNames: string[],
+  ) => AgentDefinition;
 }

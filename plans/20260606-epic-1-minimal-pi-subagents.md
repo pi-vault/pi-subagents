@@ -101,7 +101,7 @@ Epic 1 uses markdown files in `$PI_CODING_AGENT_DIR/agents/*.md` at runtime. The
 
 Frontmatter schema:
 
-- `name`: required unique agent name.
+- `name`: optional agent name. When omitted or empty, inherit from the markdown filename stem.
 - `description`: required human-readable summary.
 - `tools`: comma-separated tool names.
 - `model`: optional model identifier.
@@ -110,6 +110,7 @@ Frontmatter schema:
 - `timeout_ms`: optional hard timeout override for the child process, overriding the global default when present.
 
 The markdown body is the system prompt.
+Markdown filenames are lowercase slugs such as `scout.md`. Frontmatter `name` may preserve user casing when present.
 
 Epic 1 starter agents:
 
@@ -280,11 +281,11 @@ Rules:
 `/agents` provides a minimal interactive management flow for Epic 1:
 
 - list all discovered agents with name, description, tools, model, thinking level, child allowlist, and source path
-- create a new agent markdown file under `<agentDir>/agents`
+- create a new agent markdown file under `<agentDir>/agents` through `/agents:add`
 
 Create flow fields:
 
-- `name`
+- optional `name`
 - `description`
 - `tools`, chosen from the merged built-in plus runtime-discovered tool list
 - optional `model`
@@ -295,7 +296,19 @@ Create flow fields:
 
 Rules:
 
+- `/agents` with no arguments remains the listing command
+- `/agents:add` uses interactive prompts for scalar fields and a multi-line editor for the markdown body
+- merge built-in Pi tools with `pi.getAllTools()` results, dedupe them, and sort them before presenting or validating tool names
 - reject duplicate agent names unless the user intentionally edits the file outside the command
+- preserve frontmatter `name` casing when provided, but derive the markdown filename from a lowercase slug
+- if frontmatter `name` is omitted, inherit the agent name from the lowercase markdown filename stem
+- reject provided names that do not match `^[A-Za-z0-9_-]+$`
+- reject unknown tool names during creation
+- reject `subagent_agents` values that do not reference currently discovered agents
+- reject empty `description` or markdown body
+- reject invalid `timeout_ms` values unless omitted
+- serialize created agent files deterministically as `<lowercase-name>.md` with comma-separated arrays and a trailing newline
+- create `<agentDir>/agents` if missing, and never overwrite an existing file
 - do not provide edit or delete actions in Epic 1
 - after creation, the new file becomes discoverable through the normal agent directory scan
 
