@@ -8,7 +8,11 @@ import extension, {
   buildAgentsStatusMessage,
   registerSubagentsExtension,
 } from "../src/index.js";
-import type { LoadedConfig, ResolvedPaths } from "../src/types.js";
+import type {
+  AgentDiscoveryResult,
+  LoadedConfig,
+  ResolvedPaths,
+} from "../src/types.js";
 
 function createPaths(): ResolvedPaths {
   return {
@@ -32,11 +36,11 @@ describe("subagents extension", () => {
     expect(() => extension(pi)).not.toThrow();
     expect(commands).toContainEqual({
       name: "agents",
-      description: "Show pi-subagents extension diagnostics",
+      description: "List discovered pi-subagents agents",
     });
   });
 
-  test("registers /agents and reports resolved paths", async () => {
+  test("registers /agents and reports discovered agents plus diagnostics", async () => {
     const paths = createPaths();
     const loadedConfig: LoadedConfig = {
       exists: false,
@@ -45,6 +49,27 @@ describe("subagents extension", () => {
         maxRecursiveLevel: 2,
         defaultTimeoutMs: 600_000,
       },
+    };
+    const discovery: AgentDiscoveryResult = {
+      agents: [
+        {
+          name: "planner",
+          description: "Plans work",
+          tools: ["read", "bash"],
+          model: "default",
+          thinking: "medium",
+          subagentAgents: ["worker", "researcher"],
+          timeoutMs: 180000,
+          systemPrompt: "Plan the work",
+          sourcePath: "/repo/agents/planner.md",
+        },
+      ],
+      diagnostics: [
+        {
+          path: "/tmp/pi-agent/agents/bad.md",
+          reason: "missing required non-empty description",
+        },
+      ],
     };
 
     let handler: RegisteredCommand["handler"] | undefined;
@@ -61,6 +86,7 @@ describe("subagents extension", () => {
     registerSubagentsExtension(pi, {
       resolvePaths: () => paths,
       loadConfig: () => loadedConfig,
+      discoverAgents: () => discovery,
     });
 
     expect(handler).toBeDefined();
@@ -79,7 +105,7 @@ describe("subagents extension", () => {
     expect(notifications).toEqual([
       {
         level: "info",
-        message: buildAgentsStatusMessage(paths, loadedConfig.config),
+        message: buildAgentsStatusMessage(paths, loadedConfig.config, discovery),
       },
     ]);
   });

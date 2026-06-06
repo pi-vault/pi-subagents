@@ -17,7 +17,30 @@ export interface LoadedConfig {
   exists: boolean;
 }
 
+export interface AgentDefinition {
+  name: string;
+  description: string;
+  tools: string[];
+  model?: string;
+  thinking?: string;
+  subagentAgents: string[];
+  timeoutMs?: number;
+  systemPrompt: string;
+  sourcePath: string;
+}
+
+export interface AgentDiscoveryDiagnostic {
+  path: string;
+  reason: string;
+}
+
+export interface AgentDiscoveryResult {
+  agents: AgentDefinition[];
+  diagnostics: AgentDiscoveryDiagnostic[];
+}
+
 export interface RuntimeDeps {
   resolvePaths: () => ResolvedPaths;
   loadConfig: (paths: ResolvedPaths) => LoadedConfig;
+  discoverAgents: (paths: ResolvedPaths) => AgentDiscoveryResult;
 }

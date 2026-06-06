@@ -2,11 +2,11 @@
 
 ## Summary
 
-Phase 3 makes agent management practical by discovering available tools from Pi and allowing users to create new markdown agents from inside Pi.
+Phase 3 makes agent management practical by validating tools against Pi's runtime registry and allowing users to create new markdown agents from inside Pi, building on the discovery and listing work from Phase 2.
 
 Pi-usable result:
 
-- `/agents` lists current agents and can create a new valid agent file.
+- `/agents` keeps the Phase 2 listing behavior and can create a new valid agent file.
 - Created agents are immediately discoverable by Pi.
 
 ## Implementation Changes
