@@ -9,8 +9,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { discoverAgents, parseAgentFile } from "../src/agents.js";
-import type { ResolvedPaths } from "../src/types.js";
+import {
+  createAgentFile,
+  createAgentMarkdown,
+  discoverAgents,
+  discoverToolNames,
+  parseAgentFile,
+} from "../src/agents.js";
+import type { AgentCreationInput, ResolvedPaths } from "../src/types.js";
 
 function createPaths(rootDir: string): ResolvedPaths {
   return {
@@ -19,6 +25,22 @@ function createPaths(rootDir: string): ResolvedPaths {
     userAgentsDir: join(rootDir, "agent", "agents"),
     bundledAgentsDir: join(rootDir, "bundled-agents"),
     transcriptCacheDir: join(rootDir, "agent", "cache", "pi-subagents"),
+  };
+}
+
+function createValidInput(
+  overrides: Partial<AgentCreationInput> = {},
+): AgentCreationInput {
+  return {
+    name: "Scout",
+    description: "Scout files",
+    tools: ["bash", "read"],
+    model: "default",
+    thinking: "medium",
+    subagentAgents: ["worker"],
+    timeoutMs: 180000,
+    systemPrompt: "# System prompt\nInspect the repo.",
+    ...overrides,
   };
 }
 
@@ -62,6 +84,28 @@ describe("agent discovery", () => {
         description: "Scout files",
         tools: ["bash", "read"],
         systemPrompt: "# System prompt\nUse the body unchanged.",
+      },
+    });
+  });
+
+  test("inherits the agent name from the lowercase filename stem when frontmatter name is missing", () => {
+    const parsed = parseAgentFile(
+      "/tmp/Planner.md",
+      [
+        "---",
+        "description: Plans work",
+        "tools: read, bash",
+        "---",
+        "Plan the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: {
+        name: "planner",
+        description: "Plans work",
+        tools: ["read", "bash"],
       },
     });
   });
@@ -125,7 +169,11 @@ describe("agent discovery", () => {
 
     const result = discoverAgents(paths);
 
-    expect(result.agents.map((agent) => agent.name)).toEqual(["alpha", "zeta", "beta"]);
+    expect(result.agents.map((agent) => agent.name)).toEqual([
+      "alpha",
+      "zeta",
+      "beta",
+    ]);
     expect(result.diagnostics).toEqual([
       {
         path: join(paths.bundledAgentsDir, "a-bundled.md"),
@@ -169,6 +217,69 @@ describe("agent discovery", () => {
     ]);
   });
 
+  test("treats casing-only user duplicates as the same agent name", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-discovery-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.userAgentsDir, { recursive: true });
+
+    writeFileSync(
+      join(paths.userAgentsDir, "a-first.md"),
+      "---\nname: Scout\ndescription: First scout\ntools: read\n---\nFirst\n",
+    );
+    writeFileSync(
+      join(paths.userAgentsDir, "b-second.md"),
+      "---\nname: scout\ndescription: Second scout\ntools: bash\n---\nSecond\n",
+    );
+
+    const result = discoverAgents(paths);
+
+    expect(result.agents).toEqual([
+      expect.objectContaining({
+        name: "Scout",
+        description: "First scout",
+        sourcePath: join(paths.userAgentsDir, "a-first.md"),
+      }),
+    ]);
+    expect(result.diagnostics).toEqual([
+      {
+        path: join(paths.userAgentsDir, "b-second.md"),
+        reason: 'duplicate agent name "scout" skipped; first definition wins',
+      },
+    ]);
+  });
+
+  test("treats casing-only bundled duplicates as matching user agents", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-discovery-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.userAgentsDir, { recursive: true });
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+
+    writeFileSync(
+      join(paths.userAgentsDir, "a-user.md"),
+      "---\nname: Scout\ndescription: User scout\ntools: read\n---\nUser\n",
+    );
+    writeFileSync(
+      join(paths.bundledAgentsDir, "a-bundled.md"),
+      "---\nname: scout\ndescription: Bundled scout\ntools: bash\n---\nBundled\n",
+    );
+
+    const result = discoverAgents(paths);
+
+    expect(result.agents).toEqual([
+      expect.objectContaining({
+        name: "Scout",
+        description: "User scout",
+        sourcePath: join(paths.userAgentsDir, "a-user.md"),
+      }),
+    ]);
+    expect(result.diagnostics).toEqual([
+      {
+        path: join(paths.bundledAgentsDir, "a-bundled.md"),
+        reason: 'duplicate agent name "scout" skipped; user agent wins',
+      },
+    ]);
+  });
+
   test("does not fail when the user agent directory is missing", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-discovery-"));
     const paths = createPaths(rootDir);
@@ -189,8 +300,8 @@ describe("agent discovery", () => {
     mkdirSync(paths.bundledAgentsDir, { recursive: true });
 
     writeFileSync(
-      join(paths.userAgentsDir, "01-missing-name.md"),
-      "---\ndescription: Missing name\ntools: read\n---\nBody\n",
+      join(paths.userAgentsDir, "01-missing-description.md"),
+      "---\nname: missing-description\ntools: read\n---\nBody\n",
     );
     writeFileSync(
       join(paths.userAgentsDir, "02-invalid-tools.md"),
@@ -210,8 +321,8 @@ describe("agent discovery", () => {
     expect(result.agents).toEqual([]);
     expect(result.diagnostics).toEqual([
       {
-        path: join(paths.userAgentsDir, "01-missing-name.md"),
-        reason: "missing required non-empty name",
+        path: join(paths.userAgentsDir, "01-missing-description.md"),
+        reason: "missing required non-empty description",
       },
       {
         path: join(paths.userAgentsDir, "02-invalid-tools.md"),
@@ -225,6 +336,238 @@ describe("agent discovery", () => {
         path: join(paths.bundledAgentsDir, "04-malformed-frontmatter.md"),
         reason: "malformed frontmatter line: name bad",
       },
+    ]);
+  });
+});
+
+describe("tool discovery and agent creation", () => {
+  test("merges built-ins with runtime tools, deduplicates, and sorts deterministically", () => {
+    expect(
+      discoverToolNames(["zeta", "bash", "alpha", "read", "alpha"]),
+    ).toEqual([
+      "alpha",
+      "bash",
+      "edit",
+      "find",
+      "grep",
+      "ls",
+      "read",
+      "write",
+      "zeta",
+    ]);
+  });
+
+  test("serializes created agents deterministically", () => {
+    expect(createAgentMarkdown(createValidInput())).toBe(
+      [
+        "---",
+        "name: Scout",
+        "description: Scout files",
+        "tools: bash, read",
+        "model: default",
+        "thinking: medium",
+        "subagent_agents: worker",
+        "timeout_ms: 180000",
+        "---",
+        "# System prompt",
+        "Inspect the repo.",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("writes a valid markdown file and preserves capitalized frontmatter name with lowercase filename", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [
+        {
+          name: "worker",
+          description: "Does work",
+          tools: ["read"],
+          subagentAgents: [],
+          systemPrompt: "Do work",
+          sourcePath: "/repo/agents/worker.md",
+        },
+      ],
+      diagnostics: [],
+    };
+
+    const created = createAgentFile(
+      paths,
+      createValidInput(),
+      discovery,
+      discoverToolNames(["custom_tool"]),
+    );
+
+    expect(created).toMatchObject({
+      name: "Scout",
+      sourcePath: join(paths.userAgentsDir, "scout.md"),
+    });
+    expect(readFileSync(join(paths.userAgentsDir, "scout.md"), "utf8")).toBe(
+      createAgentMarkdown(createValidInput()),
+    );
+  });
+
+  test("inherits the created agent name from the filename slug when frontmatter name is omitted", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [], diagnostics: [] };
+
+    const created = createAgentFile(
+      paths,
+      createValidInput({
+        name: undefined,
+        filenameSlug: "planner",
+        subagentAgents: [],
+        model: undefined,
+        thinking: undefined,
+        timeoutMs: undefined,
+      }),
+      discovery,
+      discoverToolNames([]),
+    );
+
+    expect(created.name).toBe("planner");
+    expect(readFileSync(join(paths.userAgentsDir, "planner.md"), "utf8")).toBe(
+      [
+        "---",
+        "description: Scout files",
+        "tools: bash, read",
+        "---",
+        "# System prompt",
+        "Inspect the repo.",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("rejects invalid creation inputs", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [
+        {
+          name: "worker",
+          description: "Does work",
+          tools: ["read"],
+          subagentAgents: [],
+          systemPrompt: "Do work",
+          sourcePath: "/repo/agents/worker.md",
+        },
+      ],
+      diagnostics: [],
+    };
+    const toolNames = discoverToolNames([]);
+
+    expect(() =>
+      createAgentFile(
+        paths,
+        createValidInput({ name: "bad name" }),
+        discovery,
+        toolNames,
+      ),
+    ).toThrow("name must match ^[A-Za-z0-9_-]+$");
+    expect(() =>
+      createAgentFile(
+        paths,
+        createValidInput({ name: undefined, filenameSlug: "BadSlug" }),
+        discovery,
+        toolNames,
+      ),
+    ).toThrow("filename slug must match ^[a-z0-9_-]+$");
+    expect(() =>
+      createAgentFile(
+        paths,
+        createValidInput({ description: "   " }),
+        discovery,
+        toolNames,
+      ),
+    ).toThrow("description must be non-empty");
+    expect(() =>
+      createAgentFile(
+        paths,
+        createValidInput({ systemPrompt: "   " }),
+        discovery,
+        toolNames,
+      ),
+    ).toThrow("markdown body must be non-empty");
+    expect(() =>
+      createAgentFile(
+        paths,
+        createValidInput({ tools: ["unknown-tool"] }),
+        discovery,
+        toolNames,
+      ),
+    ).toThrow("unknown tools: unknown-tool");
+    expect(() =>
+      createAgentFile(
+        paths,
+        createValidInput({ subagentAgents: ["unknown-agent"] }),
+        discovery,
+        toolNames,
+      ),
+    ).toThrow("unknown subagent_agents: unknown-agent");
+    expect(() =>
+      createAgentFile(
+        paths,
+        createValidInput({ timeoutMs: 0 }),
+        discovery,
+        toolNames,
+      ),
+    ).toThrow("timeout_ms must be a positive finite number");
+  });
+
+  test("rejects duplicate names cleanly", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [
+        {
+          name: "planner",
+          description: "Plans work",
+          tools: ["read"],
+          subagentAgents: [],
+          systemPrompt: "Plan",
+          sourcePath: "/repo/agents/planner.md",
+        },
+      ],
+      diagnostics: [],
+    };
+
+    expect(() =>
+      createAgentFile(
+        paths,
+        createValidInput({ name: "Planner", subagentAgents: [] }),
+        discovery,
+        discoverToolNames([]),
+      ),
+    ).toThrow("duplicate agent name: Planner");
+  });
+
+  test("created agents are discoverable immediately without restart", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+    writeFileSync(
+      join(paths.bundledAgentsDir, "worker.md"),
+      "---\nname: worker\ndescription: Does work\ntools: read\n---\nDo work\n",
+    );
+
+    const before = discoverAgents(paths);
+    expect(before.agents.map((agent) => agent.name)).toEqual(["worker"]);
+
+    createAgentFile(
+      paths,
+      createValidInput({ name: "Scout", subagentAgents: ["worker"] }),
+      before,
+      discoverToolNames([]),
+    );
+
+    const after = discoverAgents(paths);
+    expect(after.agents.map((agent) => agent.name)).toEqual([
+      "Scout",
+      "worker",
     ]);
   });
 });
