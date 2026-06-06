@@ -1,0 +1,394 @@
+# Epic 1: Minimal Pi Subagents Extension
+
+## Summary
+
+Epic 1 builds a small Pi extension that adds a foreground-only `subagent` tool plus user-facing `/agent` and `/agents` commands. Each subagent runs as an isolated child `pi` process with its own system prompt, tool allowlist, model, thinking level, and recursion-depth guard. The design follows the philosophy in [pi-subagents-design-philosophy.md](pi-subagents-design-philosophy.md): reduce parent context bloat, keep behavior observable, and make the agent loadout trivial to extend through markdown files.
+
+This epic intentionally stops at the minimal shell-out model. It does not attempt to reproduce the richer lifecycle systems from the larger reference projects. The implementation should stay small, explicit, and easy to extend in later epics.
+
+## Design Philosophy
+
+Go with a very minimal approach. No need to over-engineer. Calling the sub-agents tool just creates an isolated Pi process and then returns whatever the final text output is. And this allows you to very easily edit the extension. It's very simple. Makes it easy to try out different ideas and see what works.
+
+- Capability: make the sub-agents as capable as you need them to be
+- Observability: have full knowledge of everything going on at all times because it can get kind of messy and confusing when your sub-agents are spawning their own sub-agents. I need to be able to observe their exact behavior, see what they're doing. This is important for two reasons. First, for improving the agents themselves. So, seeing where they go wrong so you can improve their prompts and functionality later on. And secondly, it gives a feeling of control
+- Extensibility: First, extensibility of the sub-agent loadout. It should be trivial to add and modify agents. So, each agent is entirely determined by a markdown file. Define name, description, tools, available sub-agents, model, and thinking level in the front matter, and then write the system prompt for the agent, and it gets automatically discovered by the extension. Secondly, extensibility of the extension itself
+
+## Product Decisions
+
+- Architecture baseline: minimal shell-out implementation, not in-process managed child sessions.
+- Runtime scope: foreground only for Epic 1. One tool call waits for one child result.
+- Agent discovery scope: global agents only, using `$PI_CODING_AGENT_DIR/agents`.
+- Tool API: simple parameter shape `{ agent, task, cwd? }`.
+- Manual invocation: provide `/agent <agent> <task...>` in addition to the `subagent` tool.
+- Automatic invocation: keyword-based routing is implemented as LLM guidance in the `subagent` tool description, not as an extension-side prompt interceptor.
+- Recursion control: configure a maximum recursive depth for nested subagent calls, default `2`.
+- Default agents: `scout`, `worker`, `researcher`, and `planner` are defined in this extension's bundled `agents/` folder and copied into `$PI_CODING_AGENT_DIR/agents` when the extension is installed.
+- Tool discovery: merge Pi built-in tools with tools discovered from Pi's runtime registry.
+- Result shape: the parent-visible tool result is the child agent's final assistant text; structured metadata exists for rendering and debugging only.
+- Operational settings: use global config defaults with optional per-agent frontmatter overrides such as `timeout_ms`.
+- Source strategy: use ideas from the references, but do not copy code.
+
+## Goals
+
+- Add a Pi extension in this repo that registers a `subagent` tool.
+- Add a Pi command in this repo that lets the user manually invoke a subagent with `/agent`.
+- Add a Pi command in this repo that lists agents and creates new ones with `/agents`.
+- Make agent definitions markdown-driven and globally discoverable.
+- Keep subagents isolated from the parent conversation unless context is explicitly embedded in the delegated task.
+- Provide enough observability that the parent can see what the child did, what tools it used, how long it ran, and why it failed.
+- Preserve a clean path to later epics for background execution, richer UI, project-local agents, and deeper recursion controls.
+
+## Non-Goals
+
+- No background jobs.
+- No `get_subagent_result` or `steer_subagent`.
+- No resume support.
+- No project-local `.pi/agents`.
+- No in-process child session management.
+- No worktree isolation, scheduling, memory scopes, or service API for other extensions.
+
+## User-Facing Behavior
+
+The extension registers one tool:
+
+```json
+{
+  "agent": "scout",
+  "task": "Find the files responsible for auth token validation",
+  "cwd": "/optional/working/directory"
+}
+```
+
+The extension also registers one command:
+
+```text
+/agent scout Find the files responsible for auth token validation
+```
+
+And one management command:
+
+```text
+/agents
+```
+
+Behavior:
+
+- `agent` selects a discovered markdown-defined subagent.
+- `task` must be self-contained. The child has no parent conversation context.
+- `cwd` defaults to the parent session working directory when omitted.
+- The call runs one child `pi` process and returns the child agent's final assistant text as the parent-visible result.
+- Structured metadata such as usage, tool activity, transcript path, and exit details is for rendering and debugging; it does not become first-class LLM-visible output unless the child includes it in final text.
+- `/agent` uses the same execution path as the tool and remains foreground-only in Epic 1.
+- `/agents` opens a minimal interactive menu that lists discovered agents and creates new markdown-defined agents.
+- `/agents` does not edit agents in place; users modify markdown files directly after creation.
+
+Tool description guidance must explicitly tell the parent agent:
+
+- Use `subagent` for delegated reasoning or exploration, not simple direct I/O.
+- Put all required context in `task`.
+- Prefer multiple `subagent` tool calls in the same turn when parallel delegation is needed later through the parent orchestrator, even though Epic 1 itself only implements one child per call.
+- Use `scout` for read-only repo exploration, `planner` for planning work, `researcher` for web work, and `worker` for implementation tasks.
+- Use keyword heuristics when choosing a subagent automatically:
+  `find`, `map`, `trace`, `where` -> `scout`
+  `plan`, `design`, `architecture`, `migration` -> `planner`
+  `search`, `docs`, `latest`, `source` -> `researcher`
+  `implement`, `fix`, `edit`, `refactor` -> `worker`
+
+## Agent Model
+
+Epic 1 uses markdown files in `$PI_CODING_AGENT_DIR/agents/*.md` at runtime. The extension also ships bundled default-agent markdown files in its own `agents/` folder for installation-time copying.
+
+Frontmatter schema:
+
+- `name`: required unique agent name.
+- `description`: required human-readable summary.
+- `tools`: comma-separated tool names.
+- `model`: optional model identifier.
+- `thinking`: optional thinking level.
+- `subagent_agents`: optional comma-separated allowlist of child agents this agent may spawn.
+- `timeout_ms`: optional hard timeout override for the child process, overriding the global default when present.
+
+The markdown body is the system prompt.
+
+Epic 1 starter agents:
+
+- `scout`
+  - Purpose: fast read-only codebase reconnaissance.
+  - Default tools: `read`, `grep`, `find`, `ls`.
+  - Default model: cheap/fast model such as Haiku.
+  - Output: compact findings with file paths, line ranges, architecture notes, and suggested next file.
+- `planner`
+  - Purpose: read-only planning, sequencing, and risk analysis.
+  - Default tools: `read`, `grep`, `find`, `ls`, optional `bash` for non-mutating inspection only.
+  - Default model: balanced planning model such as Sonnet.
+  - Output: implementation steps, tradeoffs, risks, and targeted verification.
+- `researcher`
+  - Purpose: web research and synthesis.
+  - Default tools: `web_search`, `web_fetch`.
+  - Default model: stronger synthesis model such as Sonnet.
+  - Output: short sourced brief with kept sources and gaps.
+- `worker`
+  - Purpose: focused code changes and verification.
+  - Default tools: `read`, `write`, `edit`, `safe_bash`, optional web tools, and `subagent`.
+  - Child allowlist: `scout`, `researcher`.
+  - Output: changes made, verification performed, remaining caveats.
+
+## Extension Architecture
+
+### Package layout
+
+Add the minimal package structure:
+
+- `package.json`
+- `tsconfig.json`
+- `biome.json`
+- `vitest.config.ts`
+- `agents/scout.md`
+- `agents/worker.md`
+- `agents/researcher.md`
+- `agents/planner.md`
+- `src/index.ts`
+- `src/config.ts`
+- `src/agents.ts`
+- `src/spawn.ts`
+- `src/commands.ts`
+- `src/tools.ts`
+- `src/render.ts`
+- `src/types.ts`
+- `tests/`
+
+Exact filenames can vary slightly if the implementation stays equally small and the responsibilities remain clear.
+
+### Runtime flow
+
+1. Extension loads.
+2. Extension reads config from `$PI_CODING_AGENT_DIR/extensions/subagents.json`.
+3. During extension installation, Pi copies bundled default-agent markdown files from this extension's `agents/` folder into `$PI_CODING_AGENT_DIR/agents`, creating the target directory if needed and skipping any existing files.
+4. Extension discovers agents from `$PI_CODING_AGENT_DIR/agents`.
+5. Extension discovers available tool names from Pi's runtime registry and merges them with built-in Pi tool names.
+6. Extension registers the `subagent` tool plus `/agent` and `/agents` commands.
+7. On execution:
+   - validate `agent` and `task`
+   - resolve target agent config
+   - compute built-in tool allowlist, child extension loading needs, current recursion depth, and effective operational settings
+   - reject or hide nested `subagent` access when `maxRecursiveLevel` has already been reached
+   - write a temporary system prompt file
+   - write a temporary task file only when the delegated task is too long for direct CLI input
+   - spawn child `pi` in JSON mode
+   - persist the child JSON event stream or transcript for the run
+   - parse the persisted event stream into progress state and final output
+   - collect final assistant text, usage when available, duration, stderr, transcript path, and exit status
+   - clean up temporary files
+   - return final assistant text plus structured details for rendering and debugging
+
+### Child process invocation
+
+The implementation should follow the minimal shell-out pattern proven in the small reference:
+
+- resolve the effective Pi binary from the current process when possible, otherwise fall back to `pi`
+- use JSON mode and non-interactive prompt execution
+- disable inherited session state
+- load only the extensions needed for the child run
+- allowlist tools explicitly
+- append the agent system prompt from a temp file
+- pass model and thinking flags explicitly
+- pass recursion and allowlist context through extension-controlled runtime files, not environment variables
+
+Target child invocation shape:
+
+```text
+pi --mode json -p --no-session --no-skills --tools ... --extension ... --models ... --thinking ... --append-system-prompt <prompt-file> "Task: ..."
+```
+
+If the task is large, write it to a temp markdown file and pass `@<task-file>` instead of a giant inline argument.
+
+For nested delegation, the runtime writes a per-run context file under `$PI_CODING_AGENT_DIR/cache/pi-subagents/runtime` containing:
+
+- current depth, where the parent call is depth `1`
+- configured recursion ceiling
+- optional child-agent allowlist derived from `subagent_agents`
+- run identifier metadata needed to reconnect nested calls to the right parent context
+
+### Tool resolution
+
+Pi tools fall into two categories, but the extension treats them through one merged runtime registry.
+
+Built-in Pi tools are supported directly:
+
+- `read`
+- `write`
+- `edit`
+- `bash`
+- `grep`
+- `find`
+- `ls`
+
+Extension-registered tools are any non-built-in tools exposed by Pi extensions, including this extension's own `subagent` tool. These are not configured in `subagents.json`; the extension discovers them from Pi's runtime registry, for example through `pi.getAllTools()`, and uses those discovered names alongside the built-in tool list:
+
+```json
+{
+  "maxConcurrency": 4,
+  "maxRecursiveLevel": 2,
+  "defaultTimeoutMs": 600000
+}
+```
+
+Rules:
+
+- If an agent requests a tool name not present in the merged runtime registry, fail before spawning with a clear unknown-tool error.
+- If an agent requests an extension-registered tool and the child run did not load the providing extension, surface the child-process failure clearly with stderr, exit status, and transcript path.
+- `subagent` is exposed to the child only when the child run loads this extension in a nested-safe mode.
+- If `subagent_agents` is present, apply that allowlist through the per-run runtime context so the child only exposes those agents.
+- If current depth equals `maxRecursiveLevel`, do not expose `subagent` to the child even if the agent frontmatter lists it.
+
+### Installation behavior
+
+Pi install copies the extension's bundled `agents/` folder into `$PI_CODING_AGENT_DIR/agents`.
+
+Rules:
+
+- create `$PI_CODING_AGENT_DIR/agents` if it does not exist
+- copy bundled `scout.md`, `worker.md`, `researcher.md`, and `planner.md` only when the target file is missing
+- never overwrite an existing agent file in `$PI_CODING_AGENT_DIR/agents`
+- report skipped files clearly so users know when their local agent files took precedence
+- runtime agent discovery remains single-source: only `$PI_CODING_AGENT_DIR/agents` is scanned during normal use
+
+### `/agents` command
+
+`/agents` provides a minimal interactive management flow for Epic 1:
+
+- list all discovered agents with name, description, tools, model, thinking level, child allowlist, and source path
+- create a new agent markdown file under `$PI_CODING_AGENT_DIR/agents`
+
+Create flow fields:
+
+- `name`
+- `description`
+- `tools`, chosen from the merged built-in plus runtime-discovered tool list
+- optional `model`
+- optional `thinking`
+- optional `subagent_agents`
+- optional `timeout_ms`
+- markdown body for the system prompt
+
+Rules:
+
+- reject duplicate agent names unless the user intentionally edits the file outside the command
+- do not provide edit or delete actions in Epic 1
+- after creation, the new file becomes discoverable through the normal agent directory scan
+
+### Observability and rendering
+
+Epic 1 should remain minimal, but observability is a hard requirement:
+
+- status: pending, running, completed, failed
+- persisted JSON event stream or transcript for every run
+- transcript path for later inspection
+- current or recent tool activity reconstructed from the persisted event stream
+- latest prose/thinking line when available from the persisted event stream
+- duration
+- token usage summary when available
+- model name if known
+- exit code
+- stderr or timeout reason when failing
+- final assistant text
+
+Rendering requirements:
+
+- compact call line in collapsed mode
+- structured result block with status, usage, and transcript reference
+- expandable final markdown output
+- explicit error messages for unknown agent, invalid config, missing child extension availability, timeout, abort, spawn failure, and non-zero child exit
+
+## Implementation Constraints
+
+- Keep the diff surgical and the architecture small.
+- Do not introduce abstractions needed only by later epics.
+- Prefer module boundaries around concrete runtime responsibilities: config, agent discovery, spawn, render, and tests.
+- Use ASCII unless an existing Pi renderer strongly benefits from a symbol already used by the ecosystem.
+- If the child process exits non-zero but still produced a final assistant message, surface both the message and the failure metadata.
+- Final assistant text remains the tool result; renderer/debug metadata must stay out of the parent-visible result payload by default.
+
+## Verification Plan
+
+Automated checks:
+
+- typecheck with `tsc --noEmit`
+- unit tests with Vitest
+- one integration-style test suite using a mock `pi` executable that emits JSON mode events and final text
+
+Required test scenarios:
+
+- parse valid agent frontmatter
+- reject or skip malformed agent markdown
+- verify bundled default agents exist in the extension `agents/` folder
+- discover global agents correctly
+- list discovered agents through `/agents`
+- create new agents through `/agents`
+- filter agents through the per-run runtime context allowlist
+- parse and enforce `maxRecursiveLevel`
+- persist a transcript or JSON event log for every run
+- store transcripts under `$PI_CODING_AGENT_DIR/cache/pi-subagents`
+- discover tool names from Pi runtime registry and merge with built-in tools
+- reject unknown tools before spawn
+- copy missing bundled agents into `$PI_CODING_AGENT_DIR/agents` during install
+- skip existing agent files during install without overwriting them
+- build spawn arguments for built-in tools only
+- build spawn arguments for mixed built-in and extension-registered tools
+- build and consume nested runtime context files without using environment variables
+- handle long task spillover to temp file
+- parse child stdout event stream into progress and final output
+- verify final assistant text is the only parent-visible result content
+- verify renderer/debug metadata does not leak into the result text
+- surface stderr and non-zero exit codes
+- enforce global timeout defaults and agent-level `timeout_ms` overrides
+- clean up temp files after completion or failure
+- render collapsed and expanded result views
+- parse `/agent <agent> <task...>` and route it through the same execution path as the tool
+- verify `/agents` create rejects duplicate names and writes valid markdown
+- verify `planner` agent loading and read-only tool configuration
+
+Manual verification:
+
+- load the extension into a local Pi environment
+- confirm install copied bundled default agents into `$PI_CODING_AGENT_DIR/agents` without overwriting existing files
+- confirm `subagent` appears in tool descriptions
+- confirm `/agent` runs the requested subagent in the foreground
+- confirm `/agents` lists discovered agents and creates a new agent file
+- run `scout` against this repo and verify the result is returned inline
+- run `planner` on a planning task and verify it stays read-only
+- run `worker` on a harmless read-only task and verify child delegation is possible only to allowed agents and blocked past the configured recursion depth
+- inspect the generated transcript location under `$PI_CODING_AGENT_DIR/cache/pi-subagents`
+
+## Later Epic Seams
+
+Epic 1 should leave clear seams for future work without implementing it now:
+
+- background execution and result polling
+- richer progress widgets and nested child rendering
+- project-local agents and trust prompts
+- interactive configuration and agent management
+- in-process session runtime
+- service API for cross-extension use
+
+These seams should exist as natural module boundaries, not as speculative interfaces added prematurely.
+
+## Acceptance Criteria
+
+- A Pi extension in this repo can be loaded and registers a `subagent` tool.
+- A Pi extension in this repo can be loaded and registers an `/agent` command.
+- A Pi extension in this repo can be loaded and registers an `/agents` command.
+- The tool accepts `{ agent, task, cwd? }`.
+- Agents are loaded from `$PI_CODING_AGENT_DIR/agents`.
+- Default `scout`, `planner`, `researcher`, and `worker` agent files are bundled in the extension `agents/` folder and copied into `$PI_CODING_AGENT_DIR/agents` during install.
+- Child subagents run as isolated shell-out `pi` processes.
+- Only explicitly allowlisted tools are exposed to the child.
+- Tool validation uses Pi built-ins plus tools discovered from Pi's runtime registry.
+- Recursion depth is capped by configuration and enforced for nested delegation.
+- Each run persists an inspectable transcript or JSON event log.
+- Transcripts default to `$PI_CODING_AGENT_DIR/cache/pi-subagents`.
+- Foreground execution returns the child agent's final assistant text inline.
+- Structured metadata is available for rendering and debugging without becoming the tool's parent-visible result content.
+- Operational defaults come from config and may be overridden per agent through frontmatter.
+- Tests cover configuration, discovery, spawn assembly, parsing, and failure handling.
