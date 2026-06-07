@@ -31,6 +31,7 @@ function createPi(
   registerMessageRenderer?: (customType: string, renderer: unknown) => void,
 ) {
   return {
+    on() {},
     registerTool() {},
     registerCommand(name: string, command: RegisteredCommand) {
       registerCommand?.(name, command);
@@ -39,6 +40,7 @@ function createPi(
       registerMessageRenderer?.(customType, renderer);
     },
     sendMessage() {},
+    sendUserMessage() {},
     getAllTools() {
       return [];
     },
@@ -85,7 +87,7 @@ describe("subagents extension", () => {
       exists: false,
       config: {
         maxConcurrency: 4,
-        maxRecursiveLevel: 2,
+        maxRecursiveLevel: 3,
         defaultTimeoutMs: 600_000,
       },
     };
@@ -95,7 +97,6 @@ describe("subagents extension", () => {
           name: "planner",
           description: "Plans work",
           tools: ["read", "bash"],
-          model: "default",
           thinking: "medium",
           subagentAgents: ["worker", "researcher"],
           timeoutMs: 180000,
@@ -176,7 +177,6 @@ describe("subagents extension", () => {
           name: "Scout",
           description: "Scout files",
           tools: ["bash", "read"],
-          model: "default",
           thinking: "medium",
           subagentAgents: ["worker"],
           timeoutMs: 180000,

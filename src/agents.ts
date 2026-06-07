@@ -183,6 +183,19 @@ function normalizeOptionalString(
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeAgentModel(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "default") {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
 function normalizeNameForComparison(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -281,10 +294,7 @@ export function parseAgentFile(
     timeoutMs = parsedTimeout;
   }
 
-  const model =
-    typeof frontmatter.model === "string" && frontmatter.model.trim()
-      ? frontmatter.model.trim()
-      : undefined;
+  const model = normalizeAgentModel(frontmatter.model);
   const thinking =
     typeof frontmatter.thinking === "string" && frontmatter.thinking.trim()
       ? frontmatter.thinking.trim()
@@ -393,7 +403,7 @@ export function createAgentMarkdown(input: AgentCreationInput): string {
   }
   frontmatter.push(`description: ${description}`);
   frontmatter.push(serializeStringList("tools", tools));
-  if (model) {
+  if (model && model.toLowerCase() !== "default") {
     frontmatter.push(`model: ${model}`);
   }
   if (thinking) {

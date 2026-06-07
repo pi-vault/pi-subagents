@@ -19,6 +19,7 @@ import {
   executeSubagent,
   parseAgentCommandArgs,
   registerAgentCommand,
+  registerSlashAgentBridge,
   registerSubagentTool,
   type SubagentRuntimeDeps,
 } from "../src/subagent.js";
@@ -61,7 +62,7 @@ function createDeps(paths: ResolvedPaths, discovery: AgentDiscoveryResult): Runt
     exists: false,
     config: {
       maxConcurrency: 3,
-      maxRecursiveLevel: 2,
+      maxRecursiveLevel: 3,
       defaultTimeoutMs: 500,
     },
   };
@@ -188,6 +189,7 @@ describe("subagent execution", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       runtime,
     );
 
@@ -203,6 +205,7 @@ describe("subagent execution", () => {
       discovery,
       { agent: "missing", task: "Do work" },
       "/repo",
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -271,6 +274,7 @@ describe("subagent execution", () => {
       undefined,
       parentSessionFile,
       parentSessionDir,
+      undefined,
       runtime,
     );
 
@@ -336,7 +340,7 @@ describe("subagent execution", () => {
     expect(existsSync(result.details.childSessionPath)).toBe(true);
   });
 
-  test("omits --model when agent model is default", async () => {
+  test("inherits the parent session model when agent model is default", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
     const discovery = {
@@ -367,13 +371,16 @@ describe("subagent execution", () => {
       undefined,
       undefined,
       undefined,
+      "openai/gpt-5",
       runtime,
     );
 
     expect(result.isError).toBe(false);
     expect(spawnCalls).toHaveLength(1);
-    expect(spawnCalls[0]?.args).not.toContain("--model");
-    expect(result.details.model).toBeUndefined();
+    expect(spawnCalls[0]?.args).toEqual(
+      expect.arrayContaining(["--model", "openai/gpt-5"]),
+    );
+    expect(result.details.model).toBe("openai/gpt-5");
     expect(result.details.status).toBe("success");
   });
 
@@ -405,6 +412,7 @@ describe("subagent execution", () => {
       discovery,
       { agent: "Scout", task: "Inspect repo" },
       "/repo",
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -458,6 +466,7 @@ describe("subagent execution", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       runtime,
     );
 
@@ -477,7 +486,7 @@ describe("subagent execution", () => {
       PI_SUBAGENT_FANOUT_CHILD: "1",
       PI_SUBAGENT_RUN_ID: "run-123",
       PI_SUBAGENT_DEPTH: "1",
-      PI_SUBAGENT_MAX_DEPTH: "2",
+      PI_SUBAGENT_MAX_DEPTH: "3",
       PI_SUBAGENT_ALLOWED_AGENTS: "researcher,scout",
       PI_SUBAGENT_PARENT_ROOT_RUN_ID: "run-123",
       PI_SUBAGENT_PARENT_RUN_ID: "",
@@ -502,7 +511,7 @@ describe("subagent execution", () => {
       rootRunId: "run-123",
       runId: "run-123",
       depth: 1,
-      maxDepth: 2,
+      maxDepth: 3,
       allowedAgents: ["researcher", "scout"],
     });
     expect(existsSync(runtimeState.routeFilePath)).toBe(true);
@@ -570,6 +579,7 @@ describe("subagent execution", () => {
           undefined,
           undefined,
           undefined,
+          undefined,
           runtime,
         );
 
@@ -629,6 +639,7 @@ describe("subagent execution", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       runtime,
     );
 
@@ -656,7 +667,7 @@ describe("subagent execution", () => {
       PI_SUBAGENT_FANOUT_CHILD: "1",
       PI_SUBAGENT_RUN_ID: "scout-self-recursion-run",
       PI_SUBAGENT_DEPTH: "1",
-      PI_SUBAGENT_MAX_DEPTH: "2",
+      PI_SUBAGENT_MAX_DEPTH: "3",
       PI_SUBAGENT_ALLOWED_AGENTS: "scout",
       PI_SUBAGENT_PARENT_ROOT_RUN_ID: "scout-self-recursion-run",
       PI_SUBAGENT_PARENT_DEPTH: "0",
@@ -678,7 +689,7 @@ describe("subagent execution", () => {
     };
     expect(runtimeState).toMatchObject({
       depth: 1,
-      maxDepth: 2,
+      maxDepth: 3,
       allowedAgents: ["scout"],
     });
 
@@ -725,6 +736,7 @@ describe("subagent execution", () => {
           undefined,
           undefined,
           undefined,
+          undefined,
           runtime,
         );
 
@@ -759,6 +771,7 @@ describe("subagent execution", () => {
           discovery,
           { agent: "Scout", task: "Inspect repo" },
           "/repo",
+          undefined,
           undefined,
           undefined,
           undefined,
@@ -800,6 +813,7 @@ describe("subagent execution", () => {
           discovery,
           { agent: "Scout", task: "Inspect repo" },
           "/repo",
+          undefined,
           undefined,
           undefined,
           undefined,
@@ -847,6 +861,7 @@ describe("subagent execution", () => {
           undefined,
           undefined,
           undefined,
+          undefined,
           runtime,
         );
 
@@ -889,6 +904,7 @@ describe("subagent execution", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       runtime,
     );
 
@@ -917,6 +933,7 @@ describe("subagent execution", () => {
       discovery,
       { agent: "Scout", task: "Inspect repo" },
       "/repo",
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -954,6 +971,7 @@ describe("subagent execution", () => {
       discovery,
       { agent: "Scout", task: "Inspect repo" },
       "/repo",
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -998,6 +1016,7 @@ describe("subagent execution", () => {
         undefined,
         undefined,
         undefined,
+        undefined,
         runtime,
       );
 
@@ -1031,6 +1050,7 @@ describe("subagent execution", () => {
       discovery,
       { agent: "Scout", task: "Inspect repo" },
       "/repo",
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -1075,6 +1095,7 @@ describe("subagent execution", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       runtime,
     );
 
@@ -1092,7 +1113,7 @@ describe("subagent execution", () => {
 });
 
 describe("subagent registration", () => {
-  test("registers tool renderers and /agent command, and /agent sends a visible custom message", async () => {
+  test("registers tool renderers and /agent command, and /agent runs through the bridge", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
     const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
@@ -1100,6 +1121,9 @@ describe("subagent registration", () => {
     const tools: Array<{ name: string; renderCall?: unknown; renderResult?: unknown }> = [];
     const commands = new Map<string, RegisteredCommand>();
     const messages: unknown[] = [];
+    let inputHandler:
+      | ((event: { text: string; source: "extension" }, ctx: unknown) => Promise<{ action: "handled" } | undefined>)
+      | undefined;
     const runtime = createRuntime(
       ((_, __, ___) => {
         const child = new FakeChildProcess();
@@ -1114,6 +1138,9 @@ describe("subagent registration", () => {
     );
 
     const pi = {
+      on(_event: string, handler: typeof inputHandler) {
+        inputHandler = handler;
+      },
       registerTool(definition: { name: string; renderCall?: unknown; renderResult?: unknown }) {
         tools.push(definition);
       },
@@ -1123,10 +1150,29 @@ describe("subagent registration", () => {
       sendMessage(message: unknown) {
         messages.push(message);
       },
+      sendUserMessage(text: string) {
+        return inputHandler?.(
+          { text, source: "extension" },
+          {
+            cwd: "/repo",
+            signal: undefined,
+            model: { provider: "openai", id: "gpt-5" },
+            sessionManager: {
+              getSessionFile() {
+                return undefined;
+              },
+              getSessionDir() {
+                return "/unused";
+              },
+            },
+          },
+        );
+      },
     } as unknown as ExtensionAPI;
 
+    registerSlashAgentBridge(pi, deps, runtime);
     registerSubagentTool(pi, deps, runtime);
-    registerAgentCommand(pi, deps, runtime);
+    registerAgentCommand(pi, deps, runtime, () => true);
 
     expect(tools).toContainEqual(
       expect.objectContaining({
@@ -1146,6 +1192,65 @@ describe("subagent registration", () => {
     await handler?.("Scout inspect this repo", {
       cwd: "/repo",
       signal: undefined,
+      isIdle() {
+        return true;
+      },
+      sessionManager: {
+        getSessionFile() {
+          return undefined;
+        },
+        isPersisted() {
+          return false;
+        },
+        getSessionDir() {
+          return "/unused";
+        },
+      },
+      ui: { notify() {} },
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(messages).toEqual([
+      expect.objectContaining({
+        customType: "pi-subagent-result",
+        content: "done",
+        display: true,
+        details: expect.objectContaining({
+          stopReason: "end",
+          model: "openai/gpt-5",
+        }),
+      }),
+    ]);
+  });
+
+  test("/agent reports a visible bridge error when no runtime bridge is available", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
+    const deps = createDeps(paths, discovery);
+    const commands = new Map<string, RegisteredCommand>();
+    const messages: unknown[] = [];
+
+    const pi = {
+      registerTool() {},
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      sendMessage(message: unknown) {
+        messages.push(message);
+      },
+    } as unknown as ExtensionAPI;
+
+    registerAgentCommand(pi, deps);
+
+    const handler = commands.get("agent")?.handler;
+    expect(handler).toBeDefined();
+    await handler?.("Scout", {
+      cwd: "/repo",
+      signal: undefined,
+      isIdle() {
+        return true;
+      },
       sessionManager: {
         getSessionFile() {
           return undefined;
@@ -1163,66 +1268,9 @@ describe("subagent registration", () => {
     expect(messages).toEqual([
       expect.objectContaining({
         customType: "pi-subagent-result",
-        content: "done",
+        content: "No active pi-subagents runtime bridge is available for /agent.",
         display: true,
-        details: expect.objectContaining({ stopReason: "end" }),
       }),
     ]);
-  });
-
-  test("/agent sends a visible error message for validation failures before spawn", async () => {
-    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
-    const paths = createPaths(rootDir);
-    const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
-    const deps = createDeps(paths, discovery);
-    const commands = new Map<string, RegisteredCommand>();
-    const messages: unknown[] = [];
-    const notify = vi.fn();
-    const runtime = createRuntime(
-      vi.fn(() => {
-        throw new Error("spawn should not be called");
-      }) as SubagentRuntimeDeps["spawnChild"],
-    );
-
-    const pi = {
-      registerTool() {},
-      registerCommand(name: string, command: RegisteredCommand) {
-        commands.set(name, command);
-      },
-      sendMessage(message: unknown) {
-        messages.push(message);
-      },
-    } as unknown as ExtensionAPI;
-
-    registerAgentCommand(pi, deps, runtime);
-
-    const handler = commands.get("agent")?.handler;
-    expect(handler).toBeDefined();
-    await handler?.("Scout", {
-      cwd: "/repo",
-      signal: undefined,
-      sessionManager: {
-        getSessionFile() {
-          return undefined;
-        },
-        isPersisted() {
-          return false;
-        },
-        getSessionDir() {
-          return "/unused";
-        },
-      },
-      ui: { notify },
-    } as never);
-
-    expect(messages).toEqual([
-      expect.objectContaining({
-        customType: "pi-subagent-result",
-        content: 'Missing task for agent "Scout". Available agents: Scout',
-        display: true,
-        details: expect.objectContaining({ status: "error", stopReason: "error" }),
-      }),
-    ]);
-    expect(notify).not.toHaveBeenCalled();
   });
 });
