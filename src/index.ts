@@ -6,21 +6,21 @@ import {
   createAgentFile,
   discoverAgents,
   discoverToolNames,
-} from "./agents.js";
-import { renderSubagentMessage } from "./render.js";
-import { loadConfig } from "./config.js";
-import { resolvePaths } from "./paths.js";
+} from "./core/agents.js";
+import { loadConfig } from "./core/config.js";
+import { resolvePaths } from "./core/paths.js";
 import {
   registerAgentCommand,
   registerSlashAgentBridge,
   registerSubagentTool,
-} from "./subagent.js";
+} from "./core/subagent.js";
 import type {
   AgentCreationInput,
   AgentDiscoveryResult,
   RuntimeDeps,
   SubagentsConfig,
-} from "./types.js";
+} from "./shared/types.js";
+import { renderSubagentMessage } from "./tui/render.js";
 
 export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   return {
@@ -72,7 +72,6 @@ export function buildAgentsStatusMessage(
     `user agents: ${paths.userAgentsDir}`,
     `bundled agents: ${paths.bundledAgentsDir}`,
     `sessions: ${paths.sessionsDir}`,
-    `runtime cache: ${paths.runtimeCacheDir}`,
     `defaults: maxConcurrency=${config.maxConcurrency}, maxRecursiveLevel=${config.maxRecursiveLevel}, defaultTimeoutMs=${config.defaultTimeoutMs}`,
     `agents: ${discovery.agents.length}`,
   ];

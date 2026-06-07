@@ -4,6 +4,7 @@ description: Research agent for evidence gathering, code reading, and tradeoff a
 tools:
   - read
   - bash
+model: default
 thinking: high
 timeout_ms: 180000
 ---

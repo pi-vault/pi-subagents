@@ -4,6 +4,7 @@ description: Planning agent for breaking work into small, verifiable steps.
 tools:
   - read
   - bash
+model: default
 thinking: medium
 subagent_agents:
   - scout

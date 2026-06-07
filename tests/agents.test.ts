@@ -15,8 +15,8 @@ import {
   discoverAgents,
   discoverToolNames,
   parseAgentFile,
-} from "../src/agents.js";
-import type { AgentCreationInput, ResolvedPaths } from "../src/types.js";
+} from "../src/core/agents.js";
+import type { AgentCreationInput, ResolvedPaths } from "../src/shared/types.js";
 
 function createPaths(rootDir: string): ResolvedPaths {
   return {
@@ -25,7 +25,6 @@ function createPaths(rootDir: string): ResolvedPaths {
     userAgentsDir: join(rootDir, "agent", "agents"),
     bundledAgentsDir: join(rootDir, "bundled-agents"),
     sessionsDir: join(rootDir, "agent", "sessions"),
-    runtimeCacheDir: join(rootDir, "agent", "cache", "pi-subagents"),
   };
 }
 

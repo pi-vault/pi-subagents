@@ -2,8 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
   buildSubagentCallText,
   buildSubagentResultText,
-} from "../src/render.js";
-import type { SubagentExecutionDetails } from "../src/types.js";
+} from "../src/tui/render.js";
+import type { SubagentExecutionDetails } from "../src/shared/types.js";
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -23,6 +23,11 @@ function createDetails(
     durationMs: 321,
     childSessionDir: "/sessions/child/run-0",
     childSessionPath: "/sessions/child/run-0/session.jsonl",
+    artifactPaths: {
+      input: "/sessions/subagent-artifacts/run-123_Scout_0_input.md",
+      output: "/sessions/subagent-artifacts/run-123_Scout_0_output.md",
+      meta: "/sessions/subagent-artifacts/run-123_Scout_0_meta.json",
+    },
     model: "openai/gpt-5",
     stopReason: "end",
     exitCode: 0,
@@ -96,6 +101,15 @@ describe("subagent render helpers", () => {
     expect(text).toContain("recent tools:");
     expect(text).toContain("- read start:");
     expect(text).toContain("child session path: /sessions/child/run-0/session.jsonl");
+    expect(text).toContain(
+      "artifact input: /sessions/subagent-artifacts/run-123_Scout_0_input.md",
+    );
+    expect(text).toContain(
+      "artifact output: /sessions/subagent-artifacts/run-123_Scout_0_output.md",
+    );
+    expect(text).toContain(
+      "artifact meta: /sessions/subagent-artifacts/run-123_Scout_0_meta.json",
+    );
     expect(text).toContain("final output:");
     expect(text).toContain("final answer");
   });
