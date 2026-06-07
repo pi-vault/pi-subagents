@@ -6,7 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ import {
   renderSubagentResult,
   toSubagentCommandMessage,
 } from "./render.js";
+import { resolveRuntimeArtifactsPaths } from "./paths.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
@@ -28,6 +29,7 @@ import type {
   ResolvedPaths,
   RuntimeDeps,
   SubagentExecutionResult,
+  SlashAgentBridgeRequest,
   SubagentToolActivity,
   SubagentToolInput,
   SubagentUsage,
@@ -46,8 +48,6 @@ const CHILD_SESSION_FILE_NAME = "session.jsonl";
 const SUBAGENT_EXTENSION_ENTRY = fileURLToPath(
   new URL("./index.ts", import.meta.url),
 );
-const NESTED_EVENTS_DIR_NAME = "nested-subagent-events";
-const NESTED_RUNS_DIR_NAME = "nested-subagent-runs";
 const ROUTE_FILE_NAME = "route.json";
 const RUNTIME_STATE_FILE_NAME = "runtime.json";
 const PI_SUBAGENT_CHILD = "PI_SUBAGENT_CHILD";
@@ -66,6 +66,9 @@ const PI_SUBAGENT_PARENT_DEPTH = "PI_SUBAGENT_PARENT_DEPTH";
 const PI_SUBAGENT_PARENT_PATH = "PI_SUBAGENT_PARENT_PATH";
 const PI_SUBAGENT_PARENT_CAPABILITY_TOKEN =
   "PI_SUBAGENT_PARENT_CAPABILITY_TOKEN";
+const SLASH_AGENT_BRIDGE_PREFIX = "__pi_subagent_bridge__ ";
+const SLASH_AGENT_BRIDGE_UNAVAILABLE =
+  "No active pi-subagents runtime bridge is available for /agent.";
 
 type JsonContentPart = { type: string; text?: string };
 type JsonAssistantMessage = {
@@ -234,8 +237,34 @@ function accumulateUsage(
   usage.cost += message.usage?.cost?.total ?? 0;
 }
 
-function getCliModel(agent: AgentDefinition): string | undefined {
-  return agent.model && agent.model !== "default" ? agent.model : undefined;
+function resolveEffectiveModel(
+  agent: AgentDefinition,
+  parentModel: string | undefined,
+): string | undefined {
+  const agentModel = agent.model?.trim();
+  if (agentModel && agentModel.toLowerCase() !== "default") {
+    return agentModel;
+  }
+  return parentModel?.trim() || undefined;
+}
+
+function getParentModelId(
+  model:
+    | {
+        provider?: string;
+        id?: string;
+      }
+    | undefined,
+): string | undefined {
+  if (!model) {
+    return undefined;
+  }
+
+  if (model.provider?.trim() && model.id?.trim()) {
+    return `${model.provider}/${model.id}`;
+  }
+
+  return model.id?.trim() || undefined;
 }
 
 function previewValue(value: unknown, maxLength = 120): string {
@@ -276,60 +305,6 @@ function pushRecentToolActivity(
   }
 }
 
-function sanitizeScopeSegment(value: string): string {
-  const sanitized = value
-    .trim()
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return sanitized || "unknown";
-}
-
-function getScopeId(): string {
-  const getuid = process.getuid;
-  if (typeof getuid === "function") {
-    try {
-      return `uid-${String(getuid())}`;
-    } catch {
-      // Fall through.
-    }
-  }
-
-  for (const key of ["USERNAME", "USER", "LOGNAME"] as const) {
-    const username = process.env[key];
-    if (username?.trim()) {
-      return `user-${sanitizeScopeSegment(username)}`;
-    }
-  }
-
-  try {
-    const username = userInfo().username;
-    if (username?.trim()) {
-      return `user-${sanitizeScopeSegment(username)}`;
-    }
-  } catch {
-    // Fall through to home-directory-based scoping.
-  }
-
-  const homeDir = process.env.USERPROFILE ?? process.env.HOME;
-  if (homeDir?.trim()) {
-    return `home-${sanitizeScopeSegment(homeDir)}`;
-  }
-
-  try {
-    const resolvedHomeDir = homedir();
-    if (resolvedHomeDir?.trim()) {
-      return `home-${sanitizeScopeSegment(resolvedHomeDir)}`;
-    }
-  } catch {
-    // Fall through to shared scope.
-  }
-
-  return "shared";
-}
-
-function getScopedTempRoot(): string {
-  return join(tmpdir(), `pi-subagents-${getScopeId()}`);
-}
 
 function parseInteger(value: string | undefined, fallback: number): number {
   if (!value) {
@@ -415,6 +390,7 @@ function buildChildArgs(
   promptPath: string | undefined,
   childSessionPath: string,
   recursionEnabled: boolean,
+  effectiveModel: string | undefined,
 ): string[] {
   const args = [
     "--mode",
@@ -437,9 +413,8 @@ function buildChildArgs(
   if (childTools.length > 0) {
     args.push("--tools", childTools.join(","));
   }
-  const cliModel = getCliModel(agent);
-  if (cliModel) {
-    args.push("--model", cliModel);
+  if (effectiveModel) {
+    args.push("--model", effectiveModel);
   }
   if (agent.thinking) {
     args.push("--thinking", agent.thinking);
@@ -476,12 +451,16 @@ function withoutNestedSubagentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function createNestedChildLaunch(
+  paths: ResolvedPaths,
   agent: AgentDefinition,
   promptPath: string | undefined,
   childSessionPath: string,
   loadedConfig: LoadedConfig,
   runtime: SubagentRuntimeDeps,
   childRunId: string,
+  parentSessionFile: string | undefined,
+  parentSessionDir: string | undefined,
+  effectiveModel: string | undefined,
 ): NestedChildLaunch {
   const context = readNestedRuntimeContext(loadedConfig);
   const recursionEnabled =
@@ -491,6 +470,7 @@ function createNestedChildLaunch(
     promptPath,
     childSessionPath,
     recursionEnabled,
+    effectiveModel,
   );
 
   if (!recursionEnabled) {
@@ -502,18 +482,20 @@ function createNestedChildLaunch(
   const parentRunId = context.currentRunId ?? "";
   const capabilityToken = runtime.createRunId();
   const childIndex = "0";
-  const scopedTempRoot = getScopedTempRoot();
+  const runtimeArtifacts = resolveRuntimeArtifactsPaths(
+    paths,
+    parentSessionFile,
+    parentSessionDir,
+  );
   const routeDir = join(
-    scopedTempRoot,
-    NESTED_EVENTS_DIR_NAME,
+    runtimeArtifacts.nestedEventsDir,
     `${rootRunId}-${capabilityToken}`,
   );
   const parentEventSink = join(routeDir, "parent-event-sink.jsonl");
   const parentControlInbox = join(routeDir, "parent-control-inbox.jsonl");
   const routeFilePath = join(routeDir, ROUTE_FILE_NAME);
   const runtimeStatePath = join(
-    scopedTempRoot,
-    NESTED_RUNS_DIR_NAME,
+    runtimeArtifacts.nestedRunsDir,
     rootRunId,
     childRunId,
     RUNTIME_STATE_FILE_NAME,
@@ -660,6 +642,26 @@ export function parseAgentCommandArgs(args: string): SubagentToolInput {
   };
 }
 
+function encodeSlashAgentBridgeRequest(
+  input: SlashAgentBridgeRequest,
+): string {
+  return `${SLASH_AGENT_BRIDGE_PREFIX}${JSON.stringify(input)}`;
+}
+
+function decodeSlashAgentBridgeRequest(
+  text: string,
+): SlashAgentBridgeRequest | undefined {
+  if (!text.startsWith(SLASH_AGENT_BRIDGE_PREFIX)) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(text.slice(SLASH_AGENT_BRIDGE_PREFIX.length)) as SlashAgentBridgeRequest;
+  } catch {
+    return undefined;
+  }
+}
+
 function buildExecutionResult(params: {
   agent: string;
   task: string;
@@ -702,7 +704,7 @@ function buildExecutionResult(params: {
 }
 
 export async function executeSubagent(
-  _paths: ResolvedPaths,
+  paths: ResolvedPaths,
   loadedConfig: LoadedConfig,
   discovery: AgentDiscoveryResult,
   input: SubagentToolInput,
@@ -710,6 +712,7 @@ export async function executeSubagent(
   signal: AbortSignal | undefined,
   parentSessionFile: string | undefined,
   parentSessionDir: string | undefined,
+  parentModel: string | undefined,
   runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
 ): Promise<SubagentExecutionResult> {
   const startedAt = runtime.now();
@@ -730,6 +733,7 @@ export async function executeSubagent(
     agent = parseSubagentRequest(discovery, input);
     const resolvedAgent = agent;
     const timeoutMs = resolvedAgent.timeoutMs ?? fallbackTimeoutMs;
+    const effectiveModel = resolveEffectiveModel(resolvedAgent, parentModel);
     ({ childSessionDir, childSessionPath } = resolveChildSessionTarget(
       parentSessionFile,
       parentSessionDir,
@@ -748,12 +752,16 @@ export async function executeSubagent(
     }
 
     const launch = createNestedChildLaunch(
+      paths,
       resolvedAgent,
       promptPath,
       childSessionPath,
       loadedConfig,
       runtime,
       runId,
+      parentSessionFile,
+      parentSessionDir,
+      effectiveModel,
     );
     const invocation = runtime.resolvePiInvocation([
       ...launch.childArgs,
@@ -768,7 +776,7 @@ export async function executeSubagent(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let finalText = "";
-    let model = getCliModel(resolvedAgent);
+    let model = effectiveModel;
     let stopReason: string | undefined;
     let errorMessage: string | undefined;
     let stderr = "";
@@ -946,7 +954,7 @@ export async function executeSubagent(
       durationMs,
       childSessionDir,
       childSessionPath,
-      model: agent ? getCliModel(agent) : undefined,
+      model: agent ? resolveEffectiveModel(agent, parentModel) : parentModel,
       stopReason: "error",
       exitCode: null,
       stderr: message,
@@ -958,6 +966,43 @@ export async function executeSubagent(
       runtime.removePath(promptDir);
     }
   }
+}
+
+export function registerSlashAgentBridge(
+  pi: ExtensionAPI,
+  deps: RuntimeDeps,
+  runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
+): void {
+  pi.on("input", async (event, ctx) => {
+    if (event.source !== "extension") {
+      return;
+    }
+
+    const request = decodeSlashAgentBridgeRequest(event.text);
+    if (!request) {
+      return;
+    }
+
+    const paths = deps.resolvePaths();
+    const loadedConfig = deps.loadConfig(paths);
+    const discovery = deps.discoverAgents(paths);
+    const parentSessionFile = ctx.sessionManager.getSessionFile();
+    const result = await executeSubagent(
+      paths,
+      loadedConfig,
+      discovery,
+      request,
+      ctx.cwd,
+      ctx.signal,
+      parentSessionFile,
+      parentSessionFile ? ctx.sessionManager.getSessionDir() : undefined,
+      getParentModelId(ctx.model),
+      runtime,
+    );
+
+    pi.sendMessage(toSubagentCommandMessage(result));
+    return { action: "handled" };
+  });
 }
 
 export function registerSubagentTool(
@@ -993,6 +1038,7 @@ export function registerSubagentTool(
         signal,
         parentSessionFile,
         parentSessionFile ? ctx.sessionManager.getSessionDir() : undefined,
+        getParentModelId(ctx.model),
         runtime,
       );
 
@@ -1007,40 +1053,26 @@ export function registerSubagentTool(
 
 export function registerAgentCommand(
   pi: ExtensionAPI,
-  deps: RuntimeDeps,
-  runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
+  _deps: RuntimeDeps,
+  _runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
+  isBridgeAvailable: () => boolean = () => false,
 ): void {
   pi.registerCommand("agent", {
     description: "Run a discovered pi-subagents agent in the foreground",
     handler: async (args, ctx: ExtensionCommandContext) => {
-      const input = parseAgentCommandArgs(args);
-      const paths = deps.resolvePaths();
-      const loadedConfig = deps.loadConfig(paths);
-      const discovery = deps.discoverAgents(paths);
-
-      try {
-        const parentSessionFile = ctx.sessionManager.getSessionFile();
-        const result = await executeSubagent(
-          paths,
-          loadedConfig,
-          discovery,
-          input,
-          ctx.cwd,
-          ctx.signal,
-          parentSessionFile,
-          parentSessionFile ? ctx.sessionManager.getSessionDir() : undefined,
-          runtime,
-        );
-
-        pi.sendMessage(toSubagentCommandMessage(result));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+      if (!isBridgeAvailable()) {
         pi.sendMessage({
           customType: "pi-subagent-result",
-          content: message,
+          content: SLASH_AGENT_BRIDGE_UNAVAILABLE,
           display: true,
         });
+        return;
       }
+
+      const input = parseAgentCommandArgs(args);
+      pi.sendUserMessage(encodeSlashAgentBridgeRequest({ ...input, cwd: ctx.cwd }), {
+        deliverAs: ctx.isIdle() ? undefined : "followUp",
+      });
     },
   });
 }

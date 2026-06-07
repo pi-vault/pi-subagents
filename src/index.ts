@@ -10,7 +10,11 @@ import {
 import { renderSubagentMessage } from "./render.js";
 import { loadConfig } from "./config.js";
 import { resolvePaths } from "./paths.js";
-import { registerAgentCommand, registerSubagentTool } from "./subagent.js";
+import {
+  registerAgentCommand,
+  registerSlashAgentBridge,
+  registerSubagentTool,
+} from "./subagent.js";
 import type {
   AgentCreationInput,
   AgentDiscoveryResult,
@@ -217,8 +221,9 @@ export function registerSubagentsExtension(
   deps: RuntimeDeps = createRuntimeDeps(pi),
 ): void {
   pi.registerMessageRenderer("pi-subagent-result", renderSubagentMessage);
+  registerSlashAgentBridge(pi, deps);
   registerSubagentTool(pi, deps);
-  registerAgentCommand(pi, deps);
+  registerAgentCommand(pi, deps, undefined, () => true);
 
   pi.registerCommand("agents", {
     description: "List discovered pi-subagents agents",

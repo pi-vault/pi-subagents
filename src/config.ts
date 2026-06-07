@@ -3,7 +3,7 @@ import type { LoadedConfig, ResolvedPaths, SubagentsConfig } from "./types.js";
 
 export const DEFAULT_CONFIG: SubagentsConfig = {
   maxConcurrency: 3,
-  maxRecursiveLevel: 2,
+  maxRecursiveLevel: 3,
   defaultTimeoutMs: 600_000,
 };
 

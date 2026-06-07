@@ -13,6 +13,12 @@ export interface ResolvedPaths {
   runtimeCacheDir: string;
 }
 
+export interface RuntimeArtifactsPaths {
+  rootDir: string;
+  nestedEventsDir: string;
+  nestedRunsDir: string;
+}
+
 export interface LoadedConfig {
   config: SubagentsConfig;
   exists: boolean;
@@ -66,6 +72,12 @@ export interface RuntimeDeps {
 }
 
 export interface SubagentToolInput {
+  agent: string;
+  task: string;
+  cwd?: string;
+}
+
+export interface SlashAgentBridgeRequest {
   agent: string;
   task: string;
   cwd?: string;
