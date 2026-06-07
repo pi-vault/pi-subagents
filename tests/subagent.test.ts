@@ -164,7 +164,7 @@ async function withEnv(
 }
 
 describe("subagent execution", () => {
-  test("rejects missing task and unknown agents before spawn", async () => {
+  test("returns structured errors for missing task and unknown agents before spawn", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
     const discovery = { agents: [createAgent()], diagnostics: [] };
@@ -179,34 +179,41 @@ describe("subagent execution", () => {
       resolvePiInvocation: vi.fn(() => ({ command: "pi", args: [] })),
     } satisfies SubagentRuntimeDeps;
 
-    await expect(
-      executeSubagent(
-        paths,
-        createDeps(paths, discovery).loadConfig(paths),
-        discovery,
-        { agent: "Scout", task: "   " },
-        "/repo",
-        undefined,
-        undefined,
-        undefined,
-        runtime,
-      ),
-    ).rejects.toThrow('Missing task for agent "Scout". Available agents: Scout');
+    const missingTask = await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "   " },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
 
-    await expect(
-      executeSubagent(
-        paths,
-        createDeps(paths, discovery).loadConfig(paths),
-        discovery,
-        { agent: "missing", task: "Do work" },
-        "/repo",
-        undefined,
-        undefined,
-        undefined,
-        runtime,
-      ),
-    ).rejects.toThrow('Unknown agent: "missing". Available agents: Scout');
+    expect(missingTask.isError).toBe(true);
+    expect(missingTask.content).toBe(
+      'Missing task for agent "Scout". Available agents: Scout',
+    );
+    expect(missingTask.details.status).toBe("error");
 
+    const unknownAgent = await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "missing", task: "Do work" },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
+
+    expect(unknownAgent.isError).toBe(true);
+    expect(unknownAgent.content).toBe(
+      'Unknown agent: "missing". Available agents: Scout',
+    );
+    expect(unknownAgent.details.status).toBe("error");
     expect(runtime.spawnChild).not.toHaveBeenCalled();
   });
 
@@ -237,6 +244,12 @@ describe("subagent execution", () => {
             '{"type":"session","id":"child-session-id","timestamp":"2026-06-06T17:00:00.000Z","cwd":"/worktree"}\n',
           );
           child.stdout.write(
+            '{"type":"tool_execution_start","toolCallId":"call-1","toolName":"read","args":{"path":"src/index.ts"}}\n',
+          );
+          child.stdout.write(
+            '{"type":"tool_execution_end","toolCallId":"call-1","toolName":"read","result":{"content":[{"type":"text","text":"done"}]},"isError":false}\n',
+          );
+          child.stdout.write(
             '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"partial"}],"usage":{"input":10,"output":2,"cost":{"total":0.1}},"model":"openai/gpt-5","stopReason":"tool_use"}}\n',
           );
           child.stdout.write(
@@ -264,7 +277,9 @@ describe("subagent execution", () => {
     expect(result.content).toBe("final answer");
     expect(result.isError).toBe(false);
     expect(result.details).toMatchObject({
+      status: "success",
       agent: "Scout",
+      task: "Inspect repo",
       cwd: "/worktree",
       model: "openai/gpt-5",
       stopReason: "end",
@@ -282,6 +297,13 @@ describe("subagent execution", () => {
       childSessionDir,
       childSessionPath,
     });
+    expect(result.details.recentToolActivity).toEqual([
+      { label: "read start", preview: '{"path":"src/index.ts"}' },
+      {
+        label: "read done",
+        preview: '{"content":[{"type":"text","text":"done"}]}',
+      },
+    ]);
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]).toMatchObject({
       command: "pi",
@@ -352,6 +374,7 @@ describe("subagent execution", () => {
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]?.args).not.toContain("--model");
     expect(result.details.model).toBeUndefined();
+    expect(result.details.status).toBe("success");
   });
 
   test("keeps phase 4 spawn behavior for agents without subagent", async () => {
@@ -730,19 +753,21 @@ describe("subagent execution", () => {
         PI_SUBAGENT_PARENT_ROOT_RUN_ID: "root-run",
       },
       async () => {
-        await expect(
-          executeSubagent(
-            paths,
-            createDeps(paths, discovery).loadConfig(paths),
-            discovery,
-            { agent: "Scout", task: "Inspect repo" },
-            "/repo",
-            undefined,
-            undefined,
-            undefined,
-            runtime,
-          ),
-        ).rejects.toThrow(
+        const result = await executeSubagent(
+          paths,
+          createDeps(paths, discovery).loadConfig(paths),
+          discovery,
+          { agent: "Scout", task: "Inspect repo" },
+          "/repo",
+          undefined,
+          undefined,
+          undefined,
+          runtime,
+        );
+
+        expect(result.isError).toBe(true);
+        expect(result.details.status).toBe("error");
+        expect(result.content).toContain(
           "Nested delegation blocked at depth 2; maxRecursiveLevel=2.",
         );
       },
@@ -769,19 +794,23 @@ describe("subagent execution", () => {
         PI_SUBAGENT_PARENT_ROOT_RUN_ID: "root-run",
       },
       async () => {
-        await expect(
-          executeSubagent(
-            paths,
-            createDeps(paths, discovery).loadConfig(paths),
-            discovery,
-            { agent: "Scout", task: "Inspect repo" },
-            "/repo",
-            undefined,
-            undefined,
-            undefined,
-            runtime,
-          ),
-        ).rejects.toThrow("Nested delegation is disabled for this agent");
+        const result = await executeSubagent(
+          paths,
+          createDeps(paths, discovery).loadConfig(paths),
+          discovery,
+          { agent: "Scout", task: "Inspect repo" },
+          "/repo",
+          undefined,
+          undefined,
+          undefined,
+          runtime,
+        );
+
+        expect(result.isError).toBe(true);
+        expect(result.details.status).toBe("error");
+        expect(result.content).toContain(
+          "Nested delegation is disabled for this agent",
+        );
       },
     );
   });
@@ -809,19 +838,21 @@ describe("subagent execution", () => {
         PI_SUBAGENT_PARENT_ROOT_RUN_ID: "root-run",
       },
       async () => {
-        await expect(
-          executeSubagent(
-            paths,
-            createDeps(paths, discovery).loadConfig(paths),
-            discovery,
-            { agent: "Researcher", task: "Inspect repo" },
-            "/repo",
-            undefined,
-            undefined,
-            undefined,
-            runtime,
-          ),
-        ).rejects.toThrow(
+        const result = await executeSubagent(
+          paths,
+          createDeps(paths, discovery).loadConfig(paths),
+          discovery,
+          { agent: "Researcher", task: "Inspect repo" },
+          "/repo",
+          undefined,
+          undefined,
+          undefined,
+          runtime,
+        );
+
+        expect(result.isError).toBe(true);
+        expect(result.details.status).toBe("error");
+        expect(result.content).toContain(
           'Child agent "Researcher" is not allowed. Allowed child agents: scout.',
         );
       },
@@ -894,6 +925,7 @@ describe("subagent execution", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toBe("child failed");
+    expect(result.details.status).toBe("error");
     expect(result.details.exitCode).toBe(2);
     expect(result.details.stopReason).toBe("error");
     expect(result.details.stderr).toBe("child failed");
@@ -930,6 +962,7 @@ describe("subagent execution", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content).toBe("child aborted");
+    expect(result.details.status).toBe("error");
     expect(result.details.stopReason).toBe("aborted");
     expect(result.details.exitCode).toBe(0);
   });
@@ -973,6 +1006,7 @@ describe("subagent execution", () => {
 
       expect(result.isError).toBe(true);
       expect(result.content).toBe("Subagent timed out after 10ms.");
+      expect(result.details.status).toBe("timeout");
       expect(result.details.stopReason).toBe("timeout");
       expect(result.details.exitCode).toBe(143);
       expect(child.killSignals[0]).toBe("SIGTERM");
@@ -980,15 +1014,90 @@ describe("subagent execution", () => {
       vi.useRealTimers();
     }
   });
+
+  test("surfaces spawn failures with structured error details", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
+    const runtime = createRuntime(
+      vi.fn(() => {
+        throw new Error("spawn failed");
+      }) as SubagentRuntimeDeps["spawnChild"],
+    );
+
+    const result = await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Inspect repo" },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe("spawn failed");
+    expect(result.details.status).toBe("error");
+    expect(result.details.stopReason).toBe("error");
+    expect(result.details.exitCode).toBeNull();
+  });
+
+  test("retains only the most recent 10 tool activity entries", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
+    const runtime = createRuntime(
+      ((_, __, ___) => {
+        const child = new FakeChildProcess();
+        queueMicrotask(() => {
+          for (let i = 0; i < 12; i += 1) {
+            child.stdout.write(
+              `{"type":"tool_execution_start","toolCallId":"call-${i}","toolName":"read","args":{"path":"file-${i}.ts"}}\n`,
+            );
+          }
+          child.stdout.write(
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end"}}\n',
+          );
+          child.close(0);
+        });
+        return child as never;
+      }) as SubagentRuntimeDeps["spawnChild"],
+    );
+
+    const result = await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Inspect repo" },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.details.recentToolActivity).toHaveLength(10);
+    expect(result.details.recentToolActivity[0]).toEqual({
+      label: "read start",
+      preview: '{"path":"file-2.ts"}',
+    });
+    expect(result.details.recentToolActivity[9]).toEqual({
+      label: "read start",
+      preview: '{"path":"file-11.ts"}',
+    });
+  });
 });
 
 describe("subagent registration", () => {
-  test("registers tool and /agent command, and /agent sends a visible custom message", async () => {
+  test("registers tool renderers and /agent command, and /agent sends a visible custom message", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
     const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
     const deps = createDeps(paths, discovery);
-    const tools: string[] = [];
+    const tools: Array<{ name: string; renderCall?: unknown; renderResult?: unknown }> = [];
     const commands = new Map<string, RegisteredCommand>();
     const messages: unknown[] = [];
     const runtime = createRuntime(
@@ -1005,8 +1114,8 @@ describe("subagent registration", () => {
     );
 
     const pi = {
-      registerTool(definition: { name: string }) {
-        tools.push(definition.name);
+      registerTool(definition: { name: string; renderCall?: unknown; renderResult?: unknown }) {
+        tools.push(definition);
       },
       registerCommand(name: string, command: RegisteredCommand) {
         commands.set(name, command);
@@ -1019,7 +1128,13 @@ describe("subagent registration", () => {
     registerSubagentTool(pi, deps, runtime);
     registerAgentCommand(pi, deps, runtime);
 
-    expect(tools).toContain("subagent");
+    expect(tools).toContainEqual(
+      expect.objectContaining({
+        name: "subagent",
+        renderCall: expect.any(Function),
+        renderResult: expect.any(Function),
+      }),
+    );
     expect(commands.has("agent")).toBe(true);
     expect(parseAgentCommandArgs("Scout inspect this repo")).toEqual({
       agent: "Scout",
@@ -1101,11 +1216,12 @@ describe("subagent registration", () => {
     } as never);
 
     expect(messages).toEqual([
-      {
+      expect.objectContaining({
         customType: "pi-subagent-result",
         content: 'Missing task for agent "Scout". Available agents: Scout',
         display: true,
-      },
+        details: expect.objectContaining({ status: "error", stopReason: "error" }),
+      }),
     ]);
     expect(notify).not.toHaveBeenCalled();
   });

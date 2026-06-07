@@ -26,11 +26,17 @@ function createPaths(): ResolvedPaths {
   };
 }
 
-function createPi(registerCommand?: (name: string, command: RegisteredCommand) => void) {
+function createPi(
+  registerCommand?: (name: string, command: RegisteredCommand) => void,
+  registerMessageRenderer?: (customType: string, renderer: unknown) => void,
+) {
   return {
     registerTool() {},
     registerCommand(name: string, command: RegisteredCommand) {
       registerCommand?.(name, command);
+    },
+    registerMessageRenderer(customType: string, renderer: unknown) {
+      registerMessageRenderer?.(customType, renderer);
     },
     sendMessage() {},
     getAllTools() {
@@ -40,13 +46,25 @@ function createPi(registerCommand?: (name: string, command: RegisteredCommand) =
 }
 
 describe("subagents extension", () => {
-  test("loads without throwing", () => {
+  test("loads without throwing and registers the subagent result message renderer", () => {
     const commands: Array<{ name: string; description?: string }> = [];
-    const pi = createPi((name, command) => {
-      commands.push({ name, description: command.description });
-    });
+    const renderers: Array<{ customType: string; renderer: unknown }> = [];
+    const pi = createPi(
+      (name, command) => {
+        commands.push({ name, description: command.description });
+      },
+      (customType, renderer) => {
+        renderers.push({ customType, renderer });
+      },
+    );
 
     expect(() => extension(pi)).not.toThrow();
+    expect(renderers).toContainEqual(
+      expect.objectContaining({
+        customType: "pi-subagent-result",
+        renderer: expect.any(Function),
+      }),
+    );
     expect(commands).toContainEqual({
       name: "agent",
       description: "Run a discovered pi-subagents agent in the foreground",
