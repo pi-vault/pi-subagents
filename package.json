@@ -15,9 +15,12 @@
   },
   "keywords": [
     "pi",
+    "pi-coding-agent",
     "pi-package",
     "pi-extension",
-    "pi-subagents"
+    "pi-subagents",
+    "subagents",
+    "agents"
   ],
   "scripts": {
     "format": "biome format --write .",
