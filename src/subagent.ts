@@ -16,14 +16,19 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  renderSubagentCall,
+  renderSubagentResult,
+  toSubagentCommandMessage,
+} from "./render.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
   LoadedConfig,
   ResolvedPaths,
   RuntimeDeps,
-  SubagentCommandMessage,
   SubagentExecutionResult,
+  SubagentToolActivity,
   SubagentToolInput,
   SubagentUsage,
 } from "./types.js";
@@ -82,6 +87,19 @@ type JsonAssistantMessage = {
 type JsonMessageEndEvent = {
   type?: string;
   message?: JsonAssistantMessage;
+};
+
+type JsonToolExecutionStartEvent = {
+  type?: string;
+  toolName?: string;
+  args?: unknown;
+};
+
+type JsonToolExecutionEndEvent = {
+  type?: string;
+  toolName?: string;
+  result?: unknown;
+  isError?: boolean;
 };
 
 type ChildSpawn = ChildProcessByStdio<null, Readable, Readable>;
@@ -218,6 +236,44 @@ function accumulateUsage(
 
 function getCliModel(agent: AgentDefinition): string | undefined {
   return agent.model && agent.model !== "default" ? agent.model : undefined;
+}
+
+function previewValue(value: unknown, maxLength = 120): string {
+  if (typeof value === "string") {
+    const compact = value.replace(/\s+/g, " ").trim();
+    if (!compact) {
+      return "-";
+    }
+    return compact.length > maxLength
+      ? `${compact.slice(0, maxLength - 3)}...`
+      : compact;
+  }
+
+  if (value === null || value === undefined) {
+    return "-";
+  }
+
+  try {
+    const serialized = JSON.stringify(value);
+    if (!serialized) {
+      return "-";
+    }
+    return serialized.length > maxLength
+      ? `${serialized.slice(0, maxLength - 3)}...`
+      : serialized;
+  } catch {
+    return String(value);
+  }
+}
+
+function pushRecentToolActivity(
+  recentToolActivity: SubagentToolActivity[],
+  activity: SubagentToolActivity,
+): void {
+  recentToolActivity.push(activity);
+  if (recentToolActivity.length > 10) {
+    recentToolActivity.splice(0, recentToolActivity.length - 10);
+  }
 }
 
 function sanitizeScopeSegment(value: string): string {
@@ -604,6 +660,47 @@ export function parseAgentCommandArgs(args: string): SubagentToolInput {
   };
 }
 
+function buildExecutionResult(params: {
+  agent: string;
+  task: string;
+  sourcePath?: string;
+  cwd: string;
+  timeoutMs: number;
+  durationMs: number;
+  childSessionDir?: string;
+  childSessionPath?: string;
+  model?: string;
+  stopReason: string;
+  exitCode: number | null;
+  stderr: string;
+  usage?: SubagentUsage;
+  recentToolActivity?: SubagentToolActivity[];
+  status: "success" | "error" | "timeout" | "aborted";
+  content: string;
+}): SubagentExecutionResult {
+  return {
+    content: params.content,
+    isError: params.status !== "success",
+    details: {
+      status: params.status,
+      agent: params.agent,
+      task: params.task,
+      sourcePath: params.sourcePath ?? "",
+      cwd: params.cwd,
+      timeoutMs: params.timeoutMs,
+      durationMs: params.durationMs,
+      childSessionDir: params.childSessionDir ?? "",
+      childSessionPath: params.childSessionPath ?? "",
+      model: params.model,
+      stopReason: params.stopReason,
+      exitCode: params.exitCode,
+      stderr: params.stderr,
+      usage: params.usage ?? createUsage(),
+      recentToolActivity: params.recentToolActivity ?? [],
+    },
+  };
+}
+
 export async function executeSubagent(
   _paths: ResolvedPaths,
   loadedConfig: LoadedConfig,
@@ -616,36 +713,42 @@ export async function executeSubagent(
   runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
 ): Promise<SubagentExecutionResult> {
   const startedAt = runtime.now();
-  const nestedContext = readNestedRuntimeContext(loadedConfig);
-  ensureNestedDelegationAllowed(discovery, input, nestedContext);
-  const agent = parseSubagentRequest(discovery, input);
+  const requestedAgent = input.agent.trim() || "(unspecified)";
   const task = input.task.trim();
-  const timeoutMs = agent.timeoutMs ?? loadedConfig.config.defaultTimeoutMs;
   const effectiveCwd = input.cwd ?? defaultCwd;
+  const fallbackTimeoutMs = loadedConfig.config.defaultTimeoutMs;
   const runId = runtime.createRunId();
-  const { childSessionDir, childSessionPath } = resolveChildSessionTarget(
-    parentSessionFile,
-    parentSessionDir,
-    runtime,
-    runId,
-  );
+  let childSessionDir = "";
+  let childSessionPath = "";
   let promptDir: string | undefined;
   let promptPath: string | undefined;
-
-  runtime.mkdirp(childSessionDir);
+  let agent: AgentDefinition | undefined;
 
   try {
-    if (agent.systemPrompt.trim()) {
+    const nestedContext = readNestedRuntimeContext(loadedConfig);
+    ensureNestedDelegationAllowed(discovery, input, nestedContext);
+    agent = parseSubagentRequest(discovery, input);
+    const resolvedAgent = agent;
+    const timeoutMs = resolvedAgent.timeoutMs ?? fallbackTimeoutMs;
+    ({ childSessionDir, childSessionPath } = resolveChildSessionTarget(
+      parentSessionFile,
+      parentSessionDir,
+      runtime,
+      runId,
+    ));
+
+    runtime.mkdirp(childSessionDir);
+    if (resolvedAgent.systemPrompt.trim()) {
       promptDir = runtime.mkdtemp(join(tmpdir(), "pi-subagents-"));
       promptPath = join(
         promptDir,
-        `${agent.name.replace(/[^A-Za-z0-9_-]+/g, "_").toLowerCase()}.md`,
+        `${resolvedAgent.name.replace(/[^A-Za-z0-9_-]+/g, "_").toLowerCase()}.md`,
       );
-      runtime.writeFile(promptPath, agent.systemPrompt);
+      runtime.writeFile(promptPath, resolvedAgent.systemPrompt);
     }
 
     const launch = createNestedChildLaunch(
-      agent,
+      resolvedAgent,
       promptPath,
       childSessionPath,
       loadedConfig,
@@ -656,16 +759,16 @@ export async function executeSubagent(
       ...launch.childArgs,
       `Task: ${task}`,
     ]);
+    const usage = createUsage();
+    const recentToolActivity: SubagentToolActivity[] = [];
     const child = runtime.spawnChild(invocation.command, invocation.args, {
       cwd: effectiveCwd,
       env: launch.childEnv,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
-
-    const usage = createUsage();
     let finalText = "";
-    let model = getCliModel(agent);
+    let model = getCliModel(resolvedAgent);
     let stopReason: string | undefined;
     let errorMessage: string | undefined;
     let stderr = "";
@@ -705,12 +808,29 @@ export async function executeSubagent(
         return;
       }
 
-      if (
-        typeof event !== "object" ||
-        event === null ||
-        !("type" in event) ||
-        event.type !== "message_end"
-      ) {
+      if (typeof event !== "object" || event === null || !("type" in event)) {
+        return;
+      }
+
+      if (event.type === "tool_execution_start") {
+        const toolEvent = event as JsonToolExecutionStartEvent;
+        pushRecentToolActivity(recentToolActivity, {
+          label: `${toolEvent.toolName ?? "tool"} start`,
+          preview: previewValue(toolEvent.args),
+        });
+        return;
+      }
+
+      if (event.type === "tool_execution_end") {
+        const toolEvent = event as JsonToolExecutionEndEvent;
+        pushRecentToolActivity(recentToolActivity, {
+          label: `${toolEvent.toolName ?? "tool"} ${toolEvent.isError ? "error" : "done"}`,
+          preview: previewValue(toolEvent.result),
+        });
+        return;
+      }
+
+      if (event.type !== "message_end") {
         return;
       }
 
@@ -760,25 +880,27 @@ export async function executeSubagent(
             : aborted
               ? "aborted"
               : (stopReason ?? (code === 0 ? "end" : "error"));
+          const status = timedOut
+            ? "timeout"
+            : aborted
+              ? "aborted"
+              : (code ?? 0) !== 0 ||
+                  normalizedStopReason === "error" ||
+                  normalizedStopReason === "aborted"
+                ? "error"
+                : "success";
           const failureText = timedOut
             ? `Subagent timed out after ${timeoutMs}ms.`
             : aborted
               ? "Subagent aborted."
               : (errorMessage ?? stderr.trim()) ||
                 `Subagent exited with code ${code ?? "unknown"}.`;
-          const isError =
-            timedOut ||
-            aborted ||
-            (code ?? 0) !== 0 ||
-            normalizedStopReason === "error" ||
-            normalizedStopReason === "aborted";
 
-          resolveResult({
-            content: isError ? failureText : finalText || "(no output)",
-            isError,
-            details: {
-              agent: agent.name,
-              sourcePath: agent.sourcePath,
+          resolveResult(
+            buildExecutionResult({
+              agent: resolvedAgent.name,
+              task,
+              sourcePath: resolvedAgent.sourcePath,
               cwd: effectiveCwd,
               timeoutMs,
               durationMs,
@@ -789,8 +911,12 @@ export async function executeSubagent(
               exitCode,
               stderr,
               usage,
-            },
-          });
+              recentToolActivity,
+              status,
+              content:
+                status === "success" ? finalText || "(no output)" : failureText,
+            }),
+          );
         });
 
         if (signal) {
@@ -808,6 +934,25 @@ export async function executeSubagent(
     );
 
     return result;
+  } catch (error) {
+    const durationMs = runtime.now() - startedAt;
+    const message = error instanceof Error ? error.message : String(error);
+    return buildExecutionResult({
+      agent: agent?.name ?? requestedAgent,
+      task,
+      sourcePath: agent?.sourcePath,
+      cwd: effectiveCwd,
+      timeoutMs: agent?.timeoutMs ?? fallbackTimeoutMs,
+      durationMs,
+      childSessionDir,
+      childSessionPath,
+      model: agent ? getCliModel(agent) : undefined,
+      stopReason: "error",
+      exitCode: null,
+      stderr: message,
+      status: "error",
+      content: message,
+    });
   } finally {
     if (promptDir) {
       runtime.removePath(promptDir);
@@ -826,6 +971,8 @@ export function registerSubagentTool(
     description:
       "Delegate a task to a discovered agent in an isolated foreground pi process.",
     parameters: SUBAGENT_TOOL_PARAMETERS,
+    renderCall: renderSubagentCall,
+    renderResult: renderSubagentResult,
     async execute(
       _toolCallId,
       params,
@@ -885,13 +1032,7 @@ export function registerAgentCommand(
           runtime,
         );
 
-        const message: SubagentCommandMessage = {
-          customType: "pi-subagent-result",
-          content: result.content,
-          display: true,
-          details: result.details,
-        };
-        pi.sendMessage(message);
+        pi.sendMessage(toSubagentCommandMessage(result));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         pi.sendMessage({

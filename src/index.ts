@@ -7,6 +7,7 @@ import {
   discoverAgents,
   discoverToolNames,
 } from "./agents.js";
+import { renderSubagentMessage } from "./render.js";
 import { loadConfig } from "./config.js";
 import { resolvePaths } from "./paths.js";
 import { registerAgentCommand, registerSubagentTool } from "./subagent.js";
@@ -215,6 +216,7 @@ export function registerSubagentsExtension(
   pi: ExtensionAPI,
   deps: RuntimeDeps = createRuntimeDeps(pi),
 ): void {
+  pi.registerMessageRenderer("pi-subagent-result", renderSubagentMessage);
   registerSubagentTool(pi, deps);
   registerAgentCommand(pi, deps);
 

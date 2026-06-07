@@ -81,8 +81,15 @@ export interface SubagentUsage {
   turns: number;
 }
 
+export interface SubagentToolActivity {
+  label: string;
+  preview: string;
+}
+
 export interface SubagentExecutionDetails {
+  status: "success" | "error" | "timeout" | "aborted";
   agent: string;
+  task: string;
   sourcePath: string;
   cwd: string;
   timeoutMs: number;
@@ -94,6 +101,7 @@ export interface SubagentExecutionDetails {
   exitCode: number | null;
   stderr: string;
   usage: SubagentUsage;
+  recentToolActivity: SubagentToolActivity[];
 }
 
 export interface SubagentExecutionResult {
