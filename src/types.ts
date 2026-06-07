@@ -9,7 +9,8 @@ export interface ResolvedPaths {
   configPath: string;
   userAgentsDir: string;
   bundledAgentsDir: string;
-  transcriptCacheDir: string;
+  sessionsDir: string;
+  runtimeCacheDir: string;
 }
 
 export interface LoadedConfig {
@@ -62,4 +63,48 @@ export interface RuntimeDeps {
     discovery: AgentDiscoveryResult,
     toolNames: string[],
   ) => AgentDefinition;
+}
+
+export interface SubagentToolInput {
+  agent: string;
+  task: string;
+  cwd?: string;
+}
+
+export interface SubagentUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  contextTokens: number;
+  cost: number;
+  turns: number;
+}
+
+export interface SubagentExecutionDetails {
+  agent: string;
+  sourcePath: string;
+  cwd: string;
+  timeoutMs: number;
+  durationMs: number;
+  childSessionDir: string;
+  childSessionPath: string;
+  model?: string;
+  stopReason: string;
+  exitCode: number | null;
+  stderr: string;
+  usage: SubagentUsage;
+}
+
+export interface SubagentExecutionResult {
+  content: string;
+  isError: boolean;
+  details: SubagentExecutionDetails;
+}
+
+export interface SubagentCommandMessage {
+  customType: string;
+  content: string;
+  display: boolean;
+  details?: SubagentExecutionDetails;
 }

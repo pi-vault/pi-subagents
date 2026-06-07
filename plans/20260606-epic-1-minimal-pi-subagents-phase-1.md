@@ -29,7 +29,7 @@ Pi-usable result:
 - Support config defaults for:
   `maxConcurrency`, `maxRecursiveLevel`, and `defaultTimeoutMs`.
 - Register a minimal `/agents` command that prints:
-  extension loaded status, resolved config path, resolved user agents directory, resolved bundled agents directory, and resolved transcript/cache directory.
+  extension loaded status, resolved config path, resolved user agents directory, resolved bundled agents directory, and resolved sessions directory.
 - Keep the command diagnostic-only in this phase. No agent discovery, no creation flow, and no `subagent` tool yet.
 
 ## Test Plan

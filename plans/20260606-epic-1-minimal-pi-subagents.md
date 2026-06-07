@@ -78,8 +78,8 @@ Behavior:
 - `task` must be self-contained. The child has no parent conversation context.
 - `cwd` defaults to the parent session working directory when omitted.
 - The call runs one child `pi` process and returns the child agent's final assistant text as the parent-visible result.
-- Structured metadata such as usage, tool activity, transcript path, and exit details is for rendering and debugging; it does not become first-class LLM-visible output unless the child includes it in final text.
-- `/agent` uses the same execution path as the tool and remains foreground-only in Epic 1.
+- Structured metadata such as usage, tool activity, child session location, and exit details is for rendering and debugging; it does not become first-class LLM-visible output unless the child includes it in final text. In Phase 4, details expose `childSessionDir` and required `childSessionPath`.
+- `/agent` uses the same execution path as the tool and remains foreground-only in Epic 1, but emits a visible custom message rather than a model-visible tool result.
 - `/agents` opens a minimal interactive menu that lists discovered agents and creates new markdown-defined agents.
 - `/agents` does not edit agents in place; users modify markdown files directly after creation.
 
@@ -194,14 +194,13 @@ Phase 1 repo baseline:
 7. On execution:
    - validate `agent` and `task`
    - resolve target agent config
-   - compute built-in tool allowlist, child extension loading needs, current recursion depth, and effective operational settings
-   - reject or hide nested `subagent` access when `maxRecursiveLevel` has already been reached
+   - compute the explicit child tool allowlist and effective operational settings
    - write a temporary system prompt file
-   - write a temporary task file only when the delegated task is too long for direct CLI input
-   - spawn child `pi` in JSON mode
-   - persist the child JSON event stream or transcript for the run
-   - parse the persisted event stream into progress state and final output
-   - collect final assistant text, usage when available, duration, stderr, transcript path, and exit status
+   - derive the parent project session location from the current session when available, otherwise create a unique temp child session root
+   - spawn child `pi` with `--mode json -p --no-extensions --session <child-session-path>`
+   - persist the child run as a native Pi session JSONL at the exact child session path
+   - parse stdout assistant `message_end` events into final output and metadata
+   - collect final assistant text, usage when available, duration, stderr, child session dir/path, stop reason, model, and exit status
    - clean up temporary files
    - return final assistant text plus structured details for rendering and debugging
 
@@ -211,22 +210,44 @@ The implementation should follow the minimal shell-out pattern proven in the sma
 
 - resolve the effective Pi binary from the current process when possible, otherwise fall back to `pi`
 - use JSON mode and non-interactive prompt execution
-- disable inherited session state
-- load only the extensions needed for the child run
 - allowlist tools explicitly
 - append the agent system prompt from a temp file
 - pass model and thinking flags explicitly
-- pass recursion and allowlist context through extension-controlled runtime files, not environment variables
+- keep child runs non-recursive in Phase 4 by not loading this extension into the child
+- add recursion/runtime context files only in Phase 5, not Phase 4
 
 Target child invocation shape:
 
 ```text
-pi --mode json -p --no-session --no-skills --tools ... --extension ... --models ... --thinking ... --append-system-prompt <prompt-file> "Task: ..."
+pi --mode json -p --no-extensions --session <child-session-path> --name <agent> --tools ... --model ... --thinking ... --append-system-prompt <prompt-file> "Task: ..."
 ```
 
-If the task is large, write it to a temp markdown file and pass `@<task-file>` instead of a giant inline argument.
+Phase 4 child-session layout:
 
-For nested delegation, the runtime writes a per-run context file under `$PI_CODING_AGENT_DIR/cache/pi-subagents/runtime` containing:
+```text
+<parent-session-dir>/<parent-session-stem>/<run-id>/run-0/session.jsonl
+```
+
+When the parent session is not persisted, use:
+
+```text
+$TMPDIR/pi-subagent-session-XXXXXX/<run-id>/run-0/session.jsonl
+```
+
+Use raw stdout JSON only as the live parsing stream. The persisted inspectable artifact is the native child Pi session file.
+Structured details expose:
+
+- `childSessionDir`: the concrete child run directory, either parent-relative under `<run-id>/run-0` or the temp fallback
+- `childSessionPath`: the exact child session JSONL file passed through `--session`
+
+For nested delegation in Phase 5, the runtime uses temp-root runtime state under:
+
+```text
+$TMPDIR/pi-subagents-<scope>/nested-subagent-events/...
+$TMPDIR/pi-subagents-<scope>/nested-subagent-runs/...
+```
+
+That runtime state carries:
 
 - current depth, where the parent call is depth `1`
 - configured recursion ceiling
@@ -260,10 +281,11 @@ Extension-registered tools are any non-built-in tools exposed by Pi extensions, 
 Rules:
 
 - If an agent requests a tool name not present in the merged runtime registry, fail before spawning with a clear unknown-tool error.
-- If an agent requests an extension-registered tool and the child run did not load the providing extension, surface the child-process failure clearly with stderr, exit status, and transcript path.
-- `subagent` is exposed to the child only when the child run loads this extension in a nested-safe mode.
-- If `subagent_agents` is present, apply that allowlist through the per-run runtime context so the child only exposes those agents.
-- If current depth equals `maxRecursiveLevel`, do not expose `subagent` to the child even if the agent frontmatter lists it.
+- If an agent requests an extension-registered tool and the child run did not load the providing extension, surface the child-process failure clearly with stderr, exit status, and child session location.
+- In Phase 4, `subagent` is not exposed to the child.
+- In Phase 5, `subagent` is exposed to the child only when the child run loads this extension in a nested-safe mode.
+- In Phase 5, if `subagent_agents` is present, apply that allowlist through the per-run runtime context so the child only exposes those agents.
+- In Phase 5, if current depth equals `maxRecursiveLevel`, do not expose `subagent` to the child even if the agent frontmatter lists it.
 
 ### Bundled-agent behavior
 
@@ -317,8 +339,8 @@ Rules:
 Epic 1 should remain minimal, but observability is a hard requirement:
 
 - status: pending, running, completed, failed
-- persisted JSON event stream or transcript for every run
-- transcript path for later inspection
+- persisted native child Pi session file for every run
+- child session directory and, when available, child session path for later inspection
 - current or recent tool activity reconstructed from the persisted event stream
 - latest prose/thinking line when available from the persisted event stream
 - duration
@@ -331,7 +353,7 @@ Epic 1 should remain minimal, but observability is a hard requirement:
 Rendering requirements:
 
 - compact call line in collapsed mode
-- structured result block with status, usage, and transcript reference
+- structured result block with status, usage, and child session reference
 - expandable final markdown output
 - explicit error messages for unknown agent, invalid config, missing child extension availability, timeout, abort, spawn failure, and non-zero child exit
 
@@ -362,16 +384,14 @@ Required test scenarios:
 - create new agents through `/agents`
 - filter agents through the per-run runtime context allowlist
 - parse and enforce `maxRecursiveLevel`
-- persist a transcript or JSON event log for every run
-- store transcripts under `$PI_CODING_AGENT_DIR/cache/pi-subagents`
+- persist a native child Pi session for every run
+- store child sessions under the relevant project session directory
 - discover tool names from Pi runtime registry and merge with built-in tools
 - reject unknown tools before spawn
 - discover bundled fallback agents without copying them into the user agent directory
 - prefer user agents over bundled fallback agents on duplicate names
 - build spawn arguments for built-in tools only
 - build spawn arguments for mixed built-in and extension-registered tools
-- build and consume nested runtime context files without using environment variables
-- handle long task spillover to temp file
 - parse child stdout event stream into progress and final output
 - verify final assistant text is the only parent-visible result content
 - verify renderer/debug metadata does not leak into the result text
@@ -380,6 +400,7 @@ Required test scenarios:
 - clean up temp files after completion or failure
 - render collapsed and expanded result views
 - parse `/agent <agent> <task...>` and route it through the same execution path as the tool
+- emit `/agent` output as a visible custom message
 - verify `/agents` create rejects duplicate names and writes valid markdown
 - verify `planner` agent loading and read-only tool configuration
 
@@ -392,8 +413,7 @@ Manual verification:
 - confirm `/agents` lists discovered agents and creates a new agent file
 - run `scout` against this repo and verify the result is returned inline
 - run `planner` on a planning task and verify it stays read-only
-- run `worker` on a harmless read-only task and verify child delegation is possible only to allowed agents and blocked past the configured recursion depth
-- inspect the generated transcript location under `$PI_CODING_AGENT_DIR/cache/pi-subagents`
+- inspect the generated child session location under the relevant project session directory
 
 ## Later Epic Seams
 
@@ -420,8 +440,8 @@ These seams should exist as natural module boundaries, not as speculative interf
 - Only explicitly allowlisted tools are exposed to the child.
 - Tool validation uses Pi built-ins plus tools discovered from Pi's runtime registry.
 - Recursion depth is capped by configuration and enforced for nested delegation.
-- Each run persists an inspectable transcript or JSON event log.
-- Transcripts default to `$PI_CODING_AGENT_DIR/cache/pi-subagents`.
+- Each run persists an inspectable native child Pi session file.
+- Child sessions default to the relevant project session directory under `$PI_CODING_AGENT_DIR/sessions`.
 - Foreground execution returns the child agent's final assistant text inline.
 - Structured metadata is available for rendering and debugging without becoming the tool's parent-visible result content.
 - Operational defaults come from config and may be overridden per agent through frontmatter.

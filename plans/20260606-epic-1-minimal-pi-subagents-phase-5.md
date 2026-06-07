@@ -2,7 +2,7 @@
 
 ## Summary
 
-Phase 5 adds controlled nested delegation. Agents that explicitly include `subagent` in their tool list can delegate to allowed child agents, bounded by configured recursion depth.
+Phase 5 adds controlled nested delegation. Agents that explicitly include `subagent` in their tool list can delegate to allowed child agents, bounded by configured recursion depth and coordinated through temp-root runtime state.
 
 Pi-usable result:
 
@@ -11,22 +11,23 @@ Pi-usable result:
 
 ## Implementation Changes
 
-- Add per-run runtime context files under `$PI_CODING_AGENT_DIR/cache/pi-subagents/runtime`.
-- Track current depth, max depth, and child-agent allowlist in the runtime context.
+- Add temp-root nested runtime state under:
+  `$TMPDIR/pi-subagents-<scope>/nested-subagent-events/...`
+  and `$TMPDIR/pi-subagents-<scope>/nested-subagent-runs/...`.
+- Track current depth, max depth, child-agent allowlist, and nested run routing in that runtime state.
 - Enforce `maxRecursiveLevel`, default `2`.
 - Apply `subagent_agents` from agent frontmatter to nested child exposure.
 - Load this extension in child runs only when:
   the agent explicitly has `subagent` in its tool list and recursion depth still allows it.
-- Keep the no-new-env-vars rule:
-  nested state flows only through extension-controlled runtime files.
+- Nested state may flow through extension-controlled runtime files and tightly-scoped child env vars that point to those temp-root routes.
 
 ## Test Plan
 
-- Verify runtime context files are written and consumed for nested runs.
+- Verify temp-root nested runtime state is created and consumed for nested runs.
 - Verify `maxRecursiveLevel` blocks further delegation when the cap is reached.
 - Verify `subagent_agents` restricts child selection.
 - Verify agents without `subagent` in their tool list cannot recurse.
-- Verify nested runs still persist transcripts and final outputs correctly.
+- Verify nested runs still persist child sessions and final outputs correctly.
 
 ## Assumptions
 
