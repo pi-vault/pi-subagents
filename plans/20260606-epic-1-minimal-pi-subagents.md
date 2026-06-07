@@ -249,7 +249,7 @@ $TMPDIR/pi-subagents-<scope>/nested-subagent-runs/...
 
 That runtime state carries:
 
-- current depth, where the parent call is depth `1`
+- current depth, where the top-level parent starts at depth `0` and the first nested child runs at depth `1`
 - configured recursion ceiling
 - optional child-agent allowlist derived from `subagent_agents`
 - run identifier metadata needed to reconnect nested calls to the right parent context

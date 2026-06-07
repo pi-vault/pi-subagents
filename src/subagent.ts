@@ -1,7 +1,4 @@
-import {
-  type ChildProcessByStdio,
-  spawn,
-} from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -9,9 +6,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import type {
   ExtensionAPI,
@@ -40,6 +38,29 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
 
 const TERMINATION_GRACE_MS = 2_000;
 const CHILD_SESSION_FILE_NAME = "session.jsonl";
+const SUBAGENT_EXTENSION_ENTRY = fileURLToPath(
+  new URL("./index.ts", import.meta.url),
+);
+const NESTED_EVENTS_DIR_NAME = "nested-subagent-events";
+const NESTED_RUNS_DIR_NAME = "nested-subagent-runs";
+const ROUTE_FILE_NAME = "route.json";
+const RUNTIME_STATE_FILE_NAME = "runtime.json";
+const PI_SUBAGENT_CHILD = "PI_SUBAGENT_CHILD";
+const PI_SUBAGENT_FANOUT_CHILD = "PI_SUBAGENT_FANOUT_CHILD";
+const PI_SUBAGENT_RUN_ID = "PI_SUBAGENT_RUN_ID";
+const PI_SUBAGENT_DEPTH = "PI_SUBAGENT_DEPTH";
+const PI_SUBAGENT_MAX_DEPTH = "PI_SUBAGENT_MAX_DEPTH";
+const PI_SUBAGENT_ALLOWED_AGENTS = "PI_SUBAGENT_ALLOWED_AGENTS";
+const PI_SUBAGENT_RUNTIME_STATE = "PI_SUBAGENT_RUNTIME_STATE";
+const PI_SUBAGENT_PARENT_EVENT_SINK = "PI_SUBAGENT_PARENT_EVENT_SINK";
+const PI_SUBAGENT_PARENT_CONTROL_INBOX = "PI_SUBAGENT_PARENT_CONTROL_INBOX";
+const PI_SUBAGENT_PARENT_ROOT_RUN_ID = "PI_SUBAGENT_PARENT_ROOT_RUN_ID";
+const PI_SUBAGENT_PARENT_RUN_ID = "PI_SUBAGENT_PARENT_RUN_ID";
+const PI_SUBAGENT_PARENT_CHILD_INDEX = "PI_SUBAGENT_PARENT_CHILD_INDEX";
+const PI_SUBAGENT_PARENT_DEPTH = "PI_SUBAGENT_PARENT_DEPTH";
+const PI_SUBAGENT_PARENT_PATH = "PI_SUBAGENT_PARENT_PATH";
+const PI_SUBAGENT_PARENT_CAPABILITY_TOKEN =
+  "PI_SUBAGENT_PARENT_CAPABILITY_TOKEN";
 
 type JsonContentPart = { type: string; text?: string };
 type JsonAssistantMessage = {
@@ -70,10 +91,26 @@ type SpawnChildFn = (
   args: string[],
   options: {
     cwd: string;
+    env: NodeJS.ProcessEnv;
     shell: false;
     stdio: ["ignore", "pipe", "pipe"];
   },
 ) => ChildSpawn;
+
+type NestedRuntimeContext = {
+  isNestedChild: boolean;
+  currentRunId?: string;
+  depth: number;
+  maxDepth: number;
+  rootRunId?: string;
+  allowedAgents?: string[];
+  parentPath: string;
+};
+
+type NestedChildLaunch = {
+  childArgs: string[];
+  childEnv: NodeJS.ProcessEnv;
+};
 
 export interface SubagentRuntimeDeps {
   spawnChild: SpawnChildFn;
@@ -83,7 +120,10 @@ export interface SubagentRuntimeDeps {
   writeFile: (path: string, content: string) => void;
   mkdirp: (path: string) => void;
   removePath: (path: string) => void;
-  resolvePiInvocation: (childArgs: string[]) => { command: string; args: string[] };
+  resolvePiInvocation: (childArgs: string[]) => {
+    command: string;
+    args: string[];
+  };
 }
 
 export function createSubagentRuntimeDeps(): SubagentRuntimeDeps {
@@ -163,7 +203,10 @@ function getAssistantText(message: JsonAssistantMessage | undefined): string {
     .join("");
 }
 
-function accumulateUsage(usage: SubagentUsage, message: JsonAssistantMessage): void {
+function accumulateUsage(
+  usage: SubagentUsage,
+  message: JsonAssistantMessage,
+): void {
   usage.turns += 1;
   usage.input += message.usage?.input ?? 0;
   usage.output += message.usage?.output ?? 0;
@@ -177,10 +220,145 @@ function getCliModel(agent: AgentDefinition): string | undefined {
   return agent.model && agent.model !== "default" ? agent.model : undefined;
 }
 
+function sanitizeScopeSegment(value: string): string {
+  const sanitized = value
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return sanitized || "unknown";
+}
+
+function getScopeId(): string {
+  const getuid = process.getuid;
+  if (typeof getuid === "function") {
+    try {
+      return `uid-${String(getuid())}`;
+    } catch {
+      // Fall through.
+    }
+  }
+
+  for (const key of ["USERNAME", "USER", "LOGNAME"] as const) {
+    const username = process.env[key];
+    if (username?.trim()) {
+      return `user-${sanitizeScopeSegment(username)}`;
+    }
+  }
+
+  try {
+    const username = userInfo().username;
+    if (username?.trim()) {
+      return `user-${sanitizeScopeSegment(username)}`;
+    }
+  } catch {
+    // Fall through to home-directory-based scoping.
+  }
+
+  const homeDir = process.env.USERPROFILE ?? process.env.HOME;
+  if (homeDir?.trim()) {
+    return `home-${sanitizeScopeSegment(homeDir)}`;
+  }
+
+  try {
+    const resolvedHomeDir = homedir();
+    if (resolvedHomeDir?.trim()) {
+      return `home-${sanitizeScopeSegment(resolvedHomeDir)}`;
+    }
+  } catch {
+    // Fall through to shared scope.
+  }
+
+  return "shared";
+}
+
+function getScopedTempRoot(): string {
+  return join(tmpdir(), `pi-subagents-${getScopeId()}`);
+}
+
+function parseInteger(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function splitCommaSeparatedList(value: string | undefined): string[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function readNestedRuntimeContext(
+  loadedConfig: LoadedConfig,
+): NestedRuntimeContext {
+  const isNestedChild = process.env[PI_SUBAGENT_CHILD] === "1";
+  const depth = parseInteger(process.env[PI_SUBAGENT_DEPTH], 0);
+  const maxDepth = parseInteger(
+    process.env[PI_SUBAGENT_MAX_DEPTH],
+    loadedConfig.config.maxRecursiveLevel,
+  );
+  const allowedAgents =
+    process.env[PI_SUBAGENT_ALLOWED_AGENTS] === undefined
+      ? undefined
+      : splitCommaSeparatedList(process.env[PI_SUBAGENT_ALLOWED_AGENTS]);
+
+  return {
+    isNestedChild,
+    currentRunId: process.env[PI_SUBAGENT_RUN_ID]?.trim() || undefined,
+    depth,
+    maxDepth,
+    rootRunId: process.env[PI_SUBAGENT_PARENT_ROOT_RUN_ID]?.trim() || undefined,
+    allowedAgents,
+    parentPath: process.env[PI_SUBAGENT_PARENT_PATH] ?? "",
+  };
+}
+
+function ensureNestedDelegationAllowed(
+  discovery: AgentDiscoveryResult,
+  input: SubagentToolInput,
+  context: NestedRuntimeContext,
+): void {
+  if (!context.isNestedChild) {
+    return;
+  }
+
+  if (context.depth >= context.maxDepth) {
+    throw new Error(
+      `Nested delegation blocked at depth ${context.depth}; maxRecursiveLevel=${context.maxDepth}.`,
+    );
+  }
+
+  const requestedAgent = input.agent.trim();
+  const requestedKey = requestedAgent.toLowerCase();
+  const allowedAgents = context.allowedAgents ?? [];
+  if (allowedAgents.length === 0) {
+    throw new Error(
+      `Nested delegation is disabled for this agent. Allowed child agents: none. Requested: "${requestedAgent}". Available agents: ${listAvailableAgents(discovery)}`,
+    );
+  }
+
+  const allowedKeys = new Set(
+    allowedAgents.map((agentName) => agentName.trim().toLowerCase()),
+  );
+  if (!allowedKeys.has(requestedKey)) {
+    throw new Error(
+      `Child agent "${requestedAgent}" is not allowed. Allowed child agents: ${allowedAgents.join(", ")}. Available agents: ${listAvailableAgents(discovery)}`,
+    );
+  }
+}
+
 function buildChildArgs(
   agent: AgentDefinition,
   promptPath: string | undefined,
   childSessionPath: string,
+  recursionEnabled: boolean,
 ): string[] {
   const args = [
     "--mode",
@@ -193,7 +371,13 @@ function buildChildArgs(
     agent.name,
   ];
 
-  const childTools = agent.tools.filter((tool) => tool !== "subagent");
+  if (recursionEnabled) {
+    args.push("--extension", SUBAGENT_EXTENSION_ENTRY);
+  }
+
+  const childTools = recursionEnabled
+    ? agent.tools
+    : agent.tools.filter((tool) => tool !== "subagent");
   if (childTools.length > 0) {
     args.push("--tools", childTools.join(","));
   }
@@ -209,6 +393,143 @@ function buildChildArgs(
   }
 
   return args;
+}
+
+function withoutNestedSubagentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const childEnv = { ...env };
+  for (const key of [
+    PI_SUBAGENT_CHILD,
+    PI_SUBAGENT_FANOUT_CHILD,
+    PI_SUBAGENT_RUN_ID,
+    PI_SUBAGENT_DEPTH,
+    PI_SUBAGENT_MAX_DEPTH,
+    PI_SUBAGENT_ALLOWED_AGENTS,
+    PI_SUBAGENT_RUNTIME_STATE,
+    PI_SUBAGENT_PARENT_EVENT_SINK,
+    PI_SUBAGENT_PARENT_CONTROL_INBOX,
+    PI_SUBAGENT_PARENT_ROOT_RUN_ID,
+    PI_SUBAGENT_PARENT_RUN_ID,
+    PI_SUBAGENT_PARENT_CHILD_INDEX,
+    PI_SUBAGENT_PARENT_DEPTH,
+    PI_SUBAGENT_PARENT_PATH,
+    PI_SUBAGENT_PARENT_CAPABILITY_TOKEN,
+  ]) {
+    delete childEnv[key];
+  }
+  return childEnv;
+}
+
+function createNestedChildLaunch(
+  agent: AgentDefinition,
+  promptPath: string | undefined,
+  childSessionPath: string,
+  loadedConfig: LoadedConfig,
+  runtime: SubagentRuntimeDeps,
+  childRunId: string,
+): NestedChildLaunch {
+  const context = readNestedRuntimeContext(loadedConfig);
+  const recursionEnabled =
+    agent.tools.includes("subagent") && context.depth < context.maxDepth;
+  const childArgs = buildChildArgs(
+    agent,
+    promptPath,
+    childSessionPath,
+    recursionEnabled,
+  );
+
+  if (!recursionEnabled) {
+    return { childArgs, childEnv: withoutNestedSubagentEnv(process.env) };
+  }
+
+  const childDepth = context.depth + 1;
+  const rootRunId = context.rootRunId ?? childRunId;
+  const parentRunId = context.currentRunId ?? "";
+  const capabilityToken = runtime.createRunId();
+  const childIndex = "0";
+  const scopedTempRoot = getScopedTempRoot();
+  const routeDir = join(
+    scopedTempRoot,
+    NESTED_EVENTS_DIR_NAME,
+    `${rootRunId}-${capabilityToken}`,
+  );
+  const parentEventSink = join(routeDir, "parent-event-sink.jsonl");
+  const parentControlInbox = join(routeDir, "parent-control-inbox.jsonl");
+  const routeFilePath = join(routeDir, ROUTE_FILE_NAME);
+  const runtimeStatePath = join(
+    scopedTempRoot,
+    NESTED_RUNS_DIR_NAME,
+    rootRunId,
+    childRunId,
+    RUNTIME_STATE_FILE_NAME,
+  );
+  const parentPath = context.currentRunId
+    ? [context.parentPath, context.currentRunId].filter(Boolean).join("/")
+    : context.parentPath;
+
+  runtime.mkdirp(routeDir);
+  runtime.mkdirp(dirname(runtimeStatePath));
+  runtime.writeFile(
+    routeFilePath,
+    `${JSON.stringify(
+      {
+        rootRunId,
+        parentRunId,
+        childRunId,
+        capabilityToken,
+        childIndex,
+        parentDepth: context.depth,
+        parentPath,
+        parentEventSink,
+        parentControlInbox,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  runtime.writeFile(
+    runtimeStatePath,
+    `${JSON.stringify(
+      {
+        runId: childRunId,
+        rootRunId,
+        parentRunId,
+        depth: childDepth,
+        maxDepth: context.maxDepth,
+        allowedAgents: agent.subagentAgents,
+        routeDir,
+        routeFilePath,
+        parentEventSink,
+        parentControlInbox,
+        parentChildIndex: childIndex,
+        parentDepth: context.depth,
+        parentPath,
+        parentCapabilityToken: capabilityToken,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    [PI_SUBAGENT_CHILD]: "1",
+    [PI_SUBAGENT_FANOUT_CHILD]: "1",
+    [PI_SUBAGENT_RUN_ID]: childRunId,
+    [PI_SUBAGENT_DEPTH]: String(childDepth),
+    [PI_SUBAGENT_MAX_DEPTH]: String(context.maxDepth),
+    [PI_SUBAGENT_ALLOWED_AGENTS]: agent.subagentAgents.join(","),
+    [PI_SUBAGENT_RUNTIME_STATE]: runtimeStatePath,
+    [PI_SUBAGENT_PARENT_EVENT_SINK]: parentEventSink,
+    [PI_SUBAGENT_PARENT_CONTROL_INBOX]: parentControlInbox,
+    [PI_SUBAGENT_PARENT_ROOT_RUN_ID]: rootRunId,
+    [PI_SUBAGENT_PARENT_RUN_ID]: parentRunId,
+    [PI_SUBAGENT_PARENT_CHILD_INDEX]: childIndex,
+    [PI_SUBAGENT_PARENT_DEPTH]: String(context.depth),
+    [PI_SUBAGENT_PARENT_PATH]: parentPath,
+    [PI_SUBAGENT_PARENT_CAPABILITY_TOKEN]: capabilityToken,
+  };
+
+  return { childArgs, childEnv };
 }
 
 function parseSubagentRequest(
@@ -295,6 +616,8 @@ export async function executeSubagent(
   runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
 ): Promise<SubagentExecutionResult> {
   const startedAt = runtime.now();
+  const nestedContext = readNestedRuntimeContext(loadedConfig);
+  ensureNestedDelegationAllowed(discovery, input, nestedContext);
   const agent = parseSubagentRequest(discovery, input);
   const task = input.task.trim();
   const timeoutMs = agent.timeoutMs ?? loadedConfig.config.defaultTimeoutMs;
@@ -321,13 +644,21 @@ export async function executeSubagent(
       runtime.writeFile(promptPath, agent.systemPrompt);
     }
 
-    const childArgs = [
-      ...buildChildArgs(agent, promptPath, childSessionPath),
+    const launch = createNestedChildLaunch(
+      agent,
+      promptPath,
+      childSessionPath,
+      loadedConfig,
+      runtime,
+      runId,
+    );
+    const invocation = runtime.resolvePiInvocation([
+      ...launch.childArgs,
       `Task: ${task}`,
-    ];
-    const invocation = runtime.resolvePiInvocation(childArgs);
+    ]);
     const child = runtime.spawnChild(invocation.command, invocation.args, {
       cwd: effectiveCwd,
+      env: launch.childEnv,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -395,84 +726,86 @@ export async function executeSubagent(
       errorMessage = messageEvent.message.errorMessage ?? errorMessage;
     };
 
-    const result = await new Promise<SubagentExecutionResult>((resolveResult, reject) => {
-      child.stdout.on("data", (chunk: Buffer | string) => {
-        stdoutBuffer += chunk.toString();
-        const lines = stdoutBuffer.split("\n");
-        stdoutBuffer = lines.pop() ?? "";
-        for (const line of lines) {
-          processLine(line);
-        }
-      });
-
-      child.stderr.on("data", (chunk: Buffer | string) => {
-        stderr += chunk.toString();
-      });
-
-      child.on("error", reject);
-      child.on("close", (code) => {
-        exitCode = code;
-        if (stdoutBuffer.trim()) {
-          processLine(stdoutBuffer);
-        }
-        if (timeoutHandle) {
-          clearTimeout(timeoutHandle);
-        }
-        if (killTimer) {
-          clearTimeout(killTimer);
-        }
-
-        const durationMs = runtime.now() - startedAt;
-        const normalizedStopReason = timedOut
-          ? "timeout"
-          : aborted
-            ? "aborted"
-            : stopReason ?? (code === 0 ? "end" : "error");
-        const failureText = timedOut
-          ? `Subagent timed out after ${timeoutMs}ms.`
-          : aborted
-            ? "Subagent aborted."
-            : (errorMessage ?? stderr.trim()) ||
-              `Subagent exited with code ${code ?? "unknown"}.`;
-        const isError =
-          timedOut ||
-          aborted ||
-          (code ?? 0) !== 0 ||
-          normalizedStopReason === "error" ||
-          normalizedStopReason === "aborted";
-
-        resolveResult({
-          content: isError ? failureText : (finalText || "(no output)"),
-          isError,
-          details: {
-            agent: agent.name,
-            sourcePath: agent.sourcePath,
-            cwd: effectiveCwd,
-            timeoutMs,
-            durationMs,
-            childSessionDir,
-            childSessionPath,
-            model,
-            stopReason: normalizedStopReason,
-            exitCode,
-            stderr,
-            usage,
-          },
+    const result = await new Promise<SubagentExecutionResult>(
+      (resolveResult, reject) => {
+        child.stdout.on("data", (chunk: Buffer | string) => {
+          stdoutBuffer += chunk.toString();
+          const lines = stdoutBuffer.split("\n");
+          stdoutBuffer = lines.pop() ?? "";
+          for (const line of lines) {
+            processLine(line);
+          }
         });
-      });
 
-      if (signal) {
-        if (signal.aborted) {
-          terminate("aborted");
-        } else {
-          signal.addEventListener("abort", () => terminate("aborted"), {
-            once: true,
+        child.stderr.on("data", (chunk: Buffer | string) => {
+          stderr += chunk.toString();
+        });
+
+        child.on("error", reject);
+        child.on("close", (code) => {
+          exitCode = code;
+          if (stdoutBuffer.trim()) {
+            processLine(stdoutBuffer);
+          }
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+          }
+          if (killTimer) {
+            clearTimeout(killTimer);
+          }
+
+          const durationMs = runtime.now() - startedAt;
+          const normalizedStopReason = timedOut
+            ? "timeout"
+            : aborted
+              ? "aborted"
+              : (stopReason ?? (code === 0 ? "end" : "error"));
+          const failureText = timedOut
+            ? `Subagent timed out after ${timeoutMs}ms.`
+            : aborted
+              ? "Subagent aborted."
+              : (errorMessage ?? stderr.trim()) ||
+                `Subagent exited with code ${code ?? "unknown"}.`;
+          const isError =
+            timedOut ||
+            aborted ||
+            (code ?? 0) !== 0 ||
+            normalizedStopReason === "error" ||
+            normalizedStopReason === "aborted";
+
+          resolveResult({
+            content: isError ? failureText : finalText || "(no output)",
+            isError,
+            details: {
+              agent: agent.name,
+              sourcePath: agent.sourcePath,
+              cwd: effectiveCwd,
+              timeoutMs,
+              durationMs,
+              childSessionDir,
+              childSessionPath,
+              model,
+              stopReason: normalizedStopReason,
+              exitCode,
+              stderr,
+              usage,
+            },
           });
-        }
-      }
+        });
 
-      timeoutHandle = setTimeout(() => terminate("timeout"), timeoutMs);
-    });
+        if (signal) {
+          if (signal.aborted) {
+            terminate("aborted");
+          } else {
+            signal.addEventListener("abort", () => terminate("aborted"), {
+              once: true,
+            });
+          }
+        }
+
+        timeoutHandle = setTimeout(() => terminate("timeout"), timeoutMs);
+      },
+    );
 
     return result;
   } finally {
@@ -493,7 +826,13 @@ export function registerSubagentTool(
     description:
       "Delegate a task to a discovered agent in an isolated foreground pi process.",
     parameters: SUBAGENT_TOOL_PARAMETERS,
-    async execute(_toolCallId, params, signal, _onUpdate, ctx: ExtensionContext) {
+    async execute(
+      _toolCallId,
+      params,
+      signal,
+      _onUpdate,
+      ctx: ExtensionContext,
+    ) {
       const paths = deps.resolvePaths();
       const loadedConfig = deps.loadConfig(paths);
       const discovery = deps.discoverAgents(paths);

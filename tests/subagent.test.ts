@@ -2,6 +2,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -60,7 +61,7 @@ function createDeps(paths: ResolvedPaths, discovery: AgentDiscoveryResult): Runt
     exists: false,
     config: {
       maxConcurrency: 3,
-      maxRecursiveLevel: 3,
+      maxRecursiveLevel: 2,
       defaultTimeoutMs: 500,
     },
   };
@@ -135,6 +136,33 @@ function writeChildSessionFile(childSessionPath: string): string {
   return childSessionPath;
 }
 
+async function withEnv(
+  values: Record<string, string | undefined>,
+  run: () => Promise<void>,
+): Promise<void> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(values)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    await run();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 describe("subagent execution", () => {
   test("rejects missing task and unknown agents before spawn", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
@@ -193,11 +221,16 @@ describe("subagent execution", () => {
     const childSessionPath = writeChildSessionFile(
       join(childSessionDir, "session.jsonl"),
     );
-    const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
+    const spawnCalls: Array<{
+      command: string;
+      args: string[];
+      cwd?: string;
+      env?: NodeJS.ProcessEnv;
+    }> = [];
 
     const runtime = createRuntime(
-      ((command: string, args: string[], options: { cwd?: string }) => {
-        spawnCalls.push({ command, args, cwd: options.cwd });
+      ((command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
+        spawnCalls.push({ command, args, cwd: options.cwd, env: options.env });
         const child = new FakeChildProcess();
         queueMicrotask(() => {
           child.stdout.write(
@@ -277,6 +310,7 @@ describe("subagent execution", () => {
     );
     expect(spawnCalls[0].args).not.toContain("--session-dir");
     expect(spawnCalls[0].args).not.toContain("--session-id");
+    expect(spawnCalls[0]?.env?.PI_SUBAGENT_CHILD).toBeUndefined();
     expect(existsSync(result.details.childSessionPath)).toBe(true);
   });
 
@@ -320,17 +354,17 @@ describe("subagent execution", () => {
     expect(result.details.model).toBeUndefined();
   });
 
-  test("does not expose subagent in child tool allowlist during phase 4", async () => {
+  test("keeps phase 4 spawn behavior for agents without subagent", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
     const discovery = {
-      agents: [createAgent({ tools: ["read", "subagent", "bash"], systemPrompt: "" })],
+      agents: [createAgent({ tools: ["read", "bash"], systemPrompt: "" })],
       diagnostics: [],
     };
-    const spawnCalls: Array<{ args: string[] }> = [];
+    const spawnCalls: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = [];
     const runtime = createRuntime(
-      ((_, args, ___) => {
-        spawnCalls.push({ args });
+      ((_, args, options) => {
+        spawnCalls.push({ args, env: options.env });
         const child = new FakeChildProcess();
         queueMicrotask(() => {
           child.stdout.write(
@@ -357,9 +391,441 @@ describe("subagent execution", () => {
     expect(result.isError).toBe(false);
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]?.args).toEqual(
-      expect.arrayContaining(["--tools", "read,bash"]),
+      expect.arrayContaining(["--no-extensions", "--tools", "read,bash"]),
     );
-    expect(spawnCalls[0]?.args).not.toContain("read,subagent,bash");
+    expect(spawnCalls[0]?.args).not.toContain("--extension");
+    expect(spawnCalls[0]?.env?.PI_SUBAGENT_CHILD).toBeUndefined();
+  });
+
+  test("enables recursive child runs, preserves subagent, and writes nested runtime files", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [
+        createAgent({
+          tools: ["read", "subagent", "bash"],
+          subagentAgents: ["researcher", "scout"],
+          systemPrompt: "",
+        }),
+      ],
+      diagnostics: [],
+    };
+    const spawnCalls: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = [];
+    const runtime = createRuntime(
+      ((_, args, options) => {
+        spawnCalls.push({ args, env: options.env });
+        const child = new FakeChildProcess();
+        queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end"}}\n',
+          );
+          child.close(0);
+        });
+        return child as never;
+      }) as SubagentRuntimeDeps["spawnChild"],
+      { runId: "run-123" },
+    );
+
+    const result = await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Inspect repo" },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
+
+    expect(result.isError).toBe(false);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args).toEqual(
+      expect.arrayContaining([
+        "--no-extensions",
+        "--extension",
+        expect.stringMatching(/src\/index\.ts$/),
+        "--tools",
+        "read,subagent,bash",
+      ]),
+    );
+    expect(spawnCalls[0]?.env).toMatchObject({
+      PI_SUBAGENT_CHILD: "1",
+      PI_SUBAGENT_FANOUT_CHILD: "1",
+      PI_SUBAGENT_RUN_ID: "run-123",
+      PI_SUBAGENT_DEPTH: "1",
+      PI_SUBAGENT_MAX_DEPTH: "2",
+      PI_SUBAGENT_ALLOWED_AGENTS: "researcher,scout",
+      PI_SUBAGENT_PARENT_ROOT_RUN_ID: "run-123",
+      PI_SUBAGENT_PARENT_RUN_ID: "",
+      PI_SUBAGENT_PARENT_CHILD_INDEX: "0",
+      PI_SUBAGENT_PARENT_DEPTH: "0",
+      PI_SUBAGENT_PARENT_PATH: "",
+    });
+
+    const runtimeStatePath = spawnCalls[0]?.env?.PI_SUBAGENT_RUNTIME_STATE;
+    expect(runtimeStatePath).toBeTruthy();
+    const runtimeState = JSON.parse(readFileSync(runtimeStatePath ?? "", "utf8")) as {
+      rootRunId: string;
+      runId: string;
+      depth: number;
+      maxDepth: number;
+      allowedAgents: string[];
+      routeFilePath: string;
+      parentEventSink: string;
+      parentControlInbox: string;
+    };
+    expect(runtimeState).toMatchObject({
+      rootRunId: "run-123",
+      runId: "run-123",
+      depth: 1,
+      maxDepth: 2,
+      allowedAgents: ["researcher", "scout"],
+    });
+    expect(existsSync(runtimeState.routeFilePath)).toBe(true);
+    const route = JSON.parse(readFileSync(runtimeState.routeFilePath, "utf8")) as {
+      rootRunId: string;
+      childRunId: string;
+      parentEventSink: string;
+      parentControlInbox: string;
+    };
+    expect(route).toMatchObject({
+      rootRunId: "run-123",
+      childRunId: "run-123",
+      parentEventSink: runtimeState.parentEventSink,
+      parentControlInbox: runtimeState.parentControlInbox,
+    });
+  });
+
+  test("strips nested subagent env vars when a nested child launches a non-recursive agent", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [createAgent({ tools: ["read", "bash"], systemPrompt: "" })],
+      diagnostics: [],
+    };
+    const spawnCalls: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = [];
+    const runtime = createRuntime(
+      ((_, args, options) => {
+        spawnCalls.push({ args, env: options.env });
+        const child = new FakeChildProcess();
+        queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end"}}\n',
+          );
+          child.close(0);
+        });
+        return child as never;
+      }) as SubagentRuntimeDeps["spawnChild"],
+    );
+
+    await withEnv(
+      {
+        PI_SUBAGENT_CHILD: "1",
+        PI_SUBAGENT_FANOUT_CHILD: "1",
+        PI_SUBAGENT_RUN_ID: "parent-run",
+        PI_SUBAGENT_DEPTH: "1",
+        PI_SUBAGENT_MAX_DEPTH: "2",
+        PI_SUBAGENT_ALLOWED_AGENTS: "scout",
+        PI_SUBAGENT_RUNTIME_STATE: "/tmp/runtime.json",
+        PI_SUBAGENT_PARENT_EVENT_SINK: "/tmp/event-sink.jsonl",
+        PI_SUBAGENT_PARENT_CONTROL_INBOX: "/tmp/control-inbox.jsonl",
+        PI_SUBAGENT_PARENT_ROOT_RUN_ID: "root-run",
+        PI_SUBAGENT_PARENT_RUN_ID: "parent-run",
+        PI_SUBAGENT_PARENT_CHILD_INDEX: "0",
+        PI_SUBAGENT_PARENT_DEPTH: "1",
+        PI_SUBAGENT_PARENT_PATH: "root-run/parent-run",
+        PI_SUBAGENT_PARENT_CAPABILITY_TOKEN: "cap-token",
+      },
+      async () => {
+        const result = await executeSubagent(
+          paths,
+          createDeps(paths, discovery).loadConfig(paths),
+          discovery,
+          { agent: "Scout", task: "Inspect repo" },
+          "/repo",
+          undefined,
+          undefined,
+          undefined,
+          runtime,
+        );
+
+        expect(result.isError).toBe(false);
+      },
+    );
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args).toEqual(
+      expect.arrayContaining(["--no-extensions", "--tools", "read,bash"]),
+    );
+    expect(spawnCalls[0]?.args).not.toContain("--extension");
+    expect(spawnCalls[0]?.env?.PI_SUBAGENT_CHILD).toBeUndefined();
+    expect(spawnCalls[0]?.env?.PI_SUBAGENT_PARENT_ROOT_RUN_ID).toBeUndefined();
+    expect(spawnCalls[0]?.env?.PI_SUBAGENT_RUNTIME_STATE).toBeUndefined();
+  });
+
+  test("scout self-recursion: spawns child scout with correct allowlist and depth tracking", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [
+        createAgent({
+          name: "scout",
+          tools: ["read", "subagent", "bash"],
+          subagentAgents: ["scout"],
+          systemPrompt: "",
+        }),
+      ],
+      diagnostics: [],
+    };
+    const spawnCalls: Array<{
+      args: string[];
+      env?: NodeJS.ProcessEnv;
+    }> = [];
+    const runtime = createRuntime(
+      ((_, args, options) => {
+        spawnCalls.push({ args, env: options.env });
+        const child = new FakeChildProcess();
+        queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"scout-result"}],"stopReason":"end"}}\n',
+          );
+          child.close(0);
+        });
+        return child as never;
+      }) as SubagentRuntimeDeps["spawnChild"],
+      { runId: "scout-self-recursion-run" },
+    );
+
+    const result = await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "scout", task: "Explore repo structure" },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
+
+    expect(result.isError).toBe(false);
+    expect(result.content).toBe("scout-result");
+    expect(spawnCalls).toHaveLength(1);
+
+    const childArgs = spawnCalls[0]?.args;
+    expect(childArgs).toEqual(
+      expect.arrayContaining(["--extension"]),
+    );
+    expect(childArgs).toEqual(
+      expect.arrayContaining(["--no-extensions"]),
+    );
+    expect(childArgs).toEqual(
+      expect.arrayContaining(["--tools", "read,subagent,bash"]),
+    );
+    expect(childArgs).toEqual(
+      expect.arrayContaining(["--name", "scout"]),
+    );
+
+    const childEnv = spawnCalls[0]?.env;
+    expect(childEnv).toMatchObject({
+      PI_SUBAGENT_CHILD: "1",
+      PI_SUBAGENT_FANOUT_CHILD: "1",
+      PI_SUBAGENT_RUN_ID: "scout-self-recursion-run",
+      PI_SUBAGENT_DEPTH: "1",
+      PI_SUBAGENT_MAX_DEPTH: "2",
+      PI_SUBAGENT_ALLOWED_AGENTS: "scout",
+      PI_SUBAGENT_PARENT_ROOT_RUN_ID: "scout-self-recursion-run",
+      PI_SUBAGENT_PARENT_DEPTH: "0",
+    });
+
+    // Verify the child scout can also recurse (scout is in its own allowlist)
+    expect(childEnv?.PI_SUBAGENT_ALLOWED_AGENTS).toBe("scout");
+
+    // Verify runtime state file was written with correct depth
+    const runtimeStatePath = childEnv?.PI_SUBAGENT_RUNTIME_STATE;
+    expect(runtimeStatePath).toBeTruthy();
+    const runtimeState = JSON.parse(
+      readFileSync(runtimeStatePath ?? "", "utf8"),
+    ) as {
+      depth: number;
+      maxDepth: number;
+      allowedAgents: string[];
+      routeFilePath: string;
+    };
+    expect(runtimeState).toMatchObject({
+      depth: 1,
+      maxDepth: 2,
+      allowedAgents: ["scout"],
+    });
+
+    // Verify route file was written
+    expect(existsSync(runtimeState.routeFilePath)).toBe(true);
+  });
+
+  test("allows case-insensitive nested child selection when present in the allowlist", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [createAgent({ name: "Researcher", systemPrompt: "" })],
+      diagnostics: [],
+    };
+    const runtime = createRuntime(
+      ((_, __, ___) => {
+        const child = new FakeChildProcess();
+        queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end"}}\n',
+          );
+          child.close(0);
+        });
+        return child as never;
+      }) as SubagentRuntimeDeps["spawnChild"],
+    );
+
+    await withEnv(
+      {
+        PI_SUBAGENT_CHILD: "1",
+        PI_SUBAGENT_RUN_ID: "parent-run",
+        PI_SUBAGENT_DEPTH: "1",
+        PI_SUBAGENT_MAX_DEPTH: "2",
+        PI_SUBAGENT_ALLOWED_AGENTS: "researcher",
+        PI_SUBAGENT_PARENT_ROOT_RUN_ID: "root-run",
+      },
+      async () => {
+        const result = await executeSubagent(
+          paths,
+          createDeps(paths, discovery).loadConfig(paths),
+          discovery,
+          { agent: "RESEARCHER", task: "Inspect repo" },
+          "/repo",
+          undefined,
+          undefined,
+          undefined,
+          runtime,
+        );
+
+        expect(result.isError).toBe(false);
+      },
+    );
+  });
+
+  test("blocks nested delegation when current depth reaches maxRecursiveLevel", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
+    const runtime = createRuntime(
+      vi.fn(() => {
+        throw new Error("spawn should not be called");
+      }) as SubagentRuntimeDeps["spawnChild"],
+    );
+
+    await withEnv(
+      {
+        PI_SUBAGENT_CHILD: "1",
+        PI_SUBAGENT_RUN_ID: "parent-run",
+        PI_SUBAGENT_DEPTH: "2",
+        PI_SUBAGENT_MAX_DEPTH: "2",
+        PI_SUBAGENT_ALLOWED_AGENTS: "Scout",
+        PI_SUBAGENT_PARENT_ROOT_RUN_ID: "root-run",
+      },
+      async () => {
+        await expect(
+          executeSubagent(
+            paths,
+            createDeps(paths, discovery).loadConfig(paths),
+            discovery,
+            { agent: "Scout", task: "Inspect repo" },
+            "/repo",
+            undefined,
+            undefined,
+            undefined,
+            runtime,
+          ),
+        ).rejects.toThrow(
+          "Nested delegation blocked at depth 2; maxRecursiveLevel=2.",
+        );
+      },
+    );
+  });
+
+  test("blocks nested delegation when the child allowlist is empty", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
+    const runtime = createRuntime(
+      vi.fn(() => {
+        throw new Error("spawn should not be called");
+      }) as SubagentRuntimeDeps["spawnChild"],
+    );
+
+    await withEnv(
+      {
+        PI_SUBAGENT_CHILD: "1",
+        PI_SUBAGENT_RUN_ID: "parent-run",
+        PI_SUBAGENT_DEPTH: "1",
+        PI_SUBAGENT_MAX_DEPTH: "2",
+        PI_SUBAGENT_ALLOWED_AGENTS: "",
+        PI_SUBAGENT_PARENT_ROOT_RUN_ID: "root-run",
+      },
+      async () => {
+        await expect(
+          executeSubagent(
+            paths,
+            createDeps(paths, discovery).loadConfig(paths),
+            discovery,
+            { agent: "Scout", task: "Inspect repo" },
+            "/repo",
+            undefined,
+            undefined,
+            undefined,
+            runtime,
+          ),
+        ).rejects.toThrow("Nested delegation is disabled for this agent");
+      },
+    );
+  });
+
+  test("blocks nested delegation when the requested child is not in the allowlist", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [createAgent({ name: "Researcher", systemPrompt: "" })],
+      diagnostics: [],
+    };
+    const runtime = createRuntime(
+      vi.fn(() => {
+        throw new Error("spawn should not be called");
+      }) as SubagentRuntimeDeps["spawnChild"],
+    );
+
+    await withEnv(
+      {
+        PI_SUBAGENT_CHILD: "1",
+        PI_SUBAGENT_RUN_ID: "parent-run",
+        PI_SUBAGENT_DEPTH: "1",
+        PI_SUBAGENT_MAX_DEPTH: "2",
+        PI_SUBAGENT_ALLOWED_AGENTS: "scout",
+        PI_SUBAGENT_PARENT_ROOT_RUN_ID: "root-run",
+      },
+      async () => {
+        await expect(
+          executeSubagent(
+            paths,
+            createDeps(paths, discovery).loadConfig(paths),
+            discovery,
+            { agent: "Researcher", task: "Inspect repo" },
+            "/repo",
+            undefined,
+            undefined,
+            undefined,
+            runtime,
+          ),
+        ).rejects.toThrow(
+          'Child agent "Researcher" is not allowed. Allowed child agents: scout.',
+        );
+      },
+    );
   });
 
   test("uses a temp child session root for no-session parents", async () => {
