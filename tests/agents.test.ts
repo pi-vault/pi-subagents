@@ -24,7 +24,8 @@ function createPaths(rootDir: string): ResolvedPaths {
     configPath: join(rootDir, "agent", "extensions", "subagents.json"),
     userAgentsDir: join(rootDir, "agent", "agents"),
     bundledAgentsDir: join(rootDir, "bundled-agents"),
-    transcriptCacheDir: join(rootDir, "agent", "cache", "pi-subagents"),
+    sessionsDir: join(rootDir, "agent", "sessions"),
+    runtimeCacheDir: join(rootDir, "agent", "cache", "pi-subagents"),
   };
 }
 

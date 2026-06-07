@@ -21,23 +21,36 @@ function createPaths(): ResolvedPaths {
     configPath: "/tmp/pi-agent/extensions/subagents.json",
     userAgentsDir: "/tmp/pi-agent/agents",
     bundledAgentsDir: "/repo/agents",
-    transcriptCacheDir: "/tmp/pi-agent/cache/pi-subagents",
+    sessionsDir: "/tmp/pi-agent/sessions",
+    runtimeCacheDir: "/tmp/pi-agent/cache/pi-subagents",
   };
+}
+
+function createPi(registerCommand?: (name: string, command: RegisteredCommand) => void) {
+  return {
+    registerTool() {},
+    registerCommand(name: string, command: RegisteredCommand) {
+      registerCommand?.(name, command);
+    },
+    sendMessage() {},
+    getAllTools() {
+      return [];
+    },
+  } as unknown as ExtensionAPI;
 }
 
 describe("subagents extension", () => {
   test("loads without throwing", () => {
     const commands: Array<{ name: string; description?: string }> = [];
-    const pi = {
-      registerCommand(name: string, command: RegisteredCommand) {
-        commands.push({ name, description: command.description });
-      },
-      getAllTools() {
-        return [];
-      },
-    } as unknown as ExtensionAPI;
+    const pi = createPi((name, command) => {
+      commands.push({ name, description: command.description });
+    });
 
     expect(() => extension(pi)).not.toThrow();
+    expect(commands).toContainEqual({
+      name: "agent",
+      description: "Run a discovered pi-subagents agent in the foreground",
+    });
     expect(commands).toContainEqual({
       name: "agents",
       description: "List discovered pi-subagents agents",
@@ -82,17 +95,11 @@ describe("subagents extension", () => {
 
     let handler: RegisteredCommand["handler"] | undefined;
     const notifications: Array<{ message: string; level: string }> = [];
-
-    const pi = {
-      registerCommand(name: string, command: RegisteredCommand) {
-        if (name === "agents") {
-          handler = command.handler;
-        }
-      },
-      getAllTools() {
-        return [];
-      },
-    } as unknown as ExtensionAPI;
+    const pi = createPi((name, command) => {
+      if (name === "agents") {
+        handler = command.handler;
+      }
+    });
 
     registerSubagentsExtension(pi, {
       resolvePaths: () => paths,
@@ -105,11 +112,7 @@ describe("subagents extension", () => {
     });
 
     expect(handler).toBeDefined();
-    if (!handler) {
-      throw new Error("Expected /agents handler to be registered");
-    }
-
-    await handler("", {
+    await handler?.("", {
       ui: {
         notify(message: string, level: string) {
           notifications.push({ message, level });
@@ -170,17 +173,11 @@ describe("subagents extension", () => {
     const notifications: Array<{ message: string; level: string }> = [];
     const capturedInputs: AgentCreationInput[] = [];
     let discoveryCalls = 0;
-
-    const pi = {
-      registerCommand(name: string, command: RegisteredCommand) {
-        if (name === "agents:add") {
-          addHandler = command.handler;
-        }
-      },
-      getAllTools() {
-        return [];
-      },
-    } as unknown as ExtensionAPI;
+    const pi = createPi((name, command) => {
+      if (name === "agents:add") {
+        addHandler = command.handler;
+      }
+    });
 
     registerSubagentsExtension(pi, {
       resolvePaths: () => paths,
@@ -197,9 +194,6 @@ describe("subagents extension", () => {
     });
 
     expect(addHandler).toBeDefined();
-    if (!addHandler) {
-      throw new Error("Expected /agents:add handler to be registered");
-    }
 
     const inputs = [
       "Scout",
@@ -211,7 +205,7 @@ describe("subagents extension", () => {
       "180000",
     ];
 
-    await addHandler("", {
+    await addHandler?.("", {
       ui: {
         input() {
           return Promise.resolve(inputs.shift());
@@ -268,17 +262,11 @@ describe("subagents extension", () => {
     let addHandler: RegisteredCommand["handler"] | undefined;
     const notifications: Array<{ message: string; level: string }> = [];
     const capturedInputs: AgentCreationInput[] = [];
-
-    const pi = {
-      registerCommand(name: string, command: RegisteredCommand) {
-        if (name === "agents:add") {
-          addHandler = command.handler;
-        }
-      },
-      getAllTools() {
-        return [];
-      },
-    } as unknown as ExtensionAPI;
+    const pi = createPi((name, command) => {
+      if (name === "agents:add") {
+        addHandler = command.handler;
+      }
+    });
 
     registerSubagentsExtension(pi, {
       resolvePaths: () => paths,
@@ -292,22 +280,10 @@ describe("subagents extension", () => {
     });
 
     expect(addHandler).toBeDefined();
-    if (!addHandler) {
-      throw new Error("Expected /agents:add handler to be registered");
-    }
 
-    const inputs = [
-      "",
-      "planner",
-      "   ",
-      "read",
-      "",
-      "",
-      "",
-      "",
-    ];
+    const inputs = ["", "planner", "   ", "read", "", "", "", ""];
 
-    await addHandler("", {
+    await addHandler?.("", {
       ui: {
         input() {
           return Promise.resolve(inputs.shift());
