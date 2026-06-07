@@ -341,8 +341,8 @@ Epic 1 should remain minimal, but observability is a hard requirement:
 - status: pending, running, completed, failed
 - persisted native child Pi session file for every run
 - child session directory and, when available, child session path for later inspection
-- current or recent tool activity reconstructed from the persisted event stream
-- latest prose/thinking line when available from the persisted event stream
+- bounded recent tool activity derived from child JSON stdout events
+- latest final assistant text from child `message_end` events
 - duration
 - token usage summary when available
 - model name if known
@@ -352,9 +352,11 @@ Epic 1 should remain minimal, but observability is a hard requirement:
 
 Rendering requirements:
 
+- use Pi renderer hooks:
+  tool `renderCall`, tool `renderResult`, and a custom message renderer for `/agent`
 - compact call line in collapsed mode
-- structured result block with status, usage, and child session reference
-- expandable final markdown output
+- structured result block with status, usage, child session reference, and recent tool activity
+- expandable final output text while keeping final assistant text as the only parent-visible result content
 - explicit error messages for unknown agent, invalid config, missing child extension availability, timeout, abort, spawn failure, and non-zero child exit
 
 ## Implementation Constraints
