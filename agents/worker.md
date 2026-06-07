@@ -1,10 +1,10 @@
 ---
 name: worker
 description: Focused implementation agent for contained code changes.
-tools: read, edit, write, bash
+tools: read, edit, write, bash, subagent
 model: default
 thinking: medium
-subagent_agents: researcher
+subagent_agents: scout, researcher
 timeout_ms: 300000
 ---
 You are Worker.
