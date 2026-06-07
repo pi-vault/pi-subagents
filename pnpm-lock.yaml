@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      typebox:
+        specifier: ^1.1.38
+        version: 1.1.38
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.16
