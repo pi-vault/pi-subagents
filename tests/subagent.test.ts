@@ -15,6 +15,7 @@ import type {
   RegisteredCommand,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
+import { encodePiCwd } from "../src/shared/artifacts.js";
 import {
   executeSubagent,
   parseAgentCommandArgs,
@@ -22,14 +23,14 @@ import {
   registerSlashAgentBridge,
   registerSubagentTool,
   type SubagentRuntimeDeps,
-} from "../src/subagent.js";
+} from "../src/core/subagent.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
   LoadedConfig,
   ResolvedPaths,
   RuntimeDeps,
-} from "../src/types.js";
+} from "../src/shared/types.js";
 
 function createPaths(rootDir: string): ResolvedPaths {
   return {
@@ -38,7 +39,6 @@ function createPaths(rootDir: string): ResolvedPaths {
     userAgentsDir: join(rootDir, "agent", "agents"),
     bundledAgentsDir: join(rootDir, "bundled-agents"),
     sessionsDir: join(rootDir, "agent", "sessions"),
-    runtimeCacheDir: join(rootDir, "agent", "cache", "pi-subagents"),
   };
 }
 
@@ -82,10 +82,9 @@ function createRuntime(
   spawnChild: SubagentRuntimeDeps["spawnChild"],
   options: {
     runId?: string;
-    tempSessionRoot?: string;
   } = {},
 ): SubagentRuntimeDeps {
-  const { runId = "run-123", tempSessionRoot } = options;
+  const { runId = "run-123" } = options;
 
   return {
     spawnChild,
@@ -94,13 +93,7 @@ function createRuntime(
       return () => ++time;
     })(),
     createRunId: () => runId,
-    mkdtemp: (prefix) => {
-      if (prefix.includes("pi-subagent-session-") && tempSessionRoot) {
-        mkdirSync(tempSessionRoot, { recursive: true });
-        return tempSessionRoot;
-      }
-      return mkdtempSync(prefix);
-    },
+    mkdtemp: (prefix) => mkdtempSync(prefix),
     writeFile: (path, content) => {
       writeFileSync(path, content, { encoding: "utf8", mode: 0o600 });
     },
@@ -280,6 +273,24 @@ describe("subagent execution", () => {
 
     expect(result.content).toBe("final answer");
     expect(result.isError).toBe(false);
+    const artifactPaths = {
+      input: join(
+        parentSessionDir,
+        "subagent-artifacts",
+        "run-123_Scout_0_input.md",
+      ),
+      output: join(
+        parentSessionDir,
+        "subagent-artifacts",
+        "run-123_Scout_0_output.md",
+      ),
+      meta: join(
+        parentSessionDir,
+        "subagent-artifacts",
+        "run-123_Scout_0_meta.json",
+      ),
+    };
+
     expect(result.details).toMatchObject({
       status: "success",
       agent: "Scout",
@@ -300,6 +311,7 @@ describe("subagent execution", () => {
       },
       childSessionDir,
       childSessionPath,
+      artifactPaths,
     });
     expect(result.details.recentToolActivity).toEqual([
       { label: "read start", preview: '{"path":"src/index.ts"}' },
@@ -338,6 +350,17 @@ describe("subagent execution", () => {
     expect(spawnCalls[0].args).not.toContain("--session-id");
     expect(spawnCalls[0]?.env?.PI_SUBAGENT_CHILD).toBeUndefined();
     expect(existsSync(result.details.childSessionPath)).toBe(true);
+    expect(readFileSync(artifactPaths.input, "utf8")).toContain("Inspect repo");
+    expect(readFileSync(artifactPaths.output, "utf8")).toContain("final answer");
+    expect(JSON.parse(readFileSync(artifactPaths.meta, "utf8"))).toMatchObject({
+      runId: "run-123",
+      agent: "Scout",
+      status: "success",
+      cwd: "/worktree",
+      childSessionPath,
+      stopReason: "end",
+      exitCode: 0,
+    });
   });
 
   test("inherits the parent session model when agent model is default", async () => {
@@ -497,6 +520,9 @@ describe("subagent execution", () => {
 
     const runtimeStatePath = spawnCalls[0]?.env?.PI_SUBAGENT_RUNTIME_STATE;
     expect(runtimeStatePath).toBeTruthy();
+    expect(runtimeStatePath).toContain(
+      join(paths.sessionsDir, encodePiCwd("/repo"), "subagent-artifacts"),
+    );
     const runtimeState = JSON.parse(readFileSync(runtimeStatePath ?? "", "utf8")) as {
       rootRunId: string;
       runId: string;
@@ -874,15 +900,23 @@ describe("subagent execution", () => {
     );
   });
 
-  test("uses a temp child session root for no-session parents", async () => {
+  test("uses the pi encoded cwd session root for no-session parents", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
     const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
-    const tempSessionRoot = join(rootDir, "tmp", "pi-subagent-session-fixed");
-    const childSessionDir = join(tempSessionRoot, "run-123", "run-0");
-    const childSessionPath = writeChildSessionFile(join(childSessionDir, "session.jsonl"));
+    const encodedCwd = encodePiCwd("/repo");
+    const childSessionDir = join(
+      paths.sessionsDir,
+      encodedCwd,
+      "__foreground__",
+      "run-123",
+      "run-0",
+    );
+    const childSessionPath = join(childSessionDir, "session.jsonl");
     const runtime = createRuntime(
-      ((_, __, ___) => {
+      ((_, args, ___) => {
+        const sessionIndex = args.indexOf("--session");
+        writeChildSessionFile(args[sessionIndex + 1] ?? childSessionPath);
         const child = new FakeChildProcess();
         queueMicrotask(() => {
           child.stdout.write(
@@ -892,7 +926,6 @@ describe("subagent execution", () => {
         });
         return child as never;
       }) as SubagentRuntimeDeps["spawnChild"],
-      { tempSessionRoot },
     );
 
     const result = await executeSubagent(
@@ -910,6 +943,26 @@ describe("subagent execution", () => {
 
     expect(result.details.childSessionDir).toBe(childSessionDir);
     expect(result.details.childSessionPath).toBe(childSessionPath);
+    expect(result.details.artifactPaths).toEqual({
+      input: join(
+        paths.sessionsDir,
+        encodedCwd,
+        "subagent-artifacts",
+        "run-123_Scout_0_input.md",
+      ),
+      output: join(
+        paths.sessionsDir,
+        encodedCwd,
+        "subagent-artifacts",
+        "run-123_Scout_0_output.md",
+      ),
+      meta: join(
+        paths.sessionsDir,
+        encodedCwd,
+        "subagent-artifacts",
+        "run-123_Scout_0_meta.json",
+      ),
+    });
   });
 
   test("surfaces non-zero exits with stderr and exit metadata", async () => {
@@ -946,6 +999,17 @@ describe("subagent execution", () => {
     expect(result.details.exitCode).toBe(2);
     expect(result.details.stopReason).toBe("error");
     expect(result.details.stderr).toBe("child failed");
+    expect(readFileSync(result.details.artifactPaths?.output ?? "", "utf8")).toContain(
+      "child failed",
+    );
+    expect(
+      JSON.parse(readFileSync(result.details.artifactPaths?.meta ?? "", "utf8")),
+    ).toMatchObject({
+      status: "error",
+      error: "child failed",
+      exitCode: 2,
+      stopReason: "error",
+    });
   });
 
   test("treats assistant aborted stop reason as an error", async () => {
@@ -1029,6 +1093,13 @@ describe("subagent execution", () => {
       expect(result.details.stopReason).toBe("timeout");
       expect(result.details.exitCode).toBe(143);
       expect(child.killSignals[0]).toBe("SIGTERM");
+      expect(
+        JSON.parse(readFileSync(result.details.artifactPaths?.meta ?? "", "utf8")),
+      ).toMatchObject({
+        status: "timeout",
+        error: "Subagent timed out after 10ms.",
+        exitCode: 143,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -1062,6 +1133,9 @@ describe("subagent execution", () => {
     expect(result.details.status).toBe("error");
     expect(result.details.stopReason).toBe("error");
     expect(result.details.exitCode).toBeNull();
+    expect(readFileSync(result.details.artifactPaths?.output ?? "", "utf8")).toContain(
+      "spawn failed",
+    );
   });
 
   test("retains only the most recent 10 tool activity entries", async () => {

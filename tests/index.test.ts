@@ -13,7 +13,7 @@ import type {
   AgentDiscoveryResult,
   LoadedConfig,
   ResolvedPaths,
-} from "../src/types.js";
+} from "../src/shared/types.js";
 
 function createPaths(): ResolvedPaths {
   return {
@@ -22,7 +22,6 @@ function createPaths(): ResolvedPaths {
     userAgentsDir: "/tmp/pi-agent/agents",
     bundledAgentsDir: "/repo/agents",
     sessionsDir: "/tmp/pi-agent/sessions",
-    runtimeCacheDir: "/tmp/pi-agent/cache/pi-subagents",
   };
 }
 

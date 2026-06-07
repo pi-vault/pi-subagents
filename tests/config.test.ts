@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { DEFAULT_CONFIG, loadConfig } from "../src/config.js";
-import { resolvePaths } from "../src/paths.js";
+import { DEFAULT_CONFIG, loadConfig } from "../src/core/config.js";
+import { resolvePaths } from "../src/core/paths.js";
 
 describe("loadConfig", () => {
   test("uses defaults when subagents.json is missing, including maxRecursiveLevel=3", () => {
