@@ -36,14 +36,18 @@ Default config values:
 Nested runtime artifacts are stored in a deterministic `subagent-artifacts` layout:
 
 - persisted sessions: `<session-dir>/subagent-artifacts`
-- ephemeral sessions: `$PI_CODING_AGENT_DIR/cache/pi-subagents/subagent-artifacts`
+- no parent session: `$PI_CODING_AGENT_DIR/sessions/<pi-encoded-cwd>/subagent-artifacts`
+
+Per-run artifact files are written as:
+
+- `{runId}_{agent}_{index}_input.md`
+- `{runId}_{agent}_{index}_output.md`
+- `{runId}_{agent}_{index}_meta.json`
 
 Within either root, nested runtime files live under:
 
 - `nested-subagent-events/`
 - `nested-subagent-runs/`
-
-The extension still reports `runtime cache` as `$PI_CODING_AGENT_DIR/cache/pi-subagents`.
 
 ## Commands
 
