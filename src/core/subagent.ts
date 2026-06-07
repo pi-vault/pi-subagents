@@ -1,13 +1,7 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
@@ -17,14 +11,16 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-  renderSubagentCall,
-  renderSubagentResult,
-  toSubagentCommandMessage,
-} from "./render.js";
-import { resolveRuntimeArtifactsPaths } from "./paths.js";
+  getArtifactPaths,
+  resolvePiEncodedSessionDir,
+  resolveRuntimeArtifactsPaths,
+  writeArtifact,
+  writeMetadata,
+} from "../shared/artifacts.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
+  ArtifactPaths,
   LoadedConfig,
   ResolvedPaths,
   RuntimeDeps,
@@ -33,7 +29,12 @@ import type {
   SubagentToolActivity,
   SubagentToolInput,
   SubagentUsage,
-} from "./types.js";
+} from "../shared/types.js";
+import {
+  renderSubagentCall,
+  renderSubagentResult,
+  toSubagentCommandMessage,
+} from "../tui/render.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -45,8 +46,9 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
 
 const TERMINATION_GRACE_MS = 2_000;
 const CHILD_SESSION_FILE_NAME = "session.jsonl";
+const SYNTHETIC_PARENT_SESSION_STEM = "__foreground__";
 const SUBAGENT_EXTENSION_ENTRY = fileURLToPath(
-  new URL("./index.ts", import.meta.url),
+  new URL("../index.ts", import.meta.url),
 );
 const ROUTE_FILE_NAME = "route.json";
 const RUNTIME_STATE_FILE_NAME = "runtime.json";
@@ -131,6 +133,17 @@ type NestedRuntimeContext = {
 type NestedChildLaunch = {
   childArgs: string[];
   childEnv: NodeJS.ProcessEnv;
+};
+
+type ArtifactWriteInput = {
+  requestedAgent: string;
+  resolvedAgentName?: string;
+  task: string;
+  cwd: string;
+  runId: string;
+  sourcePath?: string;
+  parentSessionFile?: string;
+  parentSessionDir?: string;
 };
 
 export interface SubagentRuntimeDeps {
@@ -305,7 +318,6 @@ function pushRecentToolActivity(
   }
 }
 
-
 function parseInteger(value: string | undefined, fallback: number): number {
   if (!value) {
     return fallback;
@@ -452,6 +464,7 @@ function withoutNestedSubagentEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 function createNestedChildLaunch(
   paths: ResolvedPaths,
+  cwd: string,
   agent: AgentDefinition,
   promptPath: string | undefined,
   childSessionPath: string,
@@ -484,6 +497,7 @@ function createNestedChildLaunch(
   const childIndex = "0";
   const runtimeArtifacts = resolveRuntimeArtifactsPaths(
     paths,
+    cwd,
     parentSessionFile,
     parentSessionDir,
   );
@@ -603,9 +617,10 @@ function getParentSessionStem(parentSessionFile: string): string {
 }
 
 function resolveChildSessionTarget(
+  paths: ResolvedPaths,
+  cwd: string,
   parentSessionFile: string | undefined,
   parentSessionDir: string | undefined,
-  runtime: SubagentRuntimeDeps,
   runId: string,
 ): {
   childSessionDir: string;
@@ -616,12 +631,106 @@ function resolveChildSessionTarget(
         parentSessionDir ?? dirname(parentSessionFile),
         getParentSessionStem(parentSessionFile),
       )
-    : runtime.mkdtemp(join(tmpdir(), "pi-subagent-session-"));
+    : join(
+        resolvePiEncodedSessionDir(paths, cwd),
+        SYNTHETIC_PARENT_SESSION_STEM,
+      );
   const childSessionDir = join(childSessionRoot, runId, "run-0");
 
   return {
     childSessionDir,
     childSessionPath: join(childSessionDir, CHILD_SESSION_FILE_NAME),
+  };
+}
+
+function buildArtifactInputMarkdown(input: ArtifactWriteInput): string {
+  return [
+    "# Subagent Input",
+    "",
+    `- requested agent: ${input.requestedAgent || "-"}`,
+    `- resolved agent: ${input.resolvedAgentName || "-"}`,
+    `- run id: ${input.runId}`,
+    `- cwd: ${input.cwd}`,
+    `- source: ${input.sourcePath || "-"}`,
+    `- parent session file: ${input.parentSessionFile || "-"}`,
+    `- parent session dir: ${input.parentSessionDir || "-"}`,
+    "",
+    "## Task",
+    "",
+    input.task || "(empty task)",
+    "",
+  ].join("\n");
+}
+
+function buildArtifactOutputMarkdown(
+  result: SubagentExecutionResult,
+): string {
+  return [
+    "# Subagent Output",
+    "",
+    `- status: ${result.details.status}`,
+    `- stop reason: ${result.details.stopReason}`,
+    `- exit code: ${result.details.exitCode ?? "-"}`,
+    `- model: ${result.details.model || "-"}`,
+    "",
+    "## Output",
+    "",
+    result.content || "(no output)",
+    "",
+  ].join("\n");
+}
+
+function writeExecutionArtifacts(
+  paths: ResolvedPaths,
+  artifactInput: ArtifactWriteInput,
+  result: SubagentExecutionResult,
+): ArtifactPaths {
+  const artifactPaths = getArtifactPaths(
+    paths,
+    artifactInput.cwd,
+    artifactInput.runId,
+    artifactInput.resolvedAgentName ?? artifactInput.requestedAgent,
+    0,
+    artifactInput.parentSessionFile,
+    artifactInput.parentSessionDir,
+  );
+
+  writeArtifact(artifactPaths.input, buildArtifactInputMarkdown(artifactInput));
+  writeArtifact(artifactPaths.output, buildArtifactOutputMarkdown(result));
+  writeMetadata(artifactPaths.meta, {
+    runId: artifactInput.runId,
+    agent: artifactInput.resolvedAgentName ?? artifactInput.requestedAgent,
+    requestedAgent: artifactInput.requestedAgent,
+    task: artifactInput.task,
+    status: result.details.status,
+    error: result.isError ? result.content : undefined,
+    model: result.details.model,
+    durationMs: result.details.durationMs,
+    timeoutMs: result.details.timeoutMs,
+    usage: result.details.usage,
+    exitCode: result.details.exitCode,
+    stopReason: result.details.stopReason,
+    cwd: result.details.cwd,
+    sourcePath: result.details.sourcePath,
+    childSessionDir: result.details.childSessionDir,
+    childSessionPath: result.details.childSessionPath,
+    stderr: result.details.stderr,
+    timestamp: new Date().toISOString(),
+  });
+
+  return artifactPaths;
+}
+
+function withArtifacts(
+  result: SubagentExecutionResult,
+  artifactPaths: ArtifactPaths,
+): SubagentExecutionResult {
+  return {
+    ...result,
+    details: {
+      ...result.details,
+      artifactPaths,
+    },
   };
 }
 
@@ -718,7 +827,7 @@ export async function executeSubagent(
   const startedAt = runtime.now();
   const requestedAgent = input.agent.trim() || "(unspecified)";
   const task = input.task.trim();
-  const effectiveCwd = input.cwd ?? defaultCwd;
+  const effectiveCwd = resolve(input.cwd ?? defaultCwd);
   const fallbackTimeoutMs = loadedConfig.config.defaultTimeoutMs;
   const runId = runtime.createRunId();
   let childSessionDir = "";
@@ -727,17 +836,29 @@ export async function executeSubagent(
   let promptPath: string | undefined;
   let agent: AgentDefinition | undefined;
 
+  const artifactInput: ArtifactWriteInput = {
+    requestedAgent,
+    task,
+    cwd: effectiveCwd,
+    runId,
+    parentSessionFile,
+    parentSessionDir,
+  };
+
   try {
     const nestedContext = readNestedRuntimeContext(loadedConfig);
     ensureNestedDelegationAllowed(discovery, input, nestedContext);
     agent = parseSubagentRequest(discovery, input);
+    artifactInput.resolvedAgentName = agent.name;
+    artifactInput.sourcePath = agent.sourcePath;
     const resolvedAgent = agent;
     const timeoutMs = resolvedAgent.timeoutMs ?? fallbackTimeoutMs;
     const effectiveModel = resolveEffectiveModel(resolvedAgent, parentModel);
     ({ childSessionDir, childSessionPath } = resolveChildSessionTarget(
+      paths,
+      effectiveCwd,
       parentSessionFile,
       parentSessionDir,
-      runtime,
       runId,
     ));
 
@@ -753,6 +874,7 @@ export async function executeSubagent(
 
     const launch = createNestedChildLaunch(
       paths,
+      effectiveCwd,
       resolvedAgent,
       promptPath,
       childSessionPath,
@@ -941,11 +1063,11 @@ export async function executeSubagent(
       },
     );
 
-    return result;
+    return withArtifacts(result, writeExecutionArtifacts(paths, artifactInput, result));
   } catch (error) {
     const durationMs = runtime.now() - startedAt;
     const message = error instanceof Error ? error.message : String(error);
-    return buildExecutionResult({
+    const result = buildExecutionResult({
       agent: agent?.name ?? requestedAgent,
       task,
       sourcePath: agent?.sourcePath,
@@ -961,6 +1083,10 @@ export async function executeSubagent(
       status: "error",
       content: message,
     });
+    return withArtifacts(
+      result,
+      writeExecutionArtifacts(paths, artifactInput, result),
+    );
   } finally {
     if (promptDir) {
       runtime.removePath(promptDir);

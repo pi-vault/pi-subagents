@@ -10,13 +10,18 @@ export interface ResolvedPaths {
   userAgentsDir: string;
   bundledAgentsDir: string;
   sessionsDir: string;
-  runtimeCacheDir: string;
 }
 
 export interface RuntimeArtifactsPaths {
   rootDir: string;
   nestedEventsDir: string;
   nestedRunsDir: string;
+}
+
+export interface ArtifactPaths {
+  input: string;
+  output: string;
+  meta: string;
 }
 
 export interface LoadedConfig {
@@ -108,6 +113,7 @@ export interface SubagentExecutionDetails {
   durationMs: number;
   childSessionDir: string;
   childSessionPath: string;
+  artifactPaths?: ArtifactPaths;
   model?: string;
   stopReason: string;
   exitCode: number | null;

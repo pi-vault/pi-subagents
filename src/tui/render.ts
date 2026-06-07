@@ -10,7 +10,7 @@ import type {
   SubagentExecutionDetails,
   SubagentExecutionResult,
   SubagentToolInput,
-} from "./types.js";
+} from "../shared/types.js";
 
 const MAX_TASK_PREVIEW = 80;
 const MAX_ACTIVITY_PREVIEW = 72;
@@ -138,6 +138,17 @@ export function buildSubagentResultText(
   lines.push(
     theme.fg("muted", `child session path: ${formatPath(details.childSessionPath)}`),
   );
+  if (details.artifactPaths) {
+    lines.push(
+      theme.fg("muted", `artifact input: ${formatPath(details.artifactPaths.input)}`),
+    );
+    lines.push(
+      theme.fg("muted", `artifact output: ${formatPath(details.artifactPaths.output)}`),
+    );
+    lines.push(
+      theme.fg("muted", `artifact meta: ${formatPath(details.artifactPaths.meta)}`),
+    );
+  }
 
   if (details.recentToolActivity.length > 0) {
     lines.push(theme.fg("muted", "recent tools:"));

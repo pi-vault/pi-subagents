@@ -1,5 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import type { LoadedConfig, ResolvedPaths, SubagentsConfig } from "./types.js";
+import type {
+  LoadedConfig,
+  ResolvedPaths,
+  SubagentsConfig,
+} from "../shared/types.js";
 
 export const DEFAULT_CONFIG: SubagentsConfig = {
   maxConcurrency: 3,
