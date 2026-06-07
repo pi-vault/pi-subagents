@@ -6,7 +6,7 @@ import { DEFAULT_CONFIG, loadConfig } from "../src/config.js";
 import { resolvePaths } from "../src/paths.js";
 
 describe("loadConfig", () => {
-  test("uses defaults when subagents.json is missing", () => {
+  test("uses defaults when subagents.json is missing, including maxRecursiveLevel=2", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
     const paths = resolvePaths(agentDir);
 
