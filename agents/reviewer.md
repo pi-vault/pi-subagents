@@ -5,6 +5,7 @@ tools:
   - read
   - bash
   - subagent
+model: default
 thinking: high
 subagent_agents:
   - scout

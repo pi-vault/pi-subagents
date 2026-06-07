@@ -7,6 +7,7 @@ tools:
   - write
   - bash
   - subagent
+model: default
 thinking: medium
 subagent_agents:
   - scout
