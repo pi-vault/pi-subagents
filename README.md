@@ -1,56 +1,63 @@
-# pi-subagents
+# @pi-vault/pi-subagents
 
-Pi extension for delegating tasks to isolated, specialized subagents.
+[![npm version](https://img.shields.io/npm/v/%40pi-vault%2Fpi-subagents)](https://www.npmjs.com/package/@pi-vault/pi-subagents)
+[![Quality](https://github.com/pi-vault/pi-subagents/actions/workflows/quality.yml/badge.svg?branch=master)](https://github.com/pi-vault/pi-subagents/actions/workflows/quality.yml)
+[![Node >=22.19.0](https://img.shields.io/badge/node-%3E%3D22.19.0-339933)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://github.com/pi-vault/pi-subagents/blob/master/README.md#license)
 
-## Bundled agents
+Delegate work to specialized Pi subagents without leaving your current session.
 
-This package ships these starter agents in `agents/`:
+> Early adopter release: `v0.1.0` is a small, focused first version built around a ready-to-use set of bundled agents.
 
-- `scout` — fast file and code-path discovery
-- `planner` — small, verifiable execution plans
-- `researcher` — evidence gathering and tradeoff analysis
-- `worker` — focused implementation
-- `reviewer` — read-only review and defect finding
+## Install
 
-User agents in `~/.pi/agent/agents` override bundled agents with the same name.
+```sh
+pi install npm:@pi-vault/pi-subagents
+```
 
-## Model behavior
+Then reload Pi:
 
-Agents inherit the parent session model by default.
+```text
+/reload
+```
 
-- Omit `model` frontmatter to inherit.
-- Explicit `model` overrides the parent model.
-- Legacy `model: default` is still accepted as an alias for inheritance.
-- Newly created and bundled agents omit `model` unless they need a specific override.
+## Use
 
-## Config defaults
+After install, the bundled agents are available right away.
 
-Default config values:
-
-- `maxConcurrency=3`
-- `maxRecursiveLevel=3`
-- `defaultTimeoutMs=600000`
-
-## Runtime artifacts
-
-Nested runtime artifacts are stored in a deterministic `subagent-artifacts` layout:
-
-- persisted sessions: `<session-dir>/subagent-artifacts`
-- no parent session: `$PI_CODING_AGENT_DIR/sessions/<pi-encoded-cwd>/subagent-artifacts`
-
-Per-run artifact files are written as:
-
-- `{runId}_{agent}_{index}_input.md`
-- `{runId}_{agent}_{index}_output.md`
-- `{runId}_{agent}_{index}_meta.json`
-
-Within either root, nested runtime files live under:
-
-- `nested-subagent-events/`
-- `nested-subagent-runs/`
-
-## Commands
-
-- `/agents` — list discovered bundled and user agents
+- `/agents` — see all discovered agents
 - `/agents:add` — create a new user agent markdown file
-- `/agent <agent> <task...>` — run a discovered agent through the active runtime bridge
+- `/agent <agent> <task...>` — delegate a task to a specific agent
+
+## Bundled Agents
+
+- `scout` — quickly finds relevant files, entry points, and code paths
+- `planner` — turns a task into a short, verifiable plan
+- `researcher` — gathers evidence, tradeoffs, and implementation context
+- `worker` — handles focused implementation work
+- `reviewer` — reviews changes and looks for defects
+
+## Typical Flow
+
+- Use `/agent scout trace where auth state is loaded` when you need fast codebase discovery.
+- Use `/agent planner outline a safe migration for the config format` before a non-trivial change.
+- Use `/agent reviewer inspect this diff for regressions` before shipping.
+
+## Compatibility
+
+- Node `>=22.19.0`
+- Peer deps: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
+- Intended for use from a Pi host session with package/extension support
+
+## Development Setup
+
+```sh
+pnpm install
+pnpm check
+pnpm pack --dry-run
+pi -e .
+```
+
+## License
+
+MIT
