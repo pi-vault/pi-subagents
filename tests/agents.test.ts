@@ -52,6 +52,7 @@ describe("agent discovery", () => {
     const expectedFiles = [
       "planner.md",
       "researcher.md",
+      "reviewer.md",
       "scout.md",
       "worker.md",
     ];
@@ -365,7 +366,6 @@ describe("tool discovery and agent creation", () => {
         "name: Scout",
         "description: Scout files",
         "tools: bash, read",
-        "model: default",
         "thinking: medium",
         "subagent_agents: worker",
         "timeout_ms: 180000",
