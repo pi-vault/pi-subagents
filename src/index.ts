@@ -9,6 +9,7 @@ import {
 } from "./agents.js";
 import { loadConfig } from "./config.js";
 import { resolvePaths } from "./paths.js";
+import { registerAgentCommand, registerSubagentTool } from "./subagent.js";
 import type {
   AgentCreationInput,
   AgentDiscoveryResult,
@@ -65,7 +66,8 @@ export function buildAgentsStatusMessage(
     `config: ${paths.configPath}`,
     `user agents: ${paths.userAgentsDir}`,
     `bundled agents: ${paths.bundledAgentsDir}`,
-    `transcript/cache: ${paths.transcriptCacheDir}`,
+    `sessions: ${paths.sessionsDir}`,
+    `runtime cache: ${paths.runtimeCacheDir}`,
     `defaults: maxConcurrency=${config.maxConcurrency}, maxRecursiveLevel=${config.maxRecursiveLevel}, defaultTimeoutMs=${config.defaultTimeoutMs}`,
     `agents: ${discovery.agents.length}`,
   ];
@@ -213,6 +215,9 @@ export function registerSubagentsExtension(
   pi: ExtensionAPI,
   deps: RuntimeDeps = createRuntimeDeps(pi),
 ): void {
+  registerSubagentTool(pi, deps);
+  registerAgentCommand(pi, deps);
+
   pi.registerCommand("agents", {
     description: "List discovered pi-subagents agents",
     handler: async (_args, ctx) => {

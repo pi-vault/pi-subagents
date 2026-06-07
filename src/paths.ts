@@ -15,6 +15,7 @@ export function resolvePaths(agentDir = getAgentDir()): ResolvedPaths {
     configPath: join(agentDir, "extensions", "subagents.json"),
     userAgentsDir: join(agentDir, "agents"),
     bundledAgentsDir: getBundledAgentsDir(),
-    transcriptCacheDir: join(agentDir, "cache", "pi-subagents"),
+    sessionsDir: join(agentDir, "sessions"),
+    runtimeCacheDir: join(agentDir, "cache", "pi-subagents"),
   };
 }
