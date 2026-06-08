@@ -25,9 +25,19 @@ Then reload Pi:
 
 After install, the bundled agents are available right away.
 
-- `/agents` — see all discovered agents
-- `/agents:add` — create a new user agent markdown file
-- `/agent <agent> <task...>` — delegate a task to a specific agent
+- `/agents` — open the interactive agents menu
+- `/agent <agent> <task...>` — delegate a task to a specific agent with visible foreground progress
+
+From `/agents` you can:
+
+- create a global agent
+- export a bundled agent into Pi global scope
+- disable an agent via global override
+- delete a global override
+- manage `maxConcurrency`, `maxRecursiveLevel`, and `defaultTimeoutMs`
+
+`/agents:add` has been removed.
+Background runs are not part of this release.
 
 ## Bundled Agents
 
