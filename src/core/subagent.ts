@@ -17,6 +17,11 @@ import {
   writeArtifact,
   writeMetadata,
 } from "../shared/artifacts.js";
+import {
+  finishSlashLiveRequest,
+  startSlashLiveRequest,
+  updateSlashLiveRequest,
+} from "./slash-live-state.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
@@ -133,6 +138,13 @@ type NestedRuntimeContext = {
 type NestedChildLaunch = {
   childArgs: string[];
   childEnv: NodeJS.ProcessEnv;
+};
+
+type ProgressUpdate = {
+  durationMs?: number;
+  childSessionPath?: string;
+  stderr?: string;
+  activity?: SubagentToolActivity;
 };
 
 type ArtifactWriteInput = {
@@ -823,6 +835,7 @@ export async function executeSubagent(
   parentSessionDir: string | undefined,
   parentModel: string | undefined,
   runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
+  onProgress?: (update: ProgressUpdate) => void,
 ): Promise<SubagentExecutionResult> {
   const startedAt = runtime.now();
   const requestedAgent = input.agent.trim() || "(unspecified)";
@@ -863,6 +876,7 @@ export async function executeSubagent(
     ));
 
     runtime.mkdirp(childSessionDir);
+    onProgress?.({ childSessionPath, durationMs: runtime.now() - startedAt });
     if (resolvedAgent.systemPrompt.trim()) {
       promptDir = runtime.mkdtemp(join(tmpdir(), "pi-subagents-"));
       promptPath = join(
@@ -944,18 +958,30 @@ export async function executeSubagent(
 
       if (event.type === "tool_execution_start") {
         const toolEvent = event as JsonToolExecutionStartEvent;
-        pushRecentToolActivity(recentToolActivity, {
+        const activity = {
           label: `${toolEvent.toolName ?? "tool"} start`,
           preview: previewValue(toolEvent.args),
+        };
+        pushRecentToolActivity(recentToolActivity, activity);
+        onProgress?.({
+          activity,
+          childSessionPath,
+          durationMs: runtime.now() - startedAt,
         });
         return;
       }
 
       if (event.type === "tool_execution_end") {
         const toolEvent = event as JsonToolExecutionEndEvent;
-        pushRecentToolActivity(recentToolActivity, {
+        const activity = {
           label: `${toolEvent.toolName ?? "tool"} ${toolEvent.isError ? "error" : "done"}`,
           preview: previewValue(toolEvent.result),
+        };
+        pushRecentToolActivity(recentToolActivity, activity);
+        onProgress?.({
+          activity,
+          childSessionPath,
+          durationMs: runtime.now() - startedAt,
         });
         return;
       }
@@ -989,6 +1015,11 @@ export async function executeSubagent(
 
         child.stderr.on("data", (chunk: Buffer | string) => {
           stderr += chunk.toString();
+          onProgress?.({
+            stderr,
+            childSessionPath,
+            durationMs: runtime.now() - startedAt,
+          });
         });
 
         child.on("error", reject);
@@ -1124,8 +1155,25 @@ export function registerSlashAgentBridge(
       parentSessionFile ? ctx.sessionManager.getSessionDir() : undefined,
       getParentModelId(ctx.model),
       runtime,
+      request.requestId
+        ? (update) => {
+            const details = updateSlashLiveRequest(request.requestId!, update);
+            if (!details) {
+              return;
+            }
+            pi.sendMessage({
+              customType: "pi-subagent-result",
+              content: "",
+              display: true,
+              details,
+            });
+          }
+        : undefined,
     );
 
+    if (request.requestId) {
+      finishSlashLiveRequest(request.requestId);
+    }
     pi.sendMessage(toSubagentCommandMessage(result));
     return { action: "handled" };
   });
@@ -1196,9 +1244,25 @@ export function registerAgentCommand(
       }
 
       const input = parseAgentCommandArgs(args);
-      pi.sendUserMessage(encodeSlashAgentBridgeRequest({ ...input, cwd: ctx.cwd }), {
-        deliverAs: ctx.isIdle() ? undefined : "followUp",
+      const requestId = _runtime.createRunId();
+      pi.sendMessage({
+        customType: "pi-subagent-result",
+        content: "",
+        display: true,
+        details: startSlashLiveRequest({
+          requestId,
+          agent: input.agent,
+          task: input.task,
+          cwd: ctx.cwd,
+          model: getParentModelId((ctx as ExtensionCommandContext).model),
+        }),
       });
+      pi.sendUserMessage(
+        encodeSlashAgentBridgeRequest({ ...input, cwd: ctx.cwd, requestId }),
+        {
+          deliverAs: ctx.isIdle() ? undefined : "followUp",
+        },
+      );
     },
   });
 }

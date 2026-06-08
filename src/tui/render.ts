@@ -6,9 +6,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type {
+  SlashLiveDetails,
   SubagentCommandMessage,
   SubagentExecutionDetails,
-  SubagentExecutionResult,
+  SubagentMessageDetails,
   SubagentToolInput,
 } from "../shared/types.js";
 
@@ -40,6 +41,12 @@ function formatPath(value: string | undefined): string {
 
 function formatUsage(details: SubagentExecutionDetails): string {
   return `${details.usage.input}/${details.usage.output} tok, ${details.usage.turns} turns`;
+}
+
+function isSlashLiveDetails(
+  details: SubagentMessageDetails | undefined,
+): details is SlashLiveDetails {
+  return Boolean(details && "kind" in details && details.kind === "slash-live");
 }
 
 function normalizeMessageContent(
@@ -86,14 +93,47 @@ export function buildSubagentCallText(
   return text;
 }
 
+function buildSlashLiveText(
+  details: SlashLiveDetails,
+  expanded: boolean,
+  theme: RenderTheme,
+): string {
+  const status = theme.fg("warning", "RUNNING");
+  const lines = [
+    `${status} ${theme.fg("toolTitle", theme.bold(details.agent))}`,
+    theme.fg("muted", `task: ${details.task || "-"}`),
+    theme.fg("muted", `cwd: ${formatPath(details.cwd)}`),
+    theme.fg("muted", `duration: ${details.durationMs}ms`),
+  ];
+
+  const activityLabels = details.recentToolActivity.map((entry) => entry.label);
+  if (activityLabels.length > 0) {
+    lines.push(theme.fg("dim", `tools: ${activityLabels.join(", ")}`));
+  }
+
+  if (expanded && details.childSessionPath) {
+    lines.push(theme.fg("muted", `child session path: ${details.childSessionPath}`));
+  }
+
+  if (expanded && details.stderr?.trim()) {
+    lines.push(theme.fg("error", details.stderr.trim()));
+  }
+
+  return lines.join("\n");
+}
+
 export function buildSubagentResultText(
   content: string,
-  details: SubagentExecutionDetails | undefined,
+  details: SubagentMessageDetails | undefined,
   expanded: boolean,
   theme: RenderTheme,
 ): string {
   if (!details) {
     return content || "(no output)";
+  }
+
+  if (isSlashLiveDetails(details)) {
+    return buildSlashLiveText(details, expanded, theme);
   }
 
   const statusColor = getStatusColor(details.status);
@@ -186,7 +226,7 @@ export function renderSubagentResult(
   return new Text(
     buildSubagentResultText(
       content,
-      result.details as SubagentExecutionDetails | undefined,
+      result.details as SubagentMessageDetails | undefined,
       options.expanded,
       theme,
     ),
@@ -198,7 +238,7 @@ export function renderSubagentResult(
 export function renderSubagentMessage(
   message: {
     content: string | Array<{ type: string; text?: string }>;
-    details?: SubagentExecutionDetails;
+    details?: SubagentMessageDetails;
   },
   options: MessageRenderOptions,
   theme: Theme,
@@ -217,9 +257,11 @@ export function renderSubagentMessage(
   );
 }
 
-export function toSubagentCommandMessage(
-  result: SubagentExecutionResult,
-): SubagentCommandMessage {
+export function toSubagentCommandMessage(result: {
+  content: string;
+  details: SubagentMessageDetails;
+  isError?: boolean;
+}): SubagentCommandMessage {
   return {
     customType: "pi-subagent-result",
     content: result.content,
