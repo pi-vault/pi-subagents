@@ -2,8 +2,12 @@ import { describe, expect, test } from "vitest";
 import {
   buildSubagentCallText,
   buildSubagentResultText,
+  toSubagentCommandMessage,
 } from "../src/tui/render.js";
-import type { SubagentExecutionDetails } from "../src/shared/types.js";
+import type {
+  SlashLiveDetails,
+  SubagentExecutionDetails,
+} from "../src/shared/types.js";
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -48,6 +52,24 @@ function createDetails(
       { label: "write done", preview: '{"path":"notes.md"}' },
       { label: "edit done", preview: '{"path":"src/subagent.ts"}' },
       { label: "find done", preview: '{"path":"src"}' },
+    ],
+    ...overrides,
+  };
+}
+
+function createSlashLiveDetails(
+  overrides: Partial<SlashLiveDetails> = {},
+): SlashLiveDetails {
+  return {
+    kind: "slash-live",
+    requestId: "req-1",
+    status: "running",
+    agent: "Scout",
+    task: "explore this repo",
+    cwd: "/repo",
+    durationMs: 42,
+    recentToolActivity: [
+      { label: "read package", preview: '{"path":"package.json"}' },
     ],
     ...overrides,
   };
@@ -112,5 +134,29 @@ describe("subagent render helpers", () => {
     );
     expect(text).toContain("final output:");
     expect(text).toContain("final answer");
+  });
+
+  test("renders running slash card with agent, task, cwd, and recent activity", () => {
+    const text = buildSubagentResultText("", createSlashLiveDetails(), false, theme);
+
+    expect(text).toContain("RUNNING");
+    expect(text).toContain("Scout");
+    expect(text).toContain("explore this repo");
+    expect(text).toContain("cwd: /repo");
+    expect(text).toContain("tools: read package");
+  });
+
+  test("toSubagentCommandMessage keeps live slash details when provided", () => {
+    const message = toSubagentCommandMessage({
+      content: "",
+      isError: false,
+      details: createSlashLiveDetails(),
+    });
+
+    expect(message.details).toMatchObject({
+      kind: "slash-live",
+      requestId: "req-1",
+      status: "running",
+    });
   });
 });

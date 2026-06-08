@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { DEFAULT_CONFIG, loadConfig } from "../src/core/config.js";
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/core/config.js";
 import { resolvePaths } from "../src/core/paths.js";
 
 describe("loadConfig", () => {
@@ -45,5 +45,22 @@ describe("loadConfig", () => {
 
     expect(result.exists).toBe(true);
     expect(result.config).toEqual(DEFAULT_CONFIG);
+  });
+
+  test("saveConfig writes only supported config keys", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
+    const paths = resolvePaths(agentDir);
+
+    saveConfig(paths, {
+      maxConcurrency: 7,
+      maxRecursiveLevel: 5,
+      defaultTimeoutMs: 120000,
+    });
+
+    expect(JSON.parse(readFileSync(paths.configPath, "utf8"))).toEqual({
+      maxConcurrency: 7,
+      maxRecursiveLevel: 5,
+      defaultTimeoutMs: 120000,
+    });
   });
 });

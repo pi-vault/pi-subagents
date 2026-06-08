@@ -12,8 +12,11 @@ import { describe, expect, test } from "vitest";
 import {
   createAgentFile,
   createAgentMarkdown,
+  deleteUserAgentOverride,
+  disableAgentInUserScope,
   discoverAgents,
   discoverToolNames,
+  exportAgentToUserScope,
   parseAgentFile,
 } from "../src/core/agents.js";
 import type { AgentCreationInput, ResolvedPaths } from "../src/shared/types.js";
@@ -543,6 +546,85 @@ describe("tool discovery and agent creation", () => {
         discoverToolNames([]),
       ),
     ).toThrow("duplicate agent name: Planner");
+  });
+
+  test("exports bundled agent markdown to userAgentsDir and creates the directory if missing", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+    writeFileSync(
+      join(paths.bundledAgentsDir, "scout.md"),
+      [
+        "---",
+        "name: Scout",
+        "description: Scout files",
+        "tools: read, bash",
+        "---",
+        "You are Scout.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const discovery = discoverAgents(paths);
+    const exported = exportAgentToUserScope(paths, discovery, "Scout");
+
+    expect(existsSync(paths.userAgentsDir)).toBe(true);
+    expect(exported.sourcePath).toBe(join(paths.userAgentsDir, "scout.md"));
+    expect(readFileSync(exported.sourcePath, "utf8")).toContain("You are Scout.");
+  });
+
+  test("disables an agent via a user-scope override and hides it from discovered agents", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+    writeFileSync(
+      join(paths.bundledAgentsDir, "scout.md"),
+      [
+        "---",
+        "name: Scout",
+        "description: Scout files",
+        "tools: read, bash",
+        "---",
+        "You are Scout.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const before = discoverAgents(paths);
+    expect(before.agents.map((agent) => agent.name)).toEqual(["Scout"]);
+
+    const disabled = disableAgentInUserScope(paths, before, "Scout");
+    expect(disabled.disabled).toBe(true);
+
+    const after = discoverAgents(paths);
+    expect(after.agents).toEqual([]);
+  });
+
+  test("deleting a user override restores the bundled agent", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+    writeFileSync(
+      join(paths.bundledAgentsDir, "scout.md"),
+      [
+        "---",
+        "name: Scout",
+        "description: Scout files",
+        "tools: read, bash",
+        "---",
+        "You are Scout.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    disableAgentInUserScope(paths, discoverAgents(paths), "Scout");
+    expect(discoverAgents(paths).agents).toEqual([]);
+
+    deleteUserAgentOverride(paths, "Scout");
+    expect(discoverAgents(paths).agents.map((agent) => agent.name)).toEqual(["Scout"]);
   });
 
   test("created agents are discoverable immediately without restart", () => {

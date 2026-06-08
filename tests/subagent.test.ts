@@ -75,6 +75,18 @@ function createDeps(paths: ResolvedPaths, discovery: AgentDiscoveryResult): Runt
     createAgentFile: () => {
       throw new Error("not used");
     },
+    exportAgentToUserScope: () => {
+      throw new Error("not used");
+    },
+    disableAgentInUserScope: () => {
+      throw new Error("not used");
+    },
+    deleteUserAgentOverride: () => {
+      throw new Error("not used");
+    },
+    saveConfig: () => {
+      throw new Error("not used");
+    },
   };
 }
 
@@ -1187,7 +1199,7 @@ describe("subagent execution", () => {
 });
 
 describe("subagent registration", () => {
-  test("registers tool renderers and /agent command, and /agent runs through the bridge", async () => {
+  test("/agent emits a visible running card before the final result", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
     const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
@@ -1284,17 +1296,33 @@ describe("subagent registration", () => {
     } as never);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(messages).toEqual([
+    expect(messages[0]).toEqual(
+      expect.objectContaining({
+        customType: "pi-subagent-result",
+        content: "",
+        display: true,
+        details: expect.objectContaining({
+          kind: "slash-live",
+          status: "running",
+          agent: "Scout",
+          task: "inspect this repo",
+          cwd: "/repo",
+        }),
+      }),
+    );
+    expect(messages.at(-1)).toEqual(
       expect.objectContaining({
         customType: "pi-subagent-result",
         content: "done",
         display: true,
         details: expect.objectContaining({
+          status: "success",
+          agent: "Scout",
           stopReason: "end",
           model: "openai/gpt-5",
         }),
       }),
-    ]);
+    );
   });
 
   test("/agent reports a visible bridge error when no runtime bridge is available", async () => {

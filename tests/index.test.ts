@@ -3,16 +3,22 @@ import type {
   ExtensionCommandContext,
   RegisteredCommand,
 } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import extension, {
-  buildAgentsStatusMessage,
-  registerSubagentsExtension,
-} from "../src/index.js";
+import extension, { registerSubagentsExtension } from "../src/index.js";
+import {
+  runAgentsMenuAction,
+  runAgentsMenuSettingsFlow,
+} from "../src/tui/agents-menu.js";
 import type {
   AgentCreationInput,
   AgentDiscoveryResult,
   LoadedConfig,
   ResolvedPaths,
+  RuntimeDeps,
+  SubagentsConfig,
 } from "../src/shared/types.js";
 
 function createPaths(): ResolvedPaths {
@@ -46,6 +52,41 @@ function createPi(
   } as unknown as ExtensionAPI;
 }
 
+function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
+  const paths = createPaths();
+  const config: SubagentsConfig = {
+    maxConcurrency: 3,
+    maxRecursiveLevel: 3,
+    defaultTimeoutMs: 600_000,
+  };
+  const discovery: AgentDiscoveryResult = {
+    agents: [
+      {
+        name: "Scout",
+        description: "Scout files",
+        tools: ["read", "bash"],
+        subagentAgents: [],
+        systemPrompt: "You are Scout.",
+        sourcePath: "/repo/agents/scout.md",
+      },
+    ],
+    diagnostics: [],
+  };
+
+  return {
+    resolvePaths: () => paths,
+    loadConfig: () => ({ exists: false, config }),
+    discoverAgents: () => discovery,
+    discoverToolNames: () => ["bash", "read", "write"],
+    createAgentFile: () => discovery.agents[0]!,
+    exportAgentToUserScope: () => discovery.agents[0]!,
+    disableAgentInUserScope: () => ({ ...discovery.agents[0]!, disabled: true }),
+    deleteUserAgentOverride: () => {},
+    saveConfig: () => {},
+    ...overrides,
+  };
+}
+
 describe("subagents extension", () => {
   test("loads without throwing and registers the subagent result message renderer", () => {
     const commands: Array<{ name: string; description?: string }> = [];
@@ -72,163 +113,30 @@ describe("subagents extension", () => {
     });
     expect(commands).toContainEqual({
       name: "agents",
-      description: "List discovered pi-subagents agents",
+      description: "Open the interactive pi-subagents agents menu",
     });
-    expect(commands).toContainEqual({
-      name: "agents:add",
-      description: "Create a new pi-subagents agent markdown file",
-    });
+    expect(commands).not.toContainEqual(
+      expect.objectContaining({ name: "agents:add" }),
+    );
   });
 
-  test("registers /agents and reports discovered agents plus diagnostics", async () => {
-    const paths = createPaths();
-    const loadedConfig: LoadedConfig = {
-      exists: false,
-      config: {
-        maxConcurrency: 4,
-        maxRecursiveLevel: 3,
-        defaultTimeoutMs: 600_000,
-      },
-    };
-    const discovery: AgentDiscoveryResult = {
-      agents: [
-        {
-          name: "planner",
-          description: "Plans work",
-          tools: ["read", "bash"],
-          thinking: "medium",
-          subagentAgents: ["worker", "researcher"],
-          timeoutMs: 180000,
-          systemPrompt: "Plan the work",
-          sourcePath: "/repo/agents/planner.md",
-        },
-      ],
-      diagnostics: [
-        {
-          path: "/tmp/pi-agent/agents/bad.md",
-          reason: "missing required non-empty description",
-        },
-      ],
-    };
-
+  test("/agents opens a custom menu instead of sending a notify dump", async () => {
     let handler: RegisteredCommand["handler"] | undefined;
     const notifications: Array<{ message: string; level: string }> = [];
+    const customCalls: string[] = [];
     const pi = createPi((name, command) => {
       if (name === "agents") {
         handler = command.handler;
       }
     });
 
-    registerSubagentsExtension(pi, {
-      resolvePaths: () => paths,
-      loadConfig: () => loadedConfig,
-      discoverAgents: () => discovery,
-      discoverToolNames: () => [],
-      createAgentFile: () => {
-        throw new Error("not used");
-      },
-    });
+    registerSubagentsExtension(pi, createMenuDeps());
 
-    expect(handler).toBeDefined();
     await handler?.("", {
       ui: {
-        notify(message: string, level: string) {
-          notifications.push({ message, level });
-        },
-      },
-    } as ExtensionCommandContext);
-
-    expect(notifications).toEqual([
-      {
-        level: "info",
-        message: buildAgentsStatusMessage(paths, loadedConfig.config, discovery),
-      },
-    ]);
-  });
-
-  test("/agents:add collects inputs, writes an agent, and lists refreshed discovery", async () => {
-    const paths = createPaths();
-    const loadedConfig: LoadedConfig = {
-      exists: false,
-      config: {
-        maxConcurrency: 3,
-        maxRecursiveLevel: 3,
-        defaultTimeoutMs: 600_000,
-      },
-    };
-    const beforeDiscovery: AgentDiscoveryResult = {
-      agents: [
-        {
-          name: "worker",
-          description: "Does work",
-          tools: ["read"],
-          subagentAgents: [],
-          systemPrompt: "Do work",
-          sourcePath: "/repo/agents/worker.md",
-        },
-      ],
-      diagnostics: [],
-    };
-    const afterDiscovery: AgentDiscoveryResult = {
-      agents: [
-        ...beforeDiscovery.agents,
-        {
-          name: "Scout",
-          description: "Scout files",
-          tools: ["bash", "read"],
-          thinking: "medium",
-          subagentAgents: ["worker"],
-          timeoutMs: 180000,
-          systemPrompt: "# Prompt\nInspect the repo.",
-          sourcePath: "/tmp/pi-agent/agents/scout.md",
-        },
-      ],
-      diagnostics: [],
-    };
-
-    let addHandler: RegisteredCommand["handler"] | undefined;
-    const notifications: Array<{ message: string; level: string }> = [];
-    const capturedInputs: AgentCreationInput[] = [];
-    let discoveryCalls = 0;
-    const pi = createPi((name, command) => {
-      if (name === "agents:add") {
-        addHandler = command.handler;
-      }
-    });
-
-    registerSubagentsExtension(pi, {
-      resolvePaths: () => paths,
-      loadConfig: () => loadedConfig,
-      discoverAgents: () => {
-        discoveryCalls += 1;
-        return discoveryCalls >= 2 ? afterDiscovery : beforeDiscovery;
-      },
-      discoverToolNames: () => ["bash", "read", "write"],
-      createAgentFile: (_paths, input) => {
-        capturedInputs.push(input);
-        return afterDiscovery.agents[1];
-      },
-    });
-
-    expect(addHandler).toBeDefined();
-
-    const inputs = [
-      "Scout",
-      "Scout files",
-      "bash, read",
-      "default",
-      "medium",
-      "worker",
-      "180000",
-    ];
-
-    await addHandler?.("", {
-      ui: {
-        input() {
-          return Promise.resolve(inputs.shift());
-        },
-        editor() {
-          return Promise.resolve("# Prompt\nInspect the repo.");
+        custom() {
+          customCalls.push("opened");
+          return Promise.resolve(undefined);
         },
         notify(message: string, level: string) {
           notifications.push({ message, level });
@@ -236,102 +144,179 @@ describe("subagents extension", () => {
       },
     } as unknown as ExtensionCommandContext);
 
-    expect(capturedInputs).toEqual([
-      {
-        name: "Scout",
-        filenameSlug: undefined,
-        description: "Scout files",
-        tools: ["bash", "read"],
-        model: "default",
-        thinking: "medium",
-        subagentAgents: ["worker"],
-        timeoutMs: 180000,
-        systemPrompt: "# Prompt\nInspect the repo.",
-      },
-    ]);
-    expect(notifications).toEqual([
-      {
-        level: "info",
-        message: [
-          'Created agent "Scout" at /tmp/pi-agent/agents/scout.md',
-          "",
-          buildAgentsStatusMessage(paths, loadedConfig.config, afterDiscovery),
-        ].join("\n"),
-      },
-    ]);
+    expect(customCalls).toEqual(["opened"]);
+    expect(notifications).toEqual([]);
   });
 
-  test("/agents:add reports validation errors from creation and supports missing frontmatter name", async () => {
-    const paths = createPaths();
-    const loadedConfig: LoadedConfig = {
-      exists: false,
-      config: {
-        maxConcurrency: 3,
-        maxRecursiveLevel: 3,
-        defaultTimeoutMs: 600_000,
-      },
+  test("/agents falls back to select-based browsing when custom UI is unavailable", async () => {
+    let handler: RegisteredCommand["handler"] | undefined;
+    const exported: string[] = [];
+    const selections = ["Agents (1)", "Scout  [bundled]", "Export to global"];
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-menu-"));
+    const paths = {
+      agentDir: join(rootDir, "agent"),
+      configPath: join(rootDir, "agent", "extensions", "subagents.json"),
+      userAgentsDir: join(rootDir, "agent", "agents"),
+      bundledAgentsDir: join(rootDir, "bundled-agents"),
+      sessionsDir: join(rootDir, "agent", "sessions"),
     };
-    const discovery: AgentDiscoveryResult = {
-      agents: [],
-      diagnostics: [],
-    };
-
-    let addHandler: RegisteredCommand["handler"] | undefined;
-    const notifications: Array<{ message: string; level: string }> = [];
-    const capturedInputs: AgentCreationInput[] = [];
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+    writeFileSync(
+      join(paths.bundledAgentsDir, "scout.md"),
+      [
+        "---",
+        "name: Scout",
+        "description: Scout files",
+        "tools: read, bash",
+        "---",
+        "You are Scout.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
     const pi = createPi((name, command) => {
-      if (name === "agents:add") {
-        addHandler = command.handler;
+      if (name === "agents") {
+        handler = command.handler;
       }
     });
 
-    registerSubagentsExtension(pi, {
-      resolvePaths: () => paths,
-      loadConfig: () => loadedConfig,
-      discoverAgents: () => discovery,
-      discoverToolNames: () => ["read"],
-      createAgentFile: (_paths, input) => {
-        capturedInputs.push(input);
-        throw new Error("description must be non-empty");
-      },
-    });
+    registerSubagentsExtension(
+      pi,
+      createMenuDeps({
+        resolvePaths: () => paths,
+        exportAgentToUserScope(_paths, _discovery, name) {
+          exported.push(name);
+          return {
+            name,
+            description: "Scout files",
+            tools: ["read"],
+            subagentAgents: [],
+            systemPrompt: "You are Scout.",
+            sourcePath: "/tmp/pi-agent/agents/scout.md",
+          };
+        },
+      }),
+    );
 
-    expect(addHandler).toBeDefined();
-
-    const inputs = ["", "planner", "   ", "read", "", "", "", ""];
-
-    await addHandler?.("", {
+    await handler?.("", {
       ui: {
-        input() {
-          return Promise.resolve(inputs.shift());
+        select(_title: string, options: string[]) {
+          const next = selections.shift();
+          return Promise.resolve(options.find((option) => option === next));
         },
-        editor() {
-          return Promise.resolve("Body");
-        },
-        notify(message: string, level: string) {
-          notifications.push({ message, level });
-        },
+        notify() {},
       },
     } as unknown as ExtensionCommandContext);
 
-    expect(capturedInputs).toEqual([
+    expect(exported).toEqual(["Scout"]);
+  });
+
+  test("menu exports a bundled agent to global scope", async () => {
+    const exported: string[] = [];
+    await runAgentsMenuAction(
+      { kind: "export-agent", agentName: "Scout" },
       {
-        name: "",
-        filenameSlug: "planner",
-        description: "   ",
-        tools: ["read"],
-        model: "",
-        thinking: "",
-        subagentAgents: [],
-        timeoutMs: undefined,
-        systemPrompt: "Body",
-      },
-    ]);
-    expect(notifications).toEqual([
+        ui: {
+          notify() {},
+        },
+      } as unknown as ExtensionCommandContext,
+      createMenuDeps({
+        exportAgentToUserScope(_paths, _discovery, name) {
+          exported.push(name);
+          return {
+            name,
+            description: "Scout files",
+            tools: ["read"],
+            subagentAgents: [],
+            systemPrompt: "You are Scout.",
+            sourcePath: "/tmp/pi-agent/agents/scout.md",
+          };
+        },
+      }),
+    );
+
+    expect(exported).toEqual(["Scout"]);
+  });
+
+  test("menu settings writes maxConcurrency, maxRecursiveLevel, and defaultTimeoutMs", async () => {
+    const writes: SubagentsConfig[] = [];
+    const values = ["7", "5", "120000"];
+
+    await runAgentsMenuSettingsFlow(
       {
-        level: "error",
-        message: "Could not create agent: description must be non-empty",
-      },
-    ]);
+        ui: {
+          input() {
+            return Promise.resolve(values.shift());
+          },
+          notify() {},
+        },
+      } as unknown as ExtensionCommandContext,
+      createMenuDeps({
+        saveConfig(_paths, nextConfig) {
+          writes.push(nextConfig);
+        },
+      }),
+    );
+
+    expect(writes.at(-1)).toEqual({
+      maxConcurrency: 7,
+      maxRecursiveLevel: 5,
+      defaultTimeoutMs: 120000,
+    });
+  });
+
+  test("menu settings rejects invalid numeric input and does not save", async () => {
+    const writes: SubagentsConfig[] = [];
+    const notifications: Array<{ message: string; level: string }> = [];
+    const values = ["abc", "5", "120000"];
+
+    await runAgentsMenuSettingsFlow(
+      {
+        ui: {
+          input() {
+            return Promise.resolve(values.shift());
+          },
+          notify(message: string, level: string) {
+            notifications.push({ message, level });
+          },
+        },
+      } as unknown as ExtensionCommandContext,
+      createMenuDeps({
+        saveConfig(_paths, nextConfig) {
+          writes.push(nextConfig);
+        },
+      }),
+    );
+
+    expect(writes).toEqual([]);
+    expect(notifications).toContainEqual({
+      message: "Settings not saved: all values must be positive numbers.",
+      level: "error",
+    });
+  });
+
+  test("menu action reports export errors instead of throwing", async () => {
+    const notifications: Array<{ message: string; level: string }> = [];
+
+    await runAgentsMenuAction(
+      { kind: "export-agent", agentName: "Missing" },
+      {
+        ui: {
+          notify(message: string, level: string) {
+            notifications.push({ message, level });
+          },
+        },
+      } as unknown as ExtensionCommandContext,
+      createMenuDeps({
+        exportAgentToUserScope() {
+          throw new Error("unknown agent: Missing");
+        },
+      }),
+    );
+
+    expect(notifications).toContainEqual({
+      message: "Could not export agent: unknown agent: Missing",
+      level: "error",
+    });
   });
 });
