@@ -86,9 +86,11 @@ function parseCommaSeparatedList(value: string | undefined): string[] {
     : [];
 }
 
-function renderRow(theme: Theme, label: string, selected: boolean): string {
+export function renderRow(theme: Theme, label: string, selected: boolean): string {
   if (selected) {
-    return `▸ ${theme.bg("toolPendingBg", theme.fg("toolTitle", theme.bold(label)))}`;
+    const arrow = theme.fg("accent", "▸");
+    const text = theme.fg("accent", theme.bold(label));
+    return `${arrow} ${text}`;
   }
   return `  ${theme.fg("dim", label)}`;
 }
