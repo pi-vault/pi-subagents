@@ -1,7 +1,13 @@
 import { describe, expect, test } from "vitest";
 import {
+  finalizeSlashLiveRequest,
+  startSlashLiveRequest,
+  updateSlashLiveRequest,
+} from "../src/core/slash-live-state.js";
+import {
   buildSubagentCallText,
   buildSubagentResultText,
+  renderSubagentMessage,
   toSubagentCommandMessage,
 } from "../src/tui/render.js";
 import type {
@@ -13,6 +19,13 @@ const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 };
+
+function createTheme() {
+  return {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  };
+}
 
 function createDetails(
   overrides: Partial<SubagentExecutionDetails> = {},
@@ -144,6 +157,106 @@ describe("subagent render helpers", () => {
     expect(text).toContain("explore this repo");
     expect(text).toContain("cwd: /repo");
     expect(text).toContain("tools: read package");
+  });
+
+  test("renderSubagentMessage resolves slash details from the latest snapshot", () => {
+    const details = startSlashLiveRequest({
+      requestId: "req-1",
+      agent: "Scout",
+      task: "inspect this repo",
+      cwd: "/repo",
+    });
+
+    updateSlashLiveRequest("req-1", {
+      durationMs: 10,
+      activity: { label: "read done", preview: '{"path":"package.json"}' },
+    });
+
+    const text = renderSubagentMessage(
+      {
+        content: "",
+        details,
+      },
+      { expanded: false } as never,
+      createTheme() as never,
+    ).render(120).join("\n");
+
+    expect(text).toContain("read done");
+  });
+
+  test("slash live message component refreshes when snapshot changes", () => {
+    const details = startSlashLiveRequest({
+      requestId: "req-live",
+      agent: "Scout",
+      task: "inspect this repo",
+      cwd: "/repo",
+    });
+
+    const component = renderSubagentMessage(
+      {
+        content: "",
+        details,
+      },
+      { expanded: false } as never,
+      createTheme() as never,
+    );
+
+    const initial = component.render(120).join("\n");
+    expect(initial).toContain("RUNNING");
+    expect(initial).not.toContain("read done");
+
+    updateSlashLiveRequest("req-live", {
+      durationMs: 10,
+      activity: { label: "read done", preview: '{"path":"package.json"}' },
+    });
+
+    const updated = component.render(120).join("\n");
+    expect(updated).toContain("read done");
+  });
+
+  test("renderSubagentMessage shows final output after slash snapshot finalizes", () => {
+    const details = startSlashLiveRequest({
+      requestId: "req-final",
+      agent: "Scout",
+      task: "inspect this repo",
+      cwd: "/repo",
+    });
+
+    finalizeSlashLiveRequest("req-final", {
+      content: "final answer",
+      isError: false,
+      details: createDetails(),
+    });
+
+    const text = renderSubagentMessage(
+      {
+        content: "",
+        details,
+      },
+      { expanded: true } as never,
+      createTheme() as never,
+    ).render(120).join("\n");
+
+    expect(text).toContain("final output:");
+    expect(text).toContain("final answer");
+  });
+
+  test("expanded running slash card shows detailed recent tool activity", () => {
+    const text = buildSubagentResultText(
+      "",
+      createSlashLiveDetails({
+        recentToolActivity: [
+          { label: "read start", preview: '{"path":"package.json"}' },
+          { label: "read done", preview: '{"content":[{"type":"text","text":"ok"}]}' },
+        ],
+      }),
+      true,
+      theme,
+    );
+
+    expect(text).toContain("recent tools:");
+    expect(text).toContain("- read start:");
+    expect(text).toContain("- read done:");
   });
 
   test("toSubagentCommandMessage keeps live slash details when provided", () => {

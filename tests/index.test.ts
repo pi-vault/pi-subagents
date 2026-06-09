@@ -11,6 +11,9 @@ import extension, { registerSubagentsExtension } from "../src/index.js";
 import {
   runAgentsMenuAction,
   runAgentsMenuSettingsFlow,
+  SETTINGS_MENU_ITEMS,
+  buildAlignedRows,
+  describeAgentEntry,
 } from "../src/tui/agents-menu.js";
 import type {
   AgentCreationInput,
@@ -238,15 +241,33 @@ describe("subagents extension", () => {
     expect(exported).toEqual(["Scout"]);
   });
 
-  test("menu settings writes maxConcurrency, maxRecursiveLevel, and defaultTimeoutMs", async () => {
+  test("settings labels come from centralized metadata", () => {
+    expect(SETTINGS_MENU_ITEMS.map((item) => item.label)).toEqual([
+      "Max Concurrency",
+      "Max Recursive Level",
+      "Default Timeout MS",
+    ]);
+    expect(SETTINGS_MENU_ITEMS.map((item) => item.promptTitle)).toEqual([
+      "Max Concurrency",
+      "Max Recursive Level",
+      "Default Timeout MS",
+    ]);
+  });
+
+  test("settings flow edits one selected setting and writes only that change", async () => {
     const writes: SubagentsConfig[] = [];
-    const values = ["7", "5", "120000"];
+    const selections = ["Max Concurrency      3", "Back"];
+    const inputs = ["7"];
 
     await runAgentsMenuSettingsFlow(
       {
         ui: {
+          select(_title: string, options: string[]) {
+            const next = selections.shift();
+            return Promise.resolve(options.find((option) => option === next));
+          },
           input() {
-            return Promise.resolve(values.shift());
+            return Promise.resolve(inputs.shift());
           },
           notify() {},
         },
@@ -258,23 +279,30 @@ describe("subagents extension", () => {
       }),
     );
 
-    expect(writes.at(-1)).toEqual({
-      maxConcurrency: 7,
-      maxRecursiveLevel: 5,
-      defaultTimeoutMs: 120000,
-    });
+    expect(writes).toEqual([
+      {
+        maxConcurrency: 7,
+        maxRecursiveLevel: 3,
+        defaultTimeoutMs: 600_000,
+      },
+    ]);
   });
 
   test("menu settings rejects invalid numeric input and does not save", async () => {
     const writes: SubagentsConfig[] = [];
     const notifications: Array<{ message: string; level: string }> = [];
-    const values = ["abc", "5", "120000"];
+    const selections = ["Max Concurrency      3", "Back"];
+    const inputs = ["abc"];
 
     await runAgentsMenuSettingsFlow(
       {
         ui: {
+          select(_title: string, options: string[]) {
+            const next = selections.shift();
+            return Promise.resolve(options.find((option) => option === next));
+          },
           input() {
-            return Promise.resolve(values.shift());
+            return Promise.resolve(inputs.shift());
           },
           notify(message: string, level: string) {
             notifications.push({ message, level });
@@ -293,6 +321,60 @@ describe("subagents extension", () => {
       message: "Settings not saved: all values must be positive numbers.",
       level: "error",
     });
+  });
+
+  test("describeAgentEntry returns label/detail instead of one concatenated string", () => {
+    expect(
+      describeAgentEntry({
+        name: "planner",
+        state: "bundled",
+      } as never),
+    ).toEqual({
+      label: "planner",
+      detail: "[bundled]",
+    });
+  });
+
+  test("buildAlignedRows pads labels so status starts in the same column", () => {
+    const rows = buildAlignedRows([
+      { label: "planner", detail: "[bundled]", value: "planner" },
+      { label: "researcher", detail: "[bundled]", value: "researcher" },
+      { label: "worker", detail: "[bundled]", value: "worker" },
+    ]);
+
+    expect(rows).toEqual([
+      "planner     [bundled]",
+      "researcher  [bundled]",
+      "worker      [bundled]",
+    ]);
+  });
+
+  test("settings fallback without ui.custom still shows current values in select labels", async () => {
+    const seenOptions: string[][] = [];
+    const selections = ["Max Concurrency      3", "Back"];
+
+    await runAgentsMenuSettingsFlow(
+      {
+        ui: {
+          select(_title: string, options: string[]) {
+            seenOptions.push(options);
+            const next = selections.shift();
+            return Promise.resolve(options.find((option) => option === next));
+          },
+          input() {
+            return Promise.resolve(undefined);
+          },
+          notify() {},
+        },
+      } as unknown as ExtensionCommandContext,
+      createMenuDeps(),
+    );
+
+    expect(
+      seenOptions.some((options) =>
+        options.includes("Max Concurrency      3"),
+      ),
+    ).toBe(true);
   });
 
   test("menu action reports export errors instead of throwing", async () => {
