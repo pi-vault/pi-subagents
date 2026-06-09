@@ -1,9 +1,33 @@
 import type {
   SlashLiveDetails,
+  SubagentExecutionResult,
+  SubagentExecutionDetails,
   SubagentToolActivity,
 } from "../shared/types.js";
 
-const liveRequests = new Map<string, SlashLiveDetails>();
+type SlashSnapshot = {
+  live: SlashLiveDetails;
+  final?: SubagentExecutionResult;
+  version: number;
+};
+
+const liveRequests = new Map<string, SlashSnapshot>();
+let versionCounter = 1;
+const MAX_SNAPSHOTS = 100;
+
+function nextVersion(): number {
+  return versionCounter++;
+}
+
+function pruneSnapshots(): void {
+  while (liveRequests.size > MAX_SNAPSHOTS) {
+    const oldestKey = liveRequests.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    liveRequests.delete(oldestKey);
+  }
+}
 
 export function startSlashLiveRequest(input: {
   requestId: string;
@@ -23,7 +47,11 @@ export function startSlashLiveRequest(input: {
     recentToolActivity: [],
     model: input.model,
   };
-  liveRequests.set(input.requestId, details);
+  liveRequests.set(input.requestId, {
+    live: details,
+    version: nextVersion(),
+  });
+  pruneSnapshots();
   return details;
 }
 
@@ -36,26 +64,62 @@ export function updateSlashLiveRequest(
     activity?: SubagentToolActivity;
   },
 ): SlashLiveDetails | undefined {
-  const current = liveRequests.get(requestId);
-  if (!current) {
+  const snapshot = liveRequests.get(requestId);
+  if (!snapshot) {
     return undefined;
   }
 
   const recentToolActivity = patch.activity
-    ? [...current.recentToolActivity, patch.activity].slice(-5)
-    : current.recentToolActivity;
+    ? [...snapshot.live.recentToolActivity, patch.activity].slice(-5)
+    : snapshot.live.recentToolActivity;
 
-  const next: SlashLiveDetails = {
-    ...current,
-    durationMs: patch.durationMs ?? current.durationMs,
-    childSessionPath: patch.childSessionPath ?? current.childSessionPath,
-    stderr: patch.stderr ?? current.stderr,
+  snapshot.live = {
+    ...snapshot.live,
+    durationMs: patch.durationMs ?? snapshot.live.durationMs,
+    childSessionPath: patch.childSessionPath ?? snapshot.live.childSessionPath,
+    stderr: patch.stderr ?? snapshot.live.stderr,
     recentToolActivity,
   };
-  liveRequests.set(requestId, next);
-  return next;
+  snapshot.version = nextVersion();
+  return snapshot.live;
 }
 
-export function finishSlashLiveRequest(requestId: string): void {
-  liveRequests.delete(requestId);
+export function finalizeSlashLiveRequest(
+  requestId: string,
+  result: SubagentExecutionResult,
+): void {
+  const snapshot = liveRequests.get(requestId);
+  if (!snapshot) {
+    return;
+  }
+  snapshot.final = result;
+  snapshot.version = nextVersion();
+}
+
+export function getSlashSnapshot(
+  requestId: string,
+): SlashSnapshot | undefined {
+  return liveRequests.get(requestId);
+}
+
+export function getSlashRenderableMessage(
+  details: SlashLiveDetails | undefined,
+): { content: string; details: SlashLiveDetails | SubagentExecutionDetails } | undefined {
+  if (!details) {
+    return undefined;
+  }
+  const snapshot = liveRequests.get(details.requestId);
+  if (!snapshot) {
+    return { content: "", details };
+  }
+  if (snapshot.final) {
+    return {
+      content: snapshot.final.content,
+      details: snapshot.final.details,
+    };
+  }
+  return {
+    content: "",
+    details: snapshot.live,
+  };
 }

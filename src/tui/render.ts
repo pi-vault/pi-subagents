@@ -1,4 +1,8 @@
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
+import {
+  getSlashRenderableMessage,
+  getSlashSnapshot,
+} from "../core/slash-live-state.js";
 import type {
   AgentToolResult,
   MessageRenderOptions,
@@ -109,6 +113,18 @@ function buildSlashLiveText(
   const activityLabels = details.recentToolActivity.map((entry) => entry.label);
   if (activityLabels.length > 0) {
     lines.push(theme.fg("dim", `tools: ${activityLabels.join(", ")}`));
+  }
+
+  if (expanded && details.recentToolActivity.length > 0) {
+    lines.push(theme.fg("muted", "recent tools:"));
+    for (const activity of details.recentToolActivity) {
+      lines.push(
+        theme.fg(
+          "dim",
+          `  - ${activity.label}: ${previewText(activity.preview, MAX_ACTIVITY_PREVIEW)}`,
+        ),
+      );
+    }
   }
 
   if (expanded && details.childSessionPath) {
@@ -242,12 +258,25 @@ export function renderSubagentMessage(
   },
   options: MessageRenderOptions,
   theme: Theme,
-): Text {
+): Text | Container {
+  if (isSlashLiveDetails(message.details)) {
+    return createSlashLiveMessageComponent(
+      {
+        content: message.content,
+        details: message.details,
+      },
+      options,
+      theme,
+    );
+  }
+
+  const baseContent = normalizeMessageContent(
+    message.content as string | Array<{ type: string; text?: string }>,
+  );
+
   return new Text(
     buildSubagentResultText(
-      normalizeMessageContent(
-        message.content as string | Array<{ type: string; text?: string }>,
-      ),
+      baseContent,
       message.details,
       options.expanded,
       theme,
@@ -255,6 +284,48 @@ export function renderSubagentMessage(
     0,
     0,
   );
+}
+
+function createSlashLiveMessageComponent(
+  message: {
+    content: string | Array<{ type: string; text?: string }>;
+    details: SlashLiveDetails;
+  },
+  options: MessageRenderOptions,
+  theme: Theme,
+): Container {
+  const container = new Container();
+  let lastVersion = -1;
+
+  container.render = (width: number): string[] => {
+    const snapshot = getSlashSnapshot(message.details.requestId);
+    const currentVersion = snapshot?.version ?? 0;
+    if (currentVersion !== lastVersion) {
+      lastVersion = currentVersion;
+      const resolved = getSlashRenderableMessage(message.details);
+      const baseContent = normalizeMessageContent(
+        message.content as string | Array<{ type: string; text?: string }>,
+      );
+      const content = resolved?.content ?? baseContent;
+      const details = resolved?.details ?? message.details;
+      container.clear();
+      container.addChild(
+        new Text(
+          buildSubagentResultText(
+            content,
+            details,
+            options.expanded,
+            theme,
+          ),
+          0,
+          0,
+        ),
+      );
+    }
+    return Container.prototype.render.call(container, width);
+  };
+
+  return container;
 }
 
 export function toSubagentCommandMessage(result: {

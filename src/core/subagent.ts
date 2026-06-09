@@ -18,7 +18,7 @@ import {
   writeMetadata,
 } from "../shared/artifacts.js";
 import {
-  finishSlashLiveRequest,
+  finalizeSlashLiveRequest,
   startSlashLiveRequest,
   updateSlashLiveRequest,
 } from "./slash-live-state.js";
@@ -1157,24 +1157,14 @@ export function registerSlashAgentBridge(
       runtime,
       request.requestId
         ? (update) => {
-            const details = updateSlashLiveRequest(request.requestId!, update);
-            if (!details) {
-              return;
-            }
-            pi.sendMessage({
-              customType: "pi-subagent-result",
-              content: "",
-              display: true,
-              details,
-            });
+            updateSlashLiveRequest(request.requestId!, update);
           }
         : undefined,
     );
 
     if (request.requestId) {
-      finishSlashLiveRequest(request.requestId);
+      finalizeSlashLiveRequest(request.requestId, result);
     }
-    pi.sendMessage(toSubagentCommandMessage(result));
     return { action: "handled" };
   });
 }

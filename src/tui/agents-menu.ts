@@ -16,6 +16,59 @@ import type {
 
 type MenuChoice<T> = { label: string; value: T };
 
+type MenuRow<T> = {
+  label: string;
+  detail?: string;
+  value: T;
+  kind?: "normal" | "back";
+};
+
+type SettingsKey =
+  | "maxConcurrency"
+  | "maxRecursiveLevel"
+  | "defaultTimeoutMs";
+
+type SettingsMenuItem = {
+  key: SettingsKey;
+  label: string;
+  promptTitle: string;
+  formatValue: (config: SubagentsConfig) => string;
+  parse: (raw: string) => number | undefined;
+};
+
+export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
+  {
+    key: "maxConcurrency",
+    label: "Max Concurrency",
+    promptTitle: "Max Concurrency",
+    formatValue: (config) => String(config.maxConcurrency),
+    parse: (raw) => {
+      const value = Number(raw);
+      return Number.isInteger(value) && value > 0 ? value : undefined;
+    },
+  },
+  {
+    key: "maxRecursiveLevel",
+    label: "Max Recursive Level",
+    promptTitle: "Max Recursive Level",
+    formatValue: (config) => String(config.maxRecursiveLevel),
+    parse: (raw) => {
+      const value = Number(raw);
+      return Number.isInteger(value) && value > 0 ? value : undefined;
+    },
+  },
+  {
+    key: "defaultTimeoutMs",
+    label: "Default Timeout MS",
+    promptTitle: "Default Timeout MS",
+    formatValue: (config) => String(config.defaultTimeoutMs),
+    parse: (raw) => {
+      const value = Number(raw);
+      return Number.isInteger(value) && value > 0 ? value : undefined;
+    },
+  },
+];
+
 type AgentMenuEntry = {
   name: string;
   state: "bundled" | "override" | "disabled";
@@ -40,19 +93,40 @@ function renderRow(theme: Theme, label: string, selected: boolean): string {
   return `  ${theme.fg("dim", label)}`;
 }
 
-async function showMenu<T>(
+export function buildAlignedRows<T>(rows: Array<MenuRow<T>>): string[] {
+  const labelWidth = rows.reduce((max, row) => {
+    if (row.kind === "back" || !row.detail) {
+      return max;
+    }
+    return Math.max(max, row.label.length);
+  }, 0);
+
+  return rows.map((row) => {
+    if (!row.detail) {
+      return row.label;
+    }
+    return `${row.label.padEnd(labelWidth)}  ${row.detail}`;
+  });
+}
+
+function buildSelectLabels<T>(rows: Array<MenuRow<T>>): string[] {
+  return buildAlignedRows(rows);
+}
+
+async function showRowsMenu<T>(
   ctx: ExtensionCommandContext,
   title: string,
-  items: Array<MenuChoice<T>>,
+  rows: Array<MenuRow<T>>,
   footer?: string,
 ): Promise<T | undefined> {
+  const renderedRows = buildAlignedRows(rows);
+
   if (!ctx.ui.custom) {
     if (ctx.ui.select) {
-      const selectedLabel = await ctx.ui.select(
-        title,
-        items.map((item) => item.label),
-      );
-      return items.find((item) => item.label === selectedLabel)?.value;
+      const selectLabels = buildSelectLabels(rows);
+      const selectedLabel = await ctx.ui.select(title, selectLabels);
+      const index = selectLabels.findIndex((row) => row === selectedLabel);
+      return index >= 0 ? rows[index]?.value : undefined;
     }
     if (footer) {
       ctx.ui.notify(footer, "info");
@@ -68,9 +142,9 @@ async function showMenu<T>(
       const container = new Container();
       container.addChild(new Text(theme.fg("accent", theme.bold(title)), 0, 0));
       container.addChild(new Text("", 0, 0));
-      for (const [index, item] of items.entries()) {
+      for (const [index, row] of renderedRows.entries()) {
         container.addChild(
-          new Text(renderRow(theme, item.label, index === selectedIndex), 0, 0),
+          new Text(renderRow(theme, row, index === selectedIndex), 0, 0),
         );
       }
       if (footer) {
@@ -87,12 +161,12 @@ async function showMenu<T>(
         return;
       }
       if (matchesKey(data, "down")) {
-        selectedIndex = Math.min(items.length - 1, selectedIndex + 1);
+        selectedIndex = Math.min(rows.length - 1, selectedIndex + 1);
         tui.requestRender();
         return;
       }
       if (matchesKey(data, Key.enter)) {
-        selectedValue = items[selectedIndex]?.value;
+        selectedValue = rows[selectedIndex]?.value;
         done(undefined);
         return;
       }
@@ -180,14 +254,23 @@ function buildAgentMenuEntries(paths: ResolvedPaths): AgentMenuEntry[] {
     });
 }
 
-function describeAgentEntry(entry: AgentMenuEntry): string {
+function statusLabelForEntry(entry: AgentMenuEntry): string {
   if (entry.state === "bundled") {
-    return `${entry.name}  [bundled]`;
+    return "[bundled]";
   }
   if (entry.state === "override") {
-    return `${entry.name}  [global override]`;
+    return "[global override]";
   }
-  return `${entry.name}  [disabled override]`;
+  return "[disabled override]";
+}
+
+export function describeAgentEntry(
+  entry: AgentMenuEntry,
+): Pick<MenuRow<AgentMenuEntry>, "label" | "detail"> {
+  return {
+    label: entry.name,
+    detail: statusLabelForEntry(entry),
+  };
 }
 
 async function promptForAgentName(
@@ -195,6 +278,19 @@ async function promptForAgentName(
   title: string,
 ): Promise<string | undefined> {
   return ctx.ui.input(title, "Scout");
+}
+
+function buildSettingsRows(
+  config: SubagentsConfig,
+): Array<MenuRow<SettingsKey | "back">> {
+  return [
+    ...SETTINGS_MENU_ITEMS.map((item) => ({
+      label: item.label,
+      detail: item.formatValue(config),
+      value: item.key,
+    })),
+    { label: "Back", value: "back", kind: "back" },
+  ];
 }
 
 async function runCreateAgentFlow(
@@ -328,53 +424,45 @@ export async function runAgentsMenuSettingsFlow(
   deps: RuntimeDeps,
 ): Promise<void> {
   const paths = deps.resolvePaths();
-  const { config } = deps.loadConfig(paths);
 
-  const maxConcurrency = await ctx.ui.input(
-    "Max concurrency",
-    String(config.maxConcurrency),
-  );
-  if (maxConcurrency === undefined) {
-    return;
-  }
-
-  const maxRecursiveLevel = await ctx.ui.input(
-    "Max recursive level",
-    String(config.maxRecursiveLevel),
-  );
-  if (maxRecursiveLevel === undefined) {
-    return;
-  }
-
-  const defaultTimeoutMs = await ctx.ui.input(
-    "Default timeout ms",
-    String(config.defaultTimeoutMs),
-  );
-  if (defaultTimeoutMs === undefined) {
-    return;
-  }
-
-  const nextConfig: SubagentsConfig = {
-    maxConcurrency: Number(maxConcurrency),
-    maxRecursiveLevel: Number(maxRecursiveLevel),
-    defaultTimeoutMs: Number(defaultTimeoutMs),
-  };
-  if (
-    !Number.isFinite(nextConfig.maxConcurrency) ||
-    !Number.isFinite(nextConfig.maxRecursiveLevel) ||
-    !Number.isFinite(nextConfig.defaultTimeoutMs) ||
-    nextConfig.maxConcurrency <= 0 ||
-    nextConfig.maxRecursiveLevel <= 0 ||
-    nextConfig.defaultTimeoutMs <= 0
-  ) {
-    ctx.ui.notify(
-      "Settings not saved: all values must be positive numbers.",
-      "error",
+  while (true) {
+    const { config } = deps.loadConfig(paths);
+    const selected = await showRowsMenu(
+      ctx,
+      "Settings",
+      buildSettingsRows(config),
+      "Select a setting to edit",
     );
-    return;
+
+    if (!selected || selected === "back") {
+      return;
+    }
+
+    const item = SETTINGS_MENU_ITEMS.find((entry) => entry.key === selected);
+    if (!item) {
+      return;
+    }
+
+    const raw = await ctx.ui.input(item.promptTitle, item.formatValue(config));
+    if (raw === undefined) {
+      continue;
+    }
+
+    const parsed = item.parse(raw);
+    if (parsed === undefined) {
+      ctx.ui.notify(
+        "Settings not saved: all values must be positive numbers.",
+        "error",
+      );
+      continue;
+    }
+
+    deps.saveConfig(paths, {
+      ...config,
+      [item.key]: parsed,
+    });
+    ctx.ui.notify("Updated subagents settings", "info");
   }
-  deps.saveConfig(paths, nextConfig);
-  ctx.ui.notify("Updated subagents settings", "info");
 }
 
 export async function runAgentsMenuAction(
@@ -473,7 +561,7 @@ async function showAgentActions(
             { label: "Back", value: "back" },
           ];
 
-  const choice = await showMenu(
+  const choice = await showRowsMenu(
     ctx,
     entry.name,
     items,
@@ -520,15 +608,15 @@ async function showAgentsBrowser(
   while (true) {
     const entries = buildAgentMenuEntries(deps.resolvePaths());
     const diagnostics = readAgentFiles(deps.resolvePaths().userAgentsDir).diagnostics;
-    const choice = await showMenu(
+    const choice = await showRowsMenu(
       ctx,
       "Agents",
       [
         ...entries.map((entry) => ({
-          label: describeAgentEntry(entry),
+          ...describeAgentEntry(entry),
           value: entry,
         })),
-        { label: "Back", value: undefined },
+        { label: "Back", value: undefined, kind: "back" },
       ],
       diagnostics.length > 0
         ? `${diagnostics.length} invalid user agent file(s) skipped`
@@ -549,7 +637,7 @@ export async function showAgentsMenu(
 ): Promise<void> {
   while (true) {
     const entries = buildAgentMenuEntries(deps.resolvePaths());
-    const choice = await showMenu(
+    const choice = await showRowsMenu(
       ctx,
       "pi-subagents agents",
       [
