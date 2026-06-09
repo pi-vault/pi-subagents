@@ -14,6 +14,7 @@ import {
   registerSlashAgentBridge,
   registerSubagentTool,
 } from "./core/subagent.js";
+import { hydrateDeferredSlashRequestsFromSession } from "./core/deferred-slash-state.js";
 import type { RuntimeDeps } from "./shared/types.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
 import { renderSubagentMessage } from "./tui/render.js";
@@ -47,6 +48,10 @@ export function registerSubagentsExtension(
     handler: async (_args, ctx) => {
       await showAgentsMenu(ctx, deps);
     },
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    hydrateDeferredSlashRequestsFromSession(ctx.sessionManager);
   });
 }
 
