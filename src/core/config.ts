@@ -4,7 +4,7 @@ import type {
   LoadedConfig,
   ResolvedPaths,
   SubagentsConfig,
-} from "../shared/types.js";
+} from "../shared/types.ts";
 
 export const DEFAULT_CONFIG: SubagentsConfig = {
   maxConcurrency: 3,

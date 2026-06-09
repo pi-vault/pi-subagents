@@ -1,7 +1,7 @@
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { ResolvedPaths } from "../shared/types.js";
+import type { ResolvedPaths } from "../shared/types.ts";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 

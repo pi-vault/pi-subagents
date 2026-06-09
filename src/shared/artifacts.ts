@@ -4,7 +4,7 @@ import type {
   ArtifactPaths,
   ResolvedPaths,
   RuntimeArtifactsPaths,
-} from "./types.js";
+} from "./types.ts";
 
 const ARTIFACTS_DIR_NAME = "subagent-artifacts";
 

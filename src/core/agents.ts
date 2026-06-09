@@ -13,7 +13,7 @@ import type {
   AgentDiscoveryDiagnostic,
   AgentDiscoveryResult,
   ResolvedPaths,
-} from "../shared/types.js";
+} from "../shared/types.ts";
 
 export const BUILT_IN_TOOL_NAMES = [
   "read",
