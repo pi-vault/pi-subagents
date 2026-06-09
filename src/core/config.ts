@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type {
   LoadedConfig,
   ResolvedPaths,
@@ -13,6 +14,26 @@ export const DEFAULT_CONFIG: SubagentsConfig = {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+export function saveConfig(
+  paths: ResolvedPaths,
+  config: SubagentsConfig,
+): void {
+  mkdirSync(dirname(paths.configPath), { recursive: true });
+  writeFileSync(
+    paths.configPath,
+    `${JSON.stringify(
+      {
+        maxConcurrency: config.maxConcurrency,
+        maxRecursiveLevel: config.maxRecursiveLevel,
+        defaultTimeoutMs: config.defaultTimeoutMs,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
 }
 
 export function loadConfig(paths: ResolvedPaths): LoadedConfig {

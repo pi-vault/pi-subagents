@@ -37,6 +37,7 @@ export interface AgentDefinition {
   thinking?: string;
   subagentAgents: string[];
   timeoutMs?: number;
+  disabled?: boolean;
   systemPrompt: string;
   sourcePath: string;
 }
@@ -74,6 +75,18 @@ export interface RuntimeDeps {
     discovery: AgentDiscoveryResult,
     toolNames: string[],
   ) => AgentDefinition;
+  exportAgentToUserScope: (
+    paths: ResolvedPaths,
+    discovery: AgentDiscoveryResult,
+    agentName: string,
+  ) => AgentDefinition;
+  disableAgentInUserScope: (
+    paths: ResolvedPaths,
+    discovery: AgentDiscoveryResult,
+    agentName: string,
+  ) => AgentDefinition;
+  deleteUserAgentOverride: (paths: ResolvedPaths, agentName: string) => void;
+  saveConfig: (paths: ResolvedPaths, config: SubagentsConfig) => void;
 }
 
 export interface SubagentToolInput {
@@ -86,6 +99,7 @@ export interface SlashAgentBridgeRequest {
   agent: string;
   task: string;
   cwd?: string;
+  requestId?: string;
 }
 
 export interface SubagentUsage {
@@ -122,6 +136,24 @@ export interface SubagentExecutionDetails {
   recentToolActivity: SubagentToolActivity[];
 }
 
+export interface SlashLiveDetails {
+  kind: "slash-live";
+  requestId: string;
+  status: "running" | "error";
+  agent: string;
+  task: string;
+  cwd: string;
+  durationMs: number;
+  recentToolActivity: SubagentToolActivity[];
+  childSessionPath?: string;
+  model?: string;
+  stderr?: string;
+}
+
+export type SubagentMessageDetails =
+  | SubagentExecutionDetails
+  | SlashLiveDetails;
+
 export interface SubagentExecutionResult {
   content: string;
   isError: boolean;
@@ -132,5 +164,5 @@ export interface SubagentCommandMessage {
   customType: string;
   content: string;
   display: boolean;
-  details?: SubagentExecutionDetails;
+  details?: SubagentMessageDetails;
 }

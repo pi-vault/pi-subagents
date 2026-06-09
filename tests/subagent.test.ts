@@ -75,6 +75,18 @@ function createDeps(paths: ResolvedPaths, discovery: AgentDiscoveryResult): Runt
     createAgentFile: () => {
       throw new Error("not used");
     },
+    exportAgentToUserScope: () => {
+      throw new Error("not used");
+    },
+    disableAgentInUserScope: () => {
+      throw new Error("not used");
+    },
+    deleteUserAgentOverride: () => {
+      throw new Error("not used");
+    },
+    saveConfig: () => {
+      throw new Error("not used");
+    },
   };
 }
 
@@ -1187,7 +1199,7 @@ describe("subagent execution", () => {
 });
 
 describe("subagent registration", () => {
-  test("registers tool renderers and /agent command, and /agent runs through the bridge", async () => {
+  test("/agent emits one live slash card instead of appending every progress update", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
     const discovery = { agents: [createAgent({ systemPrompt: "" })], diagnostics: [] };
@@ -1202,6 +1214,12 @@ describe("subagent registration", () => {
       ((_, __, ___) => {
         const child = new FakeChildProcess();
         queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"tool_execution_start","toolName":"read","args":{"path":"package.json"}}\n',
+          );
+          child.stdout.write(
+            '{"type":"tool_execution_end","toolName":"read","result":{"ok":true},"isError":false}\n',
+          );
           child.stdout.write(
             '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end"}}\n',
           );
@@ -1287,11 +1305,9 @@ describe("subagent registration", () => {
     expect(messages).toEqual([
       expect.objectContaining({
         customType: "pi-subagent-result",
-        content: "done",
-        display: true,
         details: expect.objectContaining({
-          stopReason: "end",
-          model: "openai/gpt-5",
+          kind: "slash-live",
+          requestId: expect.any(String),
         }),
       }),
     ]);

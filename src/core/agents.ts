@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join, parse, resolve } from "node:path";
@@ -200,6 +201,24 @@ function normalizeNameForComparison(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function ensureUserAgentsDir(paths: ResolvedPaths): void {
+  mkdirSync(paths.userAgentsDir, { recursive: true });
+}
+
+function fileSlugForAgent(agent: AgentDefinition): string {
+  return agent.name.trim().toLowerCase();
+}
+
+function findAgentDefinition(
+  discovery: AgentDiscoveryResult,
+  agentName: string,
+): AgentDefinition | undefined {
+  const normalized = normalizeNameForComparison(agentName);
+  return discovery.agents.find(
+    (agent) => normalizeNameForComparison(agent.name) === normalized,
+  );
+}
+
 export function discoverToolNames(
   runtimeToolNames: readonly string[] = [],
 ): string[] {
@@ -299,6 +318,10 @@ export function parseAgentFile(
     typeof frontmatter.thinking === "string" && frontmatter.thinking.trim()
       ? frontmatter.thinking.trim()
       : undefined;
+  const disabled =
+    typeof frontmatter.disabled === "string"
+      ? frontmatter.disabled.trim().toLowerCase() === "true"
+      : false;
 
   return {
     ok: true,
@@ -310,6 +333,7 @@ export function parseAgentFile(
       thinking,
       subagentAgents: subagentAgents.value,
       timeoutMs,
+      disabled,
       systemPrompt,
       sourcePath: filePath,
     },
@@ -344,15 +368,21 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
   const userResult = discoverAgentsFromDirectory(paths.userAgentsDir);
   const bundledResult = discoverAgentsFromDirectory(paths.bundledAgentsDir);
   const agentsByName = new Map<string, AgentDefinition>();
+  const blockedNames = new Set<string>();
   const diagnostics = [...userResult.diagnostics, ...bundledResult.diagnostics];
 
   for (const agent of userResult.agents) {
     const comparisonName = normalizeNameForComparison(agent.name);
-    if (agentsByName.has(comparisonName)) {
+    if (agentsByName.has(comparisonName) || blockedNames.has(comparisonName)) {
       diagnostics.push({
         path: agent.sourcePath,
         reason: `duplicate agent name "${agent.name}" skipped; first definition wins`,
       });
+      continue;
+    }
+
+    if (agent.disabled) {
+      blockedNames.add(comparisonName);
       continue;
     }
 
@@ -361,7 +391,7 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
 
   for (const agent of bundledResult.agents) {
     const comparisonName = normalizeNameForComparison(agent.name);
-    if (agentsByName.has(comparisonName)) {
+    if (agentsByName.has(comparisonName) || blockedNames.has(comparisonName)) {
       diagnostics.push({
         path: agent.sourcePath,
         reason: `duplicate agent name "${agent.name}" skipped; user agent wins`,
@@ -418,6 +448,78 @@ export function createAgentMarkdown(input: AgentCreationInput): string {
   frontmatter.push("---", systemPrompt);
 
   return `${frontmatter.join("\n")}\n`;
+}
+
+export function exportAgentToUserScope(
+  paths: ResolvedPaths,
+  discovery: AgentDiscoveryResult,
+  agentName: string,
+): AgentDefinition {
+  const agent = findAgentDefinition(discovery, agentName);
+  if (!agent) {
+    throw new Error(`unknown agent: ${agentName}`);
+  }
+
+  ensureUserAgentsDir(paths);
+  const filePath = join(paths.userAgentsDir, `${fileSlugForAgent(agent)}.md`);
+  const markdown = createAgentMarkdown({
+    name: agent.name,
+    description: agent.description,
+    tools: agent.tools,
+    model: agent.model,
+    thinking: agent.thinking,
+    subagentAgents: agent.subagentAgents,
+    timeoutMs: agent.timeoutMs,
+    systemPrompt: agent.systemPrompt,
+  });
+  writeFileSync(filePath, markdown, "utf8");
+
+  const parsed = parseAgentFile(filePath, markdown);
+  if (!parsed.ok) {
+    throw new Error(parsed.diagnostic.reason);
+  }
+  return parsed.agent;
+}
+
+export function disableAgentInUserScope(
+  paths: ResolvedPaths,
+  discovery: AgentDiscoveryResult,
+  agentName: string,
+): AgentDefinition {
+  const agent = findAgentDefinition(discovery, agentName);
+  if (!agent) {
+    throw new Error(`unknown agent: ${agentName}`);
+  }
+
+  ensureUserAgentsDir(paths);
+  const filePath = join(paths.userAgentsDir, `${fileSlugForAgent(agent)}.md`);
+  const markdown = [
+    "---",
+    `name: ${agent.name}`,
+    `description: ${agent.description}`,
+    "tools:",
+    "disabled: true",
+    "---",
+    agent.systemPrompt.trim(),
+    "",
+  ].join("\n");
+  writeFileSync(filePath, markdown, "utf8");
+
+  const parsed = parseAgentFile(filePath, markdown);
+  if (!parsed.ok) {
+    throw new Error(parsed.diagnostic.reason);
+  }
+  return parsed.agent;
+}
+
+export function deleteUserAgentOverride(
+  paths: ResolvedPaths,
+  agentName: string,
+): void {
+  const filePath = join(paths.userAgentsDir, `${agentName.trim().toLowerCase()}.md`);
+  if (existsSync(filePath)) {
+    rmSync(filePath);
+  }
 }
 
 export function createAgentFile(
@@ -488,7 +590,7 @@ export function createAgentFile(
     throw new Error(`duplicate agent name: ${targetName}`);
   }
 
-  mkdirSync(paths.userAgentsDir, { recursive: true });
+  ensureUserAgentsDir(paths);
   const filePath = join(paths.userAgentsDir, `${filenameSlug}.md`);
   const markdown = createAgentMarkdown({
     name,
