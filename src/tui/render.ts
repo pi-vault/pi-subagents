@@ -2,6 +2,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import {
   getSlashRenderableMessage,
   getSlashSnapshot,
+  isSlashLiveRunning,
 } from "../core/slash-live-state.js";
 import type {
   AgentToolResult,
@@ -149,7 +150,12 @@ export function buildSubagentResultText(
   }
 
   if (isSlashLiveDetails(details)) {
-    return buildSlashLiveText(details, expanded, theme);
+    const snapshotDetails = getSlashSnapshot(details.requestId)?.live;
+    const liveDetails =
+      snapshotDetails && snapshotDetails.durationMs >= details.durationMs
+        ? snapshotDetails
+        : details;
+    return buildSlashLiveText(liveDetails, expanded, theme);
   }
 
   const statusColor = getStatusColor(details.status);
@@ -300,14 +306,24 @@ function createSlashLiveMessageComponent(
   container.render = (width: number): string[] => {
     const snapshot = getSlashSnapshot(message.details.requestId);
     const currentVersion = snapshot?.version ?? 0;
-    if (currentVersion !== lastVersion) {
+    const running = isSlashLiveRunning(message.details.requestId);
+
+    if (currentVersion !== lastVersion || running) {
       lastVersion = currentVersion;
       const resolved = getSlashRenderableMessage(message.details);
       const baseContent = normalizeMessageContent(
         message.content as string | Array<{ type: string; text?: string }>,
       );
       const content = resolved?.content ?? baseContent;
-      const details = resolved?.details ?? message.details;
+      let details = resolved?.details ?? message.details;
+
+      if (running && "startedAt" in details) {
+        details = {
+          ...details,
+          durationMs: Math.max(0, Date.now() - details.startedAt),
+        };
+      }
+
       container.clear();
       container.addChild(
         new Text(

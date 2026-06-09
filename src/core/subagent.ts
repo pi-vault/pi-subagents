@@ -22,6 +22,13 @@ import {
   startSlashLiveRequest,
   updateSlashLiveRequest,
 } from "./slash-live-state.js";
+import {
+  getDeferredSlashRequest,
+  markDeferredSlashRequestConsumed,
+  rememberDeferredSlashRequest,
+  setDeferredSlashRuntimeState,
+  takeDeferredSlashRuntimeState,
+} from "./deferred-slash-state.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
@@ -30,7 +37,7 @@ import type {
   ResolvedPaths,
   RuntimeDeps,
   SubagentExecutionResult,
-  SlashAgentBridgeRequest,
+  SlashSubagentRequestPayload,
   SubagentToolActivity,
   SubagentToolInput,
   SubagentUsage,
@@ -73,7 +80,7 @@ const PI_SUBAGENT_PARENT_DEPTH = "PI_SUBAGENT_PARENT_DEPTH";
 const PI_SUBAGENT_PARENT_PATH = "PI_SUBAGENT_PARENT_PATH";
 const PI_SUBAGENT_PARENT_CAPABILITY_TOKEN =
   "PI_SUBAGENT_PARENT_CAPABILITY_TOKEN";
-const SLASH_AGENT_BRIDGE_PREFIX = "__pi_subagent_bridge__ ";
+const DEFERRED_TICKET_PREFIX = "__pi_subagents_deferred__ ";
 const SLASH_AGENT_BRIDGE_UNAVAILABLE =
   "No active pi-subagents runtime bridge is available for /agent.";
 
@@ -763,24 +770,15 @@ export function parseAgentCommandArgs(args: string): SubagentToolInput {
   };
 }
 
-function encodeSlashAgentBridgeRequest(
-  input: SlashAgentBridgeRequest,
-): string {
-  return `${SLASH_AGENT_BRIDGE_PREFIX}${JSON.stringify(input)}`;
+function encodeDeferredTicket(requestId: string): string {
+  return `${DEFERRED_TICKET_PREFIX}${requestId}`;
 }
 
-function decodeSlashAgentBridgeRequest(
-  text: string,
-): SlashAgentBridgeRequest | undefined {
-  if (!text.startsWith(SLASH_AGENT_BRIDGE_PREFIX)) {
+function decodeDeferredTicket(text: string): string | undefined {
+  if (!text.startsWith(DEFERRED_TICKET_PREFIX)) {
     return undefined;
   }
-
-  try {
-    return JSON.parse(text.slice(SLASH_AGENT_BRIDGE_PREFIX.length)) as SlashAgentBridgeRequest;
-  } catch {
-    return undefined;
-  }
+  return text.slice(DEFERRED_TICKET_PREFIX.length).trim() || undefined;
 }
 
 function buildExecutionResult(params: {
@@ -822,6 +820,30 @@ function buildExecutionResult(params: {
       recentToolActivity: params.recentToolActivity ?? [],
     },
   };
+}
+
+function buildSlashBridgeErrorResult(input: {
+  requestId: string;
+  message: string;
+  agent?: string;
+  task?: string;
+  cwd?: string;
+  model?: string;
+  durationMs?: number;
+}): SubagentExecutionResult {
+  return buildExecutionResult({
+    agent: input.agent ?? "(unknown)",
+    task: input.task ?? "",
+    cwd: input.cwd ?? "",
+    timeoutMs: 0,
+    durationMs: input.durationMs ?? 0,
+    model: input.model,
+    stopReason: "error",
+    exitCode: null,
+    stderr: input.message,
+    status: "error",
+    content: input.message,
+  });
 }
 
 export async function executeSubagent(
@@ -1130,41 +1152,100 @@ export function registerSlashAgentBridge(
   deps: RuntimeDeps,
   runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
 ): void {
-  pi.on("input", async (event, ctx) => {
+  pi.on("input", async (event) => {
     if (event.source !== "extension") {
       return;
     }
 
-    const request = decodeSlashAgentBridgeRequest(event.text);
-    if (!request) {
+    const requestId = decodeDeferredTicket(event.text);
+    if (!requestId) {
       return;
     }
 
-    const paths = deps.resolvePaths();
-    const loadedConfig = deps.loadConfig(paths);
-    const discovery = deps.discoverAgents(paths);
-    const parentSessionFile = ctx.sessionManager.getSessionFile();
-    const result = await executeSubagent(
-      paths,
-      loadedConfig,
-      discovery,
-      request,
-      ctx.cwd,
-      ctx.signal,
-      parentSessionFile,
-      parentSessionFile ? ctx.sessionManager.getSessionDir() : undefined,
-      getParentModelId(ctx.model),
-      runtime,
-      request.requestId
-        ? (update) => {
-            updateSlashLiveRequest(request.requestId!, update);
-          }
-        : undefined,
-    );
-
-    if (request.requestId) {
-      finalizeSlashLiveRequest(request.requestId, result);
+    const persisted = getDeferredSlashRequest(requestId);
+    if (!persisted) {
+      const result = buildSlashBridgeErrorResult({
+        requestId,
+        message: `Deferred /agent request could not be restored for ${requestId}.`,
+      });
+      finalizeSlashLiveRequest(requestId, result);
+      pi.sendMessage({
+        customType: "pi-subagent-result",
+        content: result.content,
+        display: true,
+        details: result.details,
+      });
+      return { action: "handled" };
     }
+
+    const runtimeState = takeDeferredSlashRuntimeState(requestId);
+    const payload: SlashSubagentRequestPayload = {
+      requestId,
+      agent: persisted.agent,
+      task: persisted.task,
+      cwd: persisted.cwd,
+      parentSessionFile: persisted.parentSessionFile,
+      parentSessionDir: persisted.parentSessionDir,
+      parentModel: persisted.parentModel,
+      signal: runtimeState?.signal,
+      requestRender: runtimeState?.requestRender,
+      cleanup: runtimeState?.cleanup,
+    };
+
+    const startedAt = Date.now();
+    let tickInterval: ReturnType<typeof setInterval> | undefined;
+    let result: SubagentExecutionResult;
+
+    try {
+      const paths = deps.resolvePaths();
+      const loadedConfig = deps.loadConfig(paths);
+      const discovery = deps.discoverAgents(paths);
+
+      tickInterval = setInterval(() => {
+        updateSlashLiveRequest(requestId, {
+          durationMs: Date.now() - startedAt,
+        });
+        payload.requestRender?.();
+      }, 250);
+
+      result = await executeSubagent(
+        paths,
+        loadedConfig,
+        discovery,
+        { agent: payload.agent, task: payload.task, cwd: payload.cwd },
+        payload.cwd,
+        payload.signal,
+        payload.parentSessionFile,
+        payload.parentSessionDir,
+        payload.parentModel,
+        runtime,
+        (update) => {
+          updateSlashLiveRequest(requestId, update);
+          payload.requestRender?.();
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      result = buildSlashBridgeErrorResult({
+        requestId,
+        agent: payload.agent,
+        task: payload.task,
+        cwd: payload.cwd,
+        model: payload.parentModel,
+        message,
+        durationMs: Date.now() - startedAt,
+      });
+    } finally {
+      if (tickInterval) {
+        clearInterval(tickInterval);
+      }
+      payload.cleanup?.();
+      if ("appendEntry" in pi && typeof pi.appendEntry === "function") {
+        markDeferredSlashRequestConsumed(pi as { appendEntry(customType: string, data: unknown): void }, requestId);
+      }
+    }
+
+    finalizeSlashLiveRequest(requestId, result);
     return { action: "handled" };
   });
 }
@@ -1219,7 +1300,7 @@ export function registerAgentCommand(
   pi: ExtensionAPI,
   _deps: RuntimeDeps,
   _runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
-  isBridgeAvailable: () => boolean = () => false,
+  isBridgeAvailable: () => boolean = () => true,
 ): void {
   pi.registerCommand("agent", {
     description: "Run a discovered pi-subagents agent in the foreground",
@@ -1235,6 +1316,7 @@ export function registerAgentCommand(
 
       const input = parseAgentCommandArgs(args);
       const requestId = _runtime.createRunId();
+
       pi.sendMessage({
         customType: "pi-subagent-result",
         content: "",
@@ -1244,15 +1326,45 @@ export function registerAgentCommand(
           agent: input.agent,
           task: input.task,
           cwd: ctx.cwd,
-          model: getParentModelId((ctx as ExtensionCommandContext).model),
+          model: getParentModelId(ctx.model),
         }),
       });
-      pi.sendUserMessage(
-        encodeSlashAgentBridgeRequest({ ...input, cwd: ctx.cwd, requestId }),
-        {
-          deliverAs: ctx.isIdle() ? undefined : "followUp",
-        },
-      );
+
+      let liveTui: { requestRender?: () => void } | undefined;
+      const tickerKey = `pi-subagents-ticker-${requestId}`;
+      ctx.ui.setWidget?.(tickerKey, (tui: unknown) => {
+        liveTui = tui as { requestRender?: () => void };
+        return { render: () => [], invalidate: () => {} };
+      });
+
+      const persistedRequest = {
+        requestId,
+        agent: input.agent,
+        task: input.task,
+        cwd: ctx.cwd,
+        parentSessionFile: ctx.sessionManager.getSessionFile(),
+        parentSessionDir: ctx.sessionManager.getSessionFile()
+          ? ctx.sessionManager.getSessionDir()
+          : undefined,
+        parentModel: getParentModelId(ctx.model),
+        createdAt: Date.now(),
+      };
+
+      if ("appendEntry" in pi && typeof pi.appendEntry === "function") {
+        rememberDeferredSlashRequest(
+          pi as { appendEntry(customType: string, data: unknown): void },
+          persistedRequest,
+        );
+      }
+      setDeferredSlashRuntimeState(requestId, {
+        signal: ctx.signal,
+        requestRender: () => liveTui?.requestRender?.(),
+        cleanup: () => ctx.ui.setWidget?.(tickerKey, undefined),
+      });
+
+      pi.sendUserMessage(encodeDeferredTicket(requestId), {
+        deliverAs: ctx.isIdle() ? undefined : "followUp",
+      });
     },
   });
 }

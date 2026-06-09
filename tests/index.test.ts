@@ -6,7 +6,9 @@ import type {
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import * as deferredState from "../src/core/deferred-slash-state.js";
+import * as subagentsIndex from "../src/index.js";
 import extension, { registerSubagentsExtension } from "../src/index.js";
 import {
   runAgentsMenuAction,
@@ -15,6 +17,7 @@ import {
   buildAlignedRows,
   describeAgentEntry,
 } from "../src/tui/agents-menu.js";
+import { startSlashLiveRequest } from "../src/core/slash-live-state.js";
 import type {
   AgentCreationInput,
   AgentDiscoveryResult,
@@ -37,9 +40,12 @@ function createPaths(): ResolvedPaths {
 function createPi(
   registerCommand?: (name: string, command: RegisteredCommand) => void,
   registerMessageRenderer?: (customType: string, renderer: unknown) => void,
+  onRegister?: (event: string, handler: (...args: unknown[]) => unknown) => void,
 ) {
   return {
-    on() {},
+    on(event: string, handler: (...args: unknown[]) => unknown) {
+      onRegister?.(event, handler);
+    },
     registerTool() {},
     registerCommand(name: string, command: RegisteredCommand) {
       registerCommand?.(name, command);
@@ -91,6 +97,26 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
 }
 
 describe("subagents extension", () => {
+  test("hydrates deferred slash requests on session_start", async () => {
+    const eventHandlers = new Map<string, (...args: unknown[]) => unknown>();
+    const hydrateSpy = vi.spyOn(deferredState, "hydrateDeferredSlashRequestsFromSession");
+    const pi = createPi(undefined, undefined, (event, handler) => {
+      eventHandlers.set(event, handler);
+    });
+
+    registerSubagentsExtension(pi, createMenuDeps());
+
+    const sessionManager = {
+      getEntries() {
+        return [];
+      },
+    };
+
+    await eventHandlers.get("session_start")?.({}, { sessionManager });
+
+    expect(hydrateSpy).toHaveBeenCalledWith(sessionManager);
+  });
+
   test("loads without throwing and registers the subagent result message renderer", () => {
     const commands: Array<{ name: string; description?: string }> = [];
     const renderers: Array<{ customType: string; renderer: unknown }> = [];
@@ -121,6 +147,10 @@ describe("subagents extension", () => {
     expect(commands).not.toContainEqual(
       expect.objectContaining({ name: "agents:add" }),
     );
+  });
+
+  test("registerSubagentsExtension no longer exports slash-live controller helpers", () => {
+    expect("createSlashLiveControllerFromContext" in subagentsIndex).toBe(false);
   });
 
   test("/agents opens a custom menu instead of sending a notify dump", async () => {

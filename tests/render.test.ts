@@ -1,7 +1,9 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  clearSlashLiveRequest,
   finalizeSlashLiveRequest,
   startSlashLiveRequest,
+  tickSlashLiveRequest,
   updateSlashLiveRequest,
 } from "../src/core/slash-live-state.js";
 import {
@@ -81,12 +83,35 @@ function createSlashLiveDetails(
     task: "explore this repo",
     cwd: "/repo",
     durationMs: 42,
+    startedAt: 0,
     recentToolActivity: [
       { label: "read package", preview: '{"path":"package.json"}' },
     ],
     ...overrides,
   };
 }
+
+describe("slash live state", () => {
+  afterEach(() => {
+    clearSlashLiveRequest("req-widget");
+    clearSlashLiveRequest("req-tick");
+    vi.useRealTimers();
+  });
+
+  test("tickSlashLiveRequest refreshes duration from elapsed time", () => {
+    const details = startSlashLiveRequest({
+      requestId: "req-widget",
+      agent: "Scout",
+      task: "inspect this repo",
+      cwd: "/repo",
+      startedAtMs: 1_000,
+    });
+
+    tickSlashLiveRequest("req-widget", 1_450);
+
+    expect(details.durationMs).toBe(450);
+  });
+});
 
 describe("subagent render helpers", () => {
   test("renderCall includes agent, task preview, and cwd when present", () => {
@@ -159,6 +184,36 @@ describe("subagent render helpers", () => {
     expect(text).toContain("tools: read package");
   });
 
+  test("slash-live duration keeps advancing across renders while request is running", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"));
+
+    const details = startSlashLiveRequest({
+      requestId: "req-live-1",
+      agent: "Scout",
+      task: "inspect repo",
+      cwd: "/repo",
+      model: "gpt-5",
+    });
+
+    const component = renderSubagentMessage(
+      {
+        customType: "pi-subagent-result",
+        content: "",
+        display: true,
+        details,
+      } as never,
+      { expanded: false } as never,
+      createTheme() as never,
+    );
+
+    expect(component.render(80).join("\n")).toContain("0ms");
+    vi.advanceTimersByTime(2400);
+    expect(component.render(80).join("\n")).toContain("2400ms");
+
+    vi.useRealTimers();
+  });
+
   test("renderSubagentMessage resolves slash details from the latest snapshot", () => {
     const details = startSlashLiveRequest({
       requestId: "req-1",
@@ -182,6 +237,54 @@ describe("subagent render helpers", () => {
     ).render(120).join("\n");
 
     expect(text).toContain("read done");
+  });
+
+  test("slash live render shows updated duration after a tick", () => {
+    startSlashLiveRequest({
+      requestId: "req-tick",
+      agent: "Scout",
+      task: "inspect this repo",
+      cwd: "/repo",
+      startedAtMs: 1_000,
+    });
+
+    tickSlashLiveRequest("req-tick", 1_250);
+
+    const text = buildSubagentResultText(
+      "",
+      createSlashLiveDetails({ requestId: "req-tick", durationMs: 0 }),
+      false,
+      theme,
+    );
+
+    expect(text).toContain("duration: 250ms");
+  });
+
+  test("running inline slash card does not freeze at a stale duration across quiet renders", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"));
+
+    const details = startSlashLiveRequest({
+      requestId: "req-freeze-check",
+      agent: "scout",
+      task: "explore this repo",
+      cwd: "/repo",
+    });
+
+    const component = renderSubagentMessage(
+      { content: "", details },
+      { expanded: false } as never,
+      createTheme() as never,
+    );
+
+    const first = component.render(120).join("\n");
+    vi.advanceTimersByTime(2500);
+    const second = component.render(120).join("\n");
+
+    expect(first).not.toContain("2500ms");
+    expect(second).toContain("2500ms");
+    clearSlashLiveRequest("req-freeze-check");
+    vi.useRealTimers();
   });
 
   test("slash live message component refreshes when snapshot changes", () => {
@@ -245,6 +348,7 @@ describe("subagent render helpers", () => {
     const text = buildSubagentResultText(
       "",
       createSlashLiveDetails({
+        requestId: "req-expanded",
         recentToolActivity: [
           { label: "read start", preview: '{"path":"package.json"}' },
           { label: "read done", preview: '{"content":[{"type":"text","text":"ok"}]}' },

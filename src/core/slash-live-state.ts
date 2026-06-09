@@ -35,7 +35,9 @@ export function startSlashLiveRequest(input: {
   task: string;
   cwd: string;
   model?: string;
+  startedAtMs?: number;
 }): SlashLiveDetails {
+  const startedAt = input.startedAtMs ?? Date.now();
   const details: SlashLiveDetails = {
     kind: "slash-live",
     requestId: input.requestId,
@@ -44,6 +46,7 @@ export function startSlashLiveRequest(input: {
     task: input.task,
     cwd: input.cwd,
     durationMs: 0,
+    startedAt,
     recentToolActivity: [],
     model: input.model,
   };
@@ -82,6 +85,29 @@ export function updateSlashLiveRequest(
   };
   snapshot.version = nextVersion();
   return snapshot.live;
+}
+
+export function tickSlashLiveRequest(
+  requestId: string,
+  nowMs = Date.now(),
+): SlashLiveDetails | undefined {
+  const snapshot = liveRequests.get(requestId);
+  if (!snapshot || snapshot.final) {
+    return undefined;
+  }
+
+  snapshot.live.durationMs = Math.max(0, nowMs - snapshot.live.startedAt);
+  snapshot.version = nextVersion();
+  return snapshot.live;
+}
+
+export function isSlashLiveRunning(requestId: string): boolean {
+  const snapshot = liveRequests.get(requestId);
+  return Boolean(snapshot && !snapshot.final);
+}
+
+export function clearSlashLiveRequest(requestId: string): void {
+  liveRequests.delete(requestId);
 }
 
 export function finalizeSlashLiveRequest(
