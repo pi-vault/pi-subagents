@@ -87,10 +87,10 @@ function parseCommaSeparatedList(value: string | undefined): string[] {
 }
 
 function renderRow(theme: Theme, label: string, selected: boolean): string {
-  if (selected) {
-    return `▸ ${theme.bg("toolPendingBg", theme.fg("toolTitle", theme.bold(label)))}`;
-  }
-  return `  ${theme.fg("dim", label)}`;
+  const styledLabel = selected
+    ? theme.fg("accent", theme.bold(label))
+    : theme.fg("dim", label);
+  return `${selected ? "▸" : " "} ${styledLabel}`;
 }
 
 export function buildAlignedRows<T>(rows: Array<MenuRow<T>>): string[] {
@@ -125,7 +125,7 @@ async function showRowsMenu<T>(
     if (ctx.ui.select) {
       const selectLabels = buildSelectLabels(rows);
       const selectedLabel = await ctx.ui.select(title, selectLabels);
-      const index = selectLabels.findIndex((row) => row === selectedLabel);
+      const index = selectedLabel ? selectLabels.indexOf(selectedLabel) : -1;
       return index >= 0 ? rows[index]?.value : undefined;
     }
     if (footer) {

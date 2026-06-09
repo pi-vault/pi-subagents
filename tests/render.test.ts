@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   finalizeSlashLiveRequest,
   startSlashLiveRequest,
@@ -81,6 +81,7 @@ function createSlashLiveDetails(
     task: "explore this repo",
     cwd: "/repo",
     durationMs: 42,
+    startedAt: Date.now(),
     recentToolActivity: [
       { label: "read package", preview: '{"path":"package.json"}' },
     ],
@@ -182,6 +183,40 @@ describe("subagent render helpers", () => {
     ).render(120).join("\n");
 
     expect(text).toContain("read done");
+  });
+
+  test("slash-live duration keeps advancing across renders while request is running", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"));
+
+    const details = startSlashLiveRequest({
+      requestId: "req-live-1",
+      agent: "Scout",
+      task: "inspect repo",
+      cwd: "/repo",
+      model: "gpt-5",
+    });
+
+    const component = renderSubagentMessage(
+      {
+        customType: "pi-subagent-result",
+        content: "",
+        display: true,
+        details,
+      } as never,
+      { expanded: false },
+      createTheme() as never,
+    );
+
+    const first = component.render(80).join("\n");
+    expect(first).toContain("0ms");
+
+    vi.advanceTimersByTime(2400);
+
+    const second = component.render(80).join("\n");
+    expect(second).toContain("2400ms");
+
+    vi.useRealTimers();
   });
 
   test("slash live message component refreshes when snapshot changes", () => {

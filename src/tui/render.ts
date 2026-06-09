@@ -2,7 +2,8 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import {
   getSlashRenderableMessage,
   getSlashSnapshot,
-} from "../core/slash-live-state.js";
+  isSlashLiveRunning,
+} from "../core/slash-live-state.ts";
 import type {
   AgentToolResult,
   MessageRenderOptions,
@@ -15,7 +16,7 @@ import type {
   SubagentExecutionDetails,
   SubagentMessageDetails,
   SubagentToolInput,
-} from "../shared/types.js";
+} from "../shared/types.ts";
 
 const MAX_TASK_PREVIEW = 80;
 const MAX_ACTIVITY_PREVIEW = 72;
@@ -300,14 +301,27 @@ function createSlashLiveMessageComponent(
   container.render = (width: number): string[] => {
     const snapshot = getSlashSnapshot(message.details.requestId);
     const currentVersion = snapshot?.version ?? 0;
-    if (currentVersion !== lastVersion) {
+    const isRunning = isSlashLiveRunning(message.details.requestId);
+
+    // Always rebuild while running so duration is fresh on every render cycle.
+    // Also rebuild whenever the version changes (new event arrived).
+    if (currentVersion !== lastVersion || isRunning) {
       lastVersion = currentVersion;
       const resolved = getSlashRenderableMessage(message.details);
       const baseContent = normalizeMessageContent(
         message.content as string | Array<{ type: string; text?: string }>,
       );
       const content = resolved?.content ?? baseContent;
-      const details = resolved?.details ?? message.details;
+      let details = resolved?.details ?? message.details;
+
+      // Compute fresh durationMs from startedAt so it reflects wall-clock time
+      if (isRunning && "startedAt" in details) {
+        details = {
+          ...details,
+          durationMs: Date.now() - (details as SlashLiveDetails).startedAt,
+        } as typeof details;
+      }
+
       container.clear();
       container.addChild(
         new Text(

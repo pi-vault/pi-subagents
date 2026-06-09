@@ -3,7 +3,7 @@ import type {
   SubagentExecutionResult,
   SubagentExecutionDetails,
   SubagentToolActivity,
-} from "../shared/types.js";
+} from "../shared/types.ts";
 
 type SlashSnapshot = {
   live: SlashLiveDetails;
@@ -44,6 +44,7 @@ export function startSlashLiveRequest(input: {
     task: input.task,
     cwd: input.cwd,
     durationMs: 0,
+    startedAt: Date.now(),
     recentToolActivity: [],
     model: input.model,
   };
@@ -100,6 +101,11 @@ export function getSlashSnapshot(
   requestId: string,
 ): SlashSnapshot | undefined {
   return liveRequests.get(requestId);
+}
+
+export function isSlashLiveRunning(requestId: string): boolean {
+  const snapshot = liveRequests.get(requestId);
+  return Boolean(snapshot && !snapshot.final);
 }
 
 export function getSlashRenderableMessage(

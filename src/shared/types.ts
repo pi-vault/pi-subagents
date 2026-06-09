@@ -144,6 +144,7 @@ export interface SlashLiveDetails {
   task: string;
   cwd: string;
   durationMs: number;
+  startedAt: number;
   recentToolActivity: SubagentToolActivity[];
   childSessionPath?: string;
   model?: string;
@@ -165,4 +166,77 @@ export interface SubagentCommandMessage {
   content: string;
   display: boolean;
   details?: SubagentMessageDetails;
+}
+
+// Event channel names for the slash-agent event bus
+export const SLASH_SUBAGENT_REQUEST_EVENT  = "subagent:slash:request"  as const;
+export const SLASH_SUBAGENT_STARTED_EVENT  = "subagent:slash:started"  as const;
+export const SLASH_SUBAGENT_RESPONSE_EVENT = "subagent:slash:response" as const;
+export const SLASH_SUBAGENT_UPDATE_EVENT   = "subagent:slash:update"   as const;
+export const SLASH_SUBAGENT_CANCEL_EVENT   = "subagent:slash:cancel"   as const;
+export const SLASH_RESULT_TYPE             = "pi-subagent-result"      as const;
+
+// Payload sent via pi.events for the slash-agent bridge.
+// Carries all ctx-derived values (signal, session paths, model)
+// and TUI render/cleanup callbacks — because pi.events handlers
+// do NOT receive ctx themselves.
+export interface SlashSubagentRequestPayload {
+  requestId: string;
+  agent: string;
+  task: string;
+  cwd: string;
+  parentSessionFile: string | undefined;
+  parentSessionDir: string | undefined;
+  parentModel: string | undefined;
+  signal: AbortSignal | undefined;
+  /** Calls tui.requestRender() — captured via setWidget factory in command handler */
+  requestRender: (() => void) | undefined;
+  /** Removes the ticker widget set up in command handler */
+  cleanup: (() => void) | undefined;
+}
+
+export const DEFERRED_SLASH_REQUEST_ENTRY = "pi-subagents:deferred-request" as const;
+export const DEFERRED_SLASH_REQUEST_CONSUMED_ENTRY =
+  "pi-subagents:deferred-request-consumed" as const;
+
+export interface PersistedDeferredSlashRequest {
+  requestId: string;
+  agent: string;
+  task: string;
+  cwd: string;
+  parentSessionFile?: string;
+  parentSessionDir?: string;
+  parentModel?: string;
+  createdAt: number;
+}
+
+export interface DeferredSlashRuntimeState {
+  signal?: AbortSignal;
+  requestRender?: () => void;
+  cleanup?: () => void;
+}
+
+// Background agent types
+export type BackgroundJobState = "queued" | "running" | "complete" | "failed";
+
+export interface BackgroundJobRecord {
+  id: string;
+  agent: string;
+  task: string;
+  cwd: string;
+  state: BackgroundJobState;
+  pid?: number;
+  startedAt: number;
+  endedAt?: number;
+  resultPath?: string;
+  errorMessage?: string;
+}
+
+export interface BackgroundJobStatus {
+  id: string;
+  agent: string;
+  task: string;
+  state: BackgroundJobState;
+  durationMs: number;
+  errorMessage?: string;
 }

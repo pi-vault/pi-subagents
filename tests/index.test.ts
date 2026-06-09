@@ -6,7 +6,8 @@ import type {
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import * as deferredState from "../src/core/deferred-slash-state.js";
 import extension, { registerSubagentsExtension } from "../src/index.js";
 import {
   runAgentsMenuAction,
@@ -16,9 +17,7 @@ import {
   describeAgentEntry,
 } from "../src/tui/agents-menu.js";
 import type {
-  AgentCreationInput,
   AgentDiscoveryResult,
-  LoadedConfig,
   ResolvedPaths,
   RuntimeDeps,
   SubagentsConfig,
@@ -37,9 +36,16 @@ function createPaths(): ResolvedPaths {
 function createPi(
   registerCommand?: (name: string, command: RegisteredCommand) => void,
   registerMessageRenderer?: (customType: string, renderer: unknown) => void,
+  onRegister?: (event: string, handler: (...args: unknown[]) => unknown) => void,
 ) {
   return {
-    on() {},
+    on(event: string, handler: (...args: unknown[]) => unknown) {
+      onRegister?.(event, handler);
+    },
+    events: {
+      emit() {},
+      on() { return () => {}; },
+    },
     registerTool() {},
     registerCommand(name: string, command: RegisteredCommand) {
       registerCommand?.(name, command);
@@ -62,17 +68,16 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     maxRecursiveLevel: 3,
     defaultTimeoutMs: 600_000,
   };
+  const scoutAgent = {
+    name: "Scout",
+    description: "Scout files",
+    tools: ["read", "bash"],
+    subagentAgents: [],
+    systemPrompt: "You are Scout.",
+    sourcePath: "/repo/agents/scout.md",
+  };
   const discovery: AgentDiscoveryResult = {
-    agents: [
-      {
-        name: "Scout",
-        description: "Scout files",
-        tools: ["read", "bash"],
-        subagentAgents: [],
-        systemPrompt: "You are Scout.",
-        sourcePath: "/repo/agents/scout.md",
-      },
-    ],
+    agents: [scoutAgent],
     diagnostics: [],
   };
 
@@ -81,9 +86,9 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     loadConfig: () => ({ exists: false, config }),
     discoverAgents: () => discovery,
     discoverToolNames: () => ["bash", "read", "write"],
-    createAgentFile: () => discovery.agents[0]!,
-    exportAgentToUserScope: () => discovery.agents[0]!,
-    disableAgentInUserScope: () => ({ ...discovery.agents[0]!, disabled: true }),
+    createAgentFile: () => scoutAgent,
+    exportAgentToUserScope: () => scoutAgent,
+    disableAgentInUserScope: () => ({ ...scoutAgent, disabled: true }),
     deleteUserAgentOverride: () => {},
     saveConfig: () => {},
     ...overrides,
@@ -91,6 +96,26 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
 }
 
 describe("subagents extension", () => {
+  test("hydrates deferred slash requests on session_start", async () => {
+    const eventHandlers = new Map<string, (...args: unknown[]) => unknown>();
+    const hydrateSpy = vi.spyOn(deferredState, "hydrateDeferredSlashRequestsFromSession");
+    const pi = createPi(undefined, undefined, (event, handler) => {
+      eventHandlers.set(event, handler);
+    });
+
+    registerSubagentsExtension(pi, createMenuDeps());
+
+    const sessionManager = {
+      getEntries() {
+        return [];
+      },
+    };
+
+    await eventHandlers.get("session_start")?.({}, { sessionManager });
+
+    expect(hydrateSpy).toHaveBeenCalledWith(sessionManager);
+  });
+
   test("loads without throwing and registers the subagent result message renderer", () => {
     const commands: Array<{ name: string; description?: string }> = [];
     const renderers: Array<{ customType: string; renderer: unknown }> = [];

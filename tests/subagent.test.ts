@@ -16,14 +16,24 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import { encodePiCwd } from "../src/shared/artifacts.js";
+import { bgResultPath } from "../src/core/background-status.js";
 import {
   executeSubagent,
   parseAgentCommandArgs,
   registerAgentCommand,
   registerSlashAgentBridge,
   registerSubagentTool,
+  resolvePiInvocation,
   type SubagentRuntimeDeps,
 } from "../src/core/subagent.js";
+import {
+  getDeferredSlashRequest,
+  hydrateDeferredSlashRequestsFromSession,
+} from "../src/core/deferred-slash-state.js";
+import {
+  getSlashSnapshot,
+  startSlashLiveRequest,
+} from "../src/core/slash-live-state.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
@@ -170,6 +180,18 @@ async function withEnv(
 }
 
 describe("subagent execution", () => {
+  test("resolvePiInvocation falls back to pi when running inside background-runner", () => {
+    const previous = process.argv[1];
+    process.argv[1] = "/Users/lanh/Developer/pi-vault/pi-subagents/src/core/background-runner.ts";
+
+    try {
+      expect(resolvePiInvocation(["--mode", "json"]))
+        .toEqual({ command: "pi", args: ["--mode", "json"] });
+    } finally {
+      process.argv[1] = previous;
+    }
+  });
+
   test("returns structured errors for missing task and unknown agents before spawn", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
@@ -1198,7 +1220,242 @@ describe("subagent execution", () => {
   });
 });
 
+test("background launch writes result.json instead of dying before the runner boots", async () => {
+  const runId = `bg-runner-${Date.now()}`;
+  const { spawnBackgroundSubagent } = await import("../src/core/background-execution.js");
+
+  const spawned = await spawnBackgroundSubagent(
+    runId,
+    "DefinitelyMissingAgent",
+    "noop",
+    "/Users/lanh/Developer/pi-vault/pi-subagents",
+    undefined,
+    undefined,
+    undefined,
+  );
+
+  expect("pid" in spawned).toBe(true);
+
+  let attempts = 0;
+  while (!existsSync(bgResultPath(runId)) && attempts < 50) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    attempts += 1;
+  }
+
+  expect(existsSync(bgResultPath(runId))).toBe(true);
+
+  const result = JSON.parse(readFileSync(bgResultPath(runId), "utf8")) as {
+    content: string;
+    isError: boolean;
+  };
+  expect(result.isError).toBe(true);
+  expect(result.content).toContain("Unknown agent");
+  expect(result.content).not.toContain("ERR_MODULE_NOT_FOUND");
+});
+
+test("deferred slash requests survive reload via session-backed persistence", async () => {
+  const entries = [
+    {
+      type: "custom",
+      customType: "pi-subagents:deferred-request",
+      data: {
+        requestId: "req-persist-1",
+        agent: "Scout",
+        task: "inspect repo",
+        cwd: "/repo",
+        createdAt: 1,
+      },
+    },
+  ];
+
+  hydrateDeferredSlashRequestsFromSession({
+    getEntries() {
+      return entries as never[];
+    },
+  } as never);
+
+  const restored = getDeferredSlashRequest("req-persist-1");
+  expect(restored).toMatchObject({
+    requestId: "req-persist-1",
+    agent: "Scout",
+    task: "inspect repo",
+  });
+});
+
 describe("subagent registration", () => {
+  test("background subagent returns a clear error when jiti cannot be resolved", async () => {
+    vi.resetModules();
+    vi.doMock("../src/core/background-execution.js", () => ({
+      isBackgroundExecutionAvailable: vi.fn(async () => false),
+      spawnBackgroundSubagent: vi.fn(),
+    }));
+
+    const tools: Array<{
+      name: string;
+      execute: (...args: unknown[]) => Promise<{
+        content: Array<{ text?: string }>;
+        isError: boolean;
+      }>;
+    }> = [];
+    const deps = createDeps(createPaths("/tmp/pi-subagents-bg-tool"), {
+      agents: [createAgent({ systemPrompt: "" })],
+      diagnostics: [],
+    });
+    const runtime = createRuntime(vi.fn() as never);
+    const { registerSubagentTool } = await import("../src/core/subagent.js");
+
+    const pi = {
+      registerTool(definition: {
+        name: string;
+        execute: (...args: unknown[]) => Promise<{
+          content: Array<{ text?: string }>;
+          isError: boolean;
+        }>;
+      }) {
+        tools.push(definition);
+      },
+    } as unknown as ExtensionAPI;
+
+    registerSubagentTool(pi, deps, runtime);
+    const tool = tools.find((entry) => entry.name === "subagent");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("subagent tool not registered");
+    }
+    const result = await tool.execute(
+      "call-1",
+      { agent: "Scout", task: "inspect repo", background: true },
+      undefined,
+      undefined,
+      {
+        cwd: "/repo",
+        model: { provider: "openai", id: "gpt-5" },
+        sessionManager: {
+          getSessionFile() {
+            return undefined;
+          },
+          getSessionDir() {
+            return "/unused";
+          },
+        },
+      },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("Background execution unavailable");
+    vi.doUnmock("../src/core/background-execution.js");
+  });
+
+  test("agent command queues followUp ticket and persists request payload", async () => {
+    const appended: Array<{ customType: string; data: unknown }> = [];
+    const sent: Array<{ text: string; options?: unknown }> = [];
+    const commands = new Map<string, RegisteredCommand>();
+    const deps = createDeps(createPaths("/tmp/pi-subagents-cmd"), {
+      agents: [createAgent({ systemPrompt: "" })],
+      diagnostics: [],
+    });
+    const runtime = createRuntime(vi.fn() as never, { runId: "req-busy-1" });
+
+    const pi = {
+      on() {},
+      events: { emit() {}, on() { return () => {}; } },
+      registerTool() {},
+      registerCommand(name: string, command: RegisteredCommand) {
+        commands.set(name, command);
+      },
+      appendEntry(customType: string, data: unknown) {
+        appended.push({ customType, data });
+      },
+      sendMessage() {},
+      sendUserMessage(text: string, options?: unknown) {
+        sent.push({ text, options });
+      },
+    } as unknown as ExtensionAPI;
+
+    registerAgentCommand(pi, deps, runtime);
+    expect(commands.get("agent")).toBeDefined();
+    await commands.get("agent")?.handler("Scout inspect repo", {
+      cwd: "/repo",
+      signal: undefined,
+      model: { provider: "openai", id: "gpt-5" },
+      isIdle() {
+        return false;
+      },
+      sessionManager: {
+        getSessionFile() {
+          return "/sessions/parent.jsonl";
+        },
+        isPersisted() {
+          return true;
+        },
+        getSessionDir() {
+          return "/sessions";
+        },
+        getEntries() {
+          return [];
+        },
+      },
+      ui: { notify() {}, setWidget() {} },
+    } as never);
+
+    expect(appended[0]?.customType).toBe("pi-subagents:deferred-request");
+    expect(sent[0]).toMatchObject({
+      text: expect.stringContaining("__pi_subagents_deferred__"),
+      options: { deliverAs: "followUp" },
+    });
+  });
+
+  test("bridge finalizes slash-live request with error when deferred ticket has no persisted payload", async () => {
+    const sentMessages: unknown[] = [];
+    const inputHandlers: Array<(event: { source: string; text: string }) => unknown> = [];
+    const deps = createDeps(createPaths("/tmp/pi-subagents-bridge"), {
+      agents: [createAgent({ systemPrompt: "" })],
+      diagnostics: [],
+    });
+    const runtime = createRuntime(vi.fn() as never, { runId: "req-missing-1" });
+    startSlashLiveRequest({
+      requestId: "req-missing-1",
+      agent: "Scout",
+      task: "inspect repo",
+      cwd: "/repo",
+      model: "gpt-5",
+    });
+
+    const pi = {
+      on(event: string, handler: (payload: unknown) => unknown) {
+        if (event === "input") inputHandlers.push(handler as never);
+      },
+      events: { emit() {}, on() { return () => {}; } },
+      registerTool() {},
+      registerCommand() {},
+      sendUserMessage() {},
+      sendMessage(message: unknown) {
+        sentMessages.push(message);
+      },
+    } as unknown as ExtensionAPI;
+
+    registerSlashAgentBridge(pi, deps, runtime);
+
+    expect(inputHandlers[0]).toBeDefined();
+    inputHandlers[0]?.({
+      source: "extension",
+      text: "__pi_subagents_deferred__ req-missing-1",
+    });
+
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        customType: "pi-subagent-result",
+        content: expect.stringContaining("Deferred /agent request could not be restored"),
+      }),
+    );
+    expect(getSlashSnapshot("req-missing-1")?.final).toEqual(
+      expect.objectContaining({
+        isError: true,
+        content: expect.stringContaining("Deferred /agent request could not be restored"),
+      }),
+    );
+  });
+
   test("/agent emits one live slash card instead of appending every progress update", async () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
     const paths = createPaths(rootDir);
@@ -1207,9 +1464,6 @@ describe("subagent registration", () => {
     const tools: Array<{ name: string; renderCall?: unknown; renderResult?: unknown }> = [];
     const commands = new Map<string, RegisteredCommand>();
     const messages: unknown[] = [];
-    let inputHandler:
-      | ((event: { text: string; source: "extension" }, ctx: unknown) => Promise<{ action: "handled" } | undefined>)
-      | undefined;
     const runtime = createRuntime(
       ((_, __, ___) => {
         const child = new FakeChildProcess();
@@ -1229,9 +1483,23 @@ describe("subagent registration", () => {
       }) as SubagentRuntimeDeps["spawnChild"],
     );
 
+    // The bridge registers pi.on("input") to relay deferred tickets;
+    // sendUserMessage simulates Pi dispatching the ticket back as an extension input.
+    let inputHandler: ((event: { text: string; source: string }) => unknown) | undefined;
+    const eventListeners = new Map<string, Array<(data: unknown) => void>>();
     const pi = {
-      on(_event: string, handler: typeof inputHandler) {
-        inputHandler = handler;
+      on(event: string, handler: (event: { text: string; source: string }) => unknown) {
+        if (event === "input") inputHandler = handler;
+      },
+      events: {
+        on(channel: string, handler: (data: unknown) => void) {
+          const existing = eventListeners.get(channel) ?? [];
+          eventListeners.set(channel, [...existing, handler]);
+          return () => {};
+        },
+        emit(channel: string, data: unknown) {
+          for (const h of eventListeners.get(channel) ?? []) h(data);
+        },
       },
       registerTool(definition: { name: string; renderCall?: unknown; renderResult?: unknown }) {
         tools.push(definition);
@@ -1239,26 +1507,13 @@ describe("subagent registration", () => {
       registerCommand(name: string, command: RegisteredCommand) {
         commands.set(name, command);
       },
+      appendEntry() {},
       sendMessage(message: unknown) {
         messages.push(message);
       },
       sendUserMessage(text: string) {
-        return inputHandler?.(
-          { text, source: "extension" },
-          {
-            cwd: "/repo",
-            signal: undefined,
-            model: { provider: "openai", id: "gpt-5" },
-            sessionManager: {
-              getSessionFile() {
-                return undefined;
-              },
-              getSessionDir() {
-                return "/unused";
-              },
-            },
-          },
-        );
+        // Simulate Pi dispatching the deferred ticket back as an extension input
+        inputHandler?.({ text, source: "extension" });
       },
     } as unknown as ExtensionAPI;
 
@@ -1284,6 +1539,7 @@ describe("subagent registration", () => {
     await handler?.("Scout inspect this repo", {
       cwd: "/repo",
       signal: undefined,
+      model: { provider: "openai", id: "gpt-5" },
       isIdle() {
         return true;
       },
@@ -1298,9 +1554,9 @@ describe("subagent registration", () => {
           return "/unused";
         },
       },
-      ui: { notify() {} },
+      ui: { notify() {}, setWidget() {} },
     } as never);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(messages).toEqual([
       expect.objectContaining({
@@ -1322,6 +1578,8 @@ describe("subagent registration", () => {
     const messages: unknown[] = [];
 
     const pi = {
+      on() {},
+      events: { emit() {}, on() { return () => {}; } },
       registerTool() {},
       registerCommand(name: string, command: RegisteredCommand) {
         commands.set(name, command);
@@ -1331,7 +1589,7 @@ describe("subagent registration", () => {
       },
     } as unknown as ExtensionAPI;
 
-    registerAgentCommand(pi, deps);
+    registerAgentCommand(pi, deps, undefined, () => false);
 
     const handler = commands.get("agent")?.handler;
     expect(handler).toBeDefined();
