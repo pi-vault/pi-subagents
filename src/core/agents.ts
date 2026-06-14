@@ -334,6 +334,39 @@ export function parseAgentFile(
     enabled = raw !== "true";
   }
 
+  let skills: string[] | boolean | undefined;
+  if (frontmatter.skills !== undefined) {
+    if (typeof frontmatter.skills === "string") {
+      const raw = frontmatter.skills.trim().toLowerCase();
+      if (raw === "none" || raw === "false") {
+        skills = false;
+      } else if (raw === "true" || raw === "all") {
+        skills = true;
+      } else if (raw === "") {
+        skills = undefined;
+      } else {
+        // Comma-separated list (use original case, not lowered)
+        const parsed = parseStringArray(frontmatter.skills, "skills");
+        if (!parsed.ok) {
+          return {
+            ok: false,
+            diagnostic: { path: filePath, reason: parsed.reason },
+          };
+        }
+        skills = parsed.value.length > 0 ? parsed.value : undefined;
+      }
+    } else if (Array.isArray(frontmatter.skills)) {
+      const parsed = parseStringArray(frontmatter.skills, "skills");
+      if (!parsed.ok) {
+        return {
+          ok: false,
+          diagnostic: { path: filePath, reason: parsed.reason },
+        };
+      }
+      skills = parsed.value.length > 0 ? parsed.value : undefined;
+    }
+  }
+
   return {
     ok: true,
     agent: {
@@ -345,6 +378,7 @@ export function parseAgentFile(
       subagentAgents: subagentAgents.value,
       timeoutMs,
       enabled,
+      skills,
       systemPrompt,
       sourcePath: filePath,
     },
@@ -456,6 +490,13 @@ export function createAgentMarkdown(input: AgentCreationInput): string {
   if (input.timeoutMs !== undefined) {
     frontmatter.push(`timeout_ms: ${input.timeoutMs}`);
   }
+  if (input.skills === false) {
+    frontmatter.push("skills: none");
+  } else if (input.skills === true) {
+    frontmatter.push("skills: all");
+  } else if (Array.isArray(input.skills) && input.skills.length > 0) {
+    frontmatter.push(`skills: ${input.skills.join(", ")}`);
+  }
   frontmatter.push("---", systemPrompt);
 
   return `${frontmatter.join("\n")}\n`;
@@ -481,6 +522,7 @@ export function exportAgentToUserScope(
     thinking: agent.thinking,
     subagentAgents: agent.subagentAgents,
     timeoutMs: agent.timeoutMs,
+    skills: agent.skills,
     systemPrompt: agent.systemPrompt,
   });
   writeFileSync(filePath, markdown, "utf8");
