@@ -47,7 +47,7 @@ import {
   renderSubagentResult,
   toSubagentCommandMessage,
 } from "../tui/render.js";
-import { discoverAvailableSkillPaths, resolveSkillPaths } from "./skill-loader.js";
+import { resolveSkillPaths } from "./skill-loader.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -456,13 +456,10 @@ function buildChildArgs(
     args.push("--append-system-prompt", promptPath);
   }
 
-  // Always suppress host autodiscovery; explicitly pass desired skills
+  // Always suppress host autodiscovery; only pass explicit skills
   args.push("--no-skills");
-  if (agent.skills !== false) {
-    const resolved = Array.isArray(agent.skills)
-      ? resolveSkillPaths(agent.skills, cwd)
-      : discoverAvailableSkillPaths(cwd);
-    for (const skill of resolved) {
+  if (Array.isArray(agent.skills)) {
+    for (const skill of resolveSkillPaths(agent.skills, cwd)) {
       args.push("--skill", skill.path);
     }
   }
