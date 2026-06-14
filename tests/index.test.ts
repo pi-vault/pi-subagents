@@ -17,11 +17,8 @@ import {
   buildAlignedRows,
   describeAgentEntry,
 } from "../src/tui/agents-menu.js";
-import { startSlashLiveRequest } from "../src/core/slash-live-state.js";
 import type {
-  AgentCreationInput,
   AgentDiscoveryResult,
-  LoadedConfig,
   ResolvedPaths,
   RuntimeDeps,
   SubagentsConfig,
@@ -81,15 +78,20 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     ],
     diagnostics: [],
   };
+  const primaryAgent = discovery.agents[0];
+
+  if (!primaryAgent) {
+    throw new Error("Expected a default discovered agent for test setup");
+  }
 
   return {
     resolvePaths: () => paths,
     loadConfig: () => ({ exists: false, config }),
     discoverAgents: () => discovery,
     discoverToolNames: () => ["bash", "read", "write"],
-    createAgentFile: () => discovery.agents[0]!,
-    exportAgentToUserScope: () => discovery.agents[0]!,
-    disableAgentInUserScope: () => ({ ...discovery.agents[0]!, enabled: false }),
+    createAgentFile: () => primaryAgent,
+    exportAgentToUserScope: () => primaryAgent,
+    disableAgentInUserScope: () => ({ ...primaryAgent, enabled: false }),
     deleteUserAgentOverride: () => {},
     saveConfig: () => {},
     ...overrides,

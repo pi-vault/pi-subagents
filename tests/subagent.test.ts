@@ -1267,9 +1267,11 @@ describe("subagent execution", () => {
     expect(spawnCalls[0]?.args).toContain("--no-skills");
     expect(spawnCalls[0]?.args).toContain("--skill");
     const skillIdx = spawnCalls[0]?.args.indexOf("--skill");
-    expect(spawnCalls[0]?.args[skillIdx! + 1]).toBe(
-      join(skillsDir, "test-skill.md"),
-    );
+    expect(skillIdx).toBeGreaterThanOrEqual(0);
+    if (skillIdx === undefined || skillIdx < 0) {
+      throw new Error("Expected --skill to be present in child args");
+    }
+    expect(spawnCalls[0]?.args[skillIdx + 1]).toBe(join(skillsDir, "test-skill.md"));
 
     // Prompt file should NOT contain skill content (only base systemPrompt)
     const promptFile = writtenFiles.find((f) => f.path.endsWith(".md"));
