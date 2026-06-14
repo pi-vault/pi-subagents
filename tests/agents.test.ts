@@ -706,6 +706,121 @@ describe("tool discovery and agent creation", () => {
     });
   });
 
+  test("parses skills as comma-separated list", () => {
+    const parsed = parseAgentFile(
+      "/tmp/worker.md",
+      [
+        "---",
+        "name: worker",
+        "description: Does work",
+        "tools: read",
+        "skills: tdd, writing-go",
+        "---",
+        "Do the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: { skills: ["tdd", "writing-go"] },
+    });
+  });
+
+  test("parses skills: none as false", () => {
+    const parsed = parseAgentFile(
+      "/tmp/worker.md",
+      [
+        "---",
+        "name: worker",
+        "description: Does work",
+        "tools: read",
+        "skills: none",
+        "---",
+        "Do the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: { skills: false },
+    });
+  });
+
+  test("parses skills: all as true", () => {
+    const parsed = parseAgentFile(
+      "/tmp/worker.md",
+      [
+        "---",
+        "name: worker",
+        "description: Does work",
+        "tools: read",
+        "skills: all",
+        "---",
+        "Do the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: { skills: true },
+    });
+  });
+
+  test("parses empty skills as undefined (inherit all)", () => {
+    const parsed = parseAgentFile(
+      "/tmp/worker.md",
+      [
+        "---",
+        "name: worker",
+        "description: Does work",
+        "tools: read",
+        "skills:",
+        "---",
+        "Do the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: { skills: undefined },
+    });
+  });
+
+  test("createAgentMarkdown serializes skills as comma-separated list", () => {
+    const markdown = createAgentMarkdown({
+      description: "Does work",
+      tools: ["read"],
+      subagentAgents: [],
+      skills: ["tdd", "writing-go"],
+      systemPrompt: "Do work.",
+    });
+
+    expect(markdown).toContain("skills: tdd, writing-go");
+  });
+
+  test("createAgentMarkdown serializes skills: none for false", () => {
+    const markdown = createAgentMarkdown({
+      description: "Does work",
+      tools: ["read"],
+      subagentAgents: [],
+      skills: false,
+      systemPrompt: "Do work.",
+    });
+
+    expect(markdown).toContain("skills: none");
+  });
+
+  test("createAgentMarkdown omits skills when undefined", () => {
+    const markdown = createAgentMarkdown({
+      description: "Does work",
+      tools: ["read"],
+      subagentAgents: [],
+      systemPrompt: "Do work.",
+    });
+
+    expect(markdown).not.toContain("skills");
+  });
+
   test("created agents are discoverable immediately without restart", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
     const paths = createPaths(rootDir);
