@@ -37,7 +37,7 @@ export interface AgentDefinition {
   thinking?: string;
   subagentAgents: string[];
   timeoutMs?: number;
-  disabled?: boolean;
+  enabled?: boolean;
   systemPrompt: string;
   sourcePath: string;
 }
