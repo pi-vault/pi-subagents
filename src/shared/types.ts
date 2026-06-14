@@ -66,31 +66,6 @@ export interface AgentCreationInput {
   timeoutMs?: number;
 }
 
-export interface RuntimeDeps {
-  resolvePaths: () => ResolvedPaths;
-  loadConfig: (paths: ResolvedPaths) => LoadedConfig;
-  discoverAgents: (paths: ResolvedPaths) => AgentDiscoveryResult;
-  discoverToolNames: () => string[];
-  createAgentFile: (
-    paths: ResolvedPaths,
-    input: AgentCreationInput,
-    discovery: AgentDiscoveryResult,
-    toolNames: string[],
-  ) => AgentDefinition;
-  exportAgentToUserScope: (
-    paths: ResolvedPaths,
-    discovery: AgentDiscoveryResult,
-    agentName: string,
-  ) => AgentDefinition;
-  disableAgentInUserScope: (
-    paths: ResolvedPaths,
-    discovery: AgentDiscoveryResult,
-    agentName: string,
-  ) => AgentDefinition;
-  deleteUserAgentOverride: (paths: ResolvedPaths, agentName: string) => void;
-  saveConfig: (paths: ResolvedPaths, config: SubagentsConfig) => void;
-}
-
 export interface SubagentToolInput {
   agent: string;
   task: string;
@@ -190,6 +165,12 @@ export interface SubagentExecutionResult {
   isError: boolean;
   details: SubagentExecutionDetails;
 }
+
+export type SlashSnapshot = {
+  live: SlashLiveDetails;
+  final?: SubagentExecutionResult;
+  version: number;
+};
 
 export interface SubagentCommandMessage {
   customType: string;

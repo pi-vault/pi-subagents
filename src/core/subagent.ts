@@ -17,25 +17,13 @@ import {
   writeArtifact,
   writeMetadata,
 } from "../shared/artifacts.js";
-import {
-  finalizeSlashLiveRequest,
-  startSlashLiveRequest,
-  updateSlashLiveRequest,
-} from "./slash-live-state.js";
-import {
-  getDeferredSlashRequest,
-  markDeferredSlashRequestConsumed,
-  rememberDeferredSlashRequest,
-  setDeferredSlashRuntimeState,
-  takeDeferredSlashRuntimeState,
-} from "./deferred-slash-state.js";
+import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
   ArtifactPaths,
   LoadedConfig,
   ResolvedPaths,
-  RuntimeDeps,
   SubagentExecutionResult,
   SlashSubagentRequestPayload,
   SubagentToolActivity,
@@ -1172,13 +1160,13 @@ export function registerSlashAgentBridge(
       return;
     }
 
-    const persisted = getDeferredSlashRequest(requestId);
+    const persisted = deps.stateStore.getDeferredRequest(requestId);
     if (!persisted) {
       const result = buildSlashBridgeErrorResult({
         requestId,
         message: `Deferred /agent request could not be restored for ${requestId}.`,
       });
-      finalizeSlashLiveRequest(requestId, result);
+      deps.stateStore.finalizeLive(requestId, result);
       pi.sendMessage({
         customType: "pi-subagent-result",
         content: result.content,
@@ -1188,7 +1176,7 @@ export function registerSlashAgentBridge(
       return { action: "handled" };
     }
 
-    const runtimeState = takeDeferredSlashRuntimeState(requestId);
+    const runtimeState = deps.stateStore.takeDeferredRuntimeState(requestId);
     const payload: SlashSubagentRequestPayload = {
       requestId,
       agent: persisted.agent,
@@ -1212,7 +1200,7 @@ export function registerSlashAgentBridge(
       const discovery = deps.discoverAgents(paths);
 
       tickInterval = setInterval(() => {
-        updateSlashLiveRequest(requestId, {
+        deps.stateStore.updateLive(requestId, {
           durationMs: Date.now() - startedAt,
         });
         payload.requestRender?.();
@@ -1230,7 +1218,7 @@ export function registerSlashAgentBridge(
         payload.parentModel,
         runtime,
         (update) => {
-          updateSlashLiveRequest(requestId, update);
+          deps.stateStore.updateLive(requestId, update);
           payload.requestRender?.();
         },
       );
@@ -1251,11 +1239,11 @@ export function registerSlashAgentBridge(
       }
       payload.cleanup?.();
       if ("appendEntry" in pi && typeof pi.appendEntry === "function") {
-        markDeferredSlashRequestConsumed(pi as { appendEntry(customType: string, data: unknown): void }, requestId);
+        deps.stateStore.markDeferredConsumed(pi as { appendEntry(customType: string, data: unknown): void }, requestId);
       }
     }
 
-    finalizeSlashLiveRequest(requestId, result);
+    deps.stateStore.finalizeLive(requestId, result);
     return { action: "handled" };
   });
 }
@@ -1272,7 +1260,8 @@ export function registerSubagentTool(
       "Delegate a task to a discovered agent in an isolated foreground pi process.",
     parameters: SUBAGENT_TOOL_PARAMETERS,
     renderCall: renderSubagentCall,
-    renderResult: renderSubagentResult,
+    renderResult: (result, options, theme) =>
+      renderSubagentResult(result, options, theme, deps.stateStore),
     async execute(
       _toolCallId,
       params,
@@ -1308,8 +1297,8 @@ export function registerSubagentTool(
 
 export function registerAgentCommand(
   pi: ExtensionAPI,
-  _deps: RuntimeDeps,
-  _runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
+  deps: RuntimeDeps,
+  runtime: SubagentRuntimeDeps = createSubagentRuntimeDeps(),
   isBridgeAvailable: () => boolean = () => true,
 ): void {
   pi.registerCommand("agent", {
@@ -1325,13 +1314,13 @@ export function registerAgentCommand(
       }
 
       const input = parseAgentCommandArgs(args);
-      const requestId = _runtime.createRunId();
+      const requestId = runtime.createRunId();
 
       pi.sendMessage({
         customType: "pi-subagent-result",
         content: "",
         display: true,
-        details: startSlashLiveRequest({
+        details: deps.stateStore.startLive({
           requestId,
           agent: input.agent,
           task: input.task,
@@ -1361,12 +1350,12 @@ export function registerAgentCommand(
       };
 
       if ("appendEntry" in pi && typeof pi.appendEntry === "function") {
-        rememberDeferredSlashRequest(
+        deps.stateStore.rememberDeferred(
           pi as { appendEntry(customType: string, data: unknown): void },
           persistedRequest,
         );
       }
-      setDeferredSlashRuntimeState(requestId, {
+      deps.stateStore.setDeferredRuntimeState(requestId, {
         signal: ctx.signal,
         requestRender: () => liveTui?.requestRender?.(),
         cleanup: () => ctx.ui.setWidget?.(tickerKey, undefined),

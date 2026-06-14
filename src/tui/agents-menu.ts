@@ -5,12 +5,12 @@ import { Container, Key, Text, matchesKey } from "@earendil-works/pi-tui";
 import {
   parseAgentFile,
 } from "../core/agents.js";
+import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentCreationInput,
   AgentDefinition,
   AgentDiscoveryDiagnostic,
   ResolvedPaths,
-  RuntimeDeps,
   SubagentsConfig,
 } from "../shared/types.js";
 

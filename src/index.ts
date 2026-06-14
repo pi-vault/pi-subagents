@@ -8,18 +8,19 @@ import {
   exportAgentToUserScope,
 } from "./core/agents.js";
 import { loadConfig, saveConfig } from "./core/config.js";
+import { ExecutionStateStore } from "./core/execution-state.js";
 import { resolvePaths } from "./core/paths.js";
 import {
   registerAgentCommand,
   registerSlashAgentBridge,
   registerSubagentTool,
 } from "./core/subagent.js";
-import { hydrateDeferredSlashRequestsFromSession } from "./core/deferred-slash-state.js";
-import type { RuntimeDeps } from "./shared/types.js";
+import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
 import { renderSubagentMessage } from "./tui/render.js";
 
 export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
+  const stateStore = new ExecutionStateStore();
   return {
     resolvePaths,
     loadConfig,
@@ -31,6 +32,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     disableAgentInUserScope,
     deleteUserAgentOverride,
     saveConfig,
+    stateStore,
   };
 }
 
@@ -38,7 +40,14 @@ export function registerSubagentsExtension(
   pi: ExtensionAPI,
   deps: RuntimeDeps = createRuntimeDeps(pi),
 ): void {
-  pi.registerMessageRenderer("pi-subagent-result", renderSubagentMessage);
+  pi.registerMessageRenderer("pi-subagent-result", (msg, opts, theme) =>
+    renderSubagentMessage(
+      msg as Parameters<typeof renderSubagentMessage>[0],
+      opts,
+      theme,
+      deps.stateStore,
+    ),
+  );
   registerSlashAgentBridge(pi, deps);
   registerSubagentTool(pi, deps);
   registerAgentCommand(pi, deps, undefined, () => true);
@@ -51,7 +60,7 @@ export function registerSubagentsExtension(
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    hydrateDeferredSlashRequestsFromSession(ctx.sessionManager);
+    deps.stateStore.hydrateFromSession(ctx.sessionManager);
   });
 }
 

@@ -6,8 +6,8 @@ import type {
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test, vi } from "vitest";
-import * as deferredState from "../src/core/deferred-slash-state.js";
+import { describe, expect, test } from "vitest";
+import { ExecutionStateStore } from "../src/core/execution-state.js";
 import * as subagentsIndex from "../src/index.js";
 import extension, { registerSubagentsExtension } from "../src/index.js";
 import {
@@ -17,10 +17,10 @@ import {
   buildAlignedRows,
   describeAgentEntry,
 } from "../src/tui/agents-menu.js";
+import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
 import type {
   AgentDiscoveryResult,
   ResolvedPaths,
-  RuntimeDeps,
   SubagentsConfig,
 } from "../src/shared/types.js";
 
@@ -94,6 +94,7 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     disableAgentInUserScope: () => ({ ...primaryAgent, enabled: false }),
     deleteUserAgentOverride: () => {},
     saveConfig: () => {},
+    stateStore: new ExecutionStateStore(),
     ...overrides,
   };
 }
@@ -101,22 +102,37 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
 describe("subagents extension", () => {
   test("hydrates deferred slash requests on session_start", async () => {
     const eventHandlers = new Map<string, (...args: unknown[]) => unknown>();
-    const hydrateSpy = vi.spyOn(deferredState, "hydrateDeferredSlashRequestsFromSession");
     const pi = createPi(undefined, undefined, (event, handler) => {
       eventHandlers.set(event, handler);
     });
 
-    registerSubagentsExtension(pi, createMenuDeps());
+    const deps = createMenuDeps();
+    registerSubagentsExtension(pi, deps);
 
     const sessionManager = {
       getEntries() {
-        return [];
+        return [
+          {
+            type: "custom",
+            customType: "pi-subagents:deferred-request",
+            data: {
+              requestId: "hydrate-1",
+              agent: "Scout",
+              task: "explore",
+              cwd: "/repo",
+              createdAt: 1000,
+            },
+          },
+        ] as never[];
       },
     };
 
     await eventHandlers.get("session_start")?.({}, { sessionManager });
 
-    expect(hydrateSpy).toHaveBeenCalledWith(sessionManager);
+    expect(deps.stateStore.getDeferredRequest("hydrate-1")).toMatchObject({
+      requestId: "hydrate-1",
+      agent: "Scout",
+    });
   });
 
   test("loads without throwing and registers the subagent result message renderer", () => {

@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import {
-  clearSlashLiveRequest,
-  finalizeSlashLiveRequest,
-  startSlashLiveRequest,
-  tickSlashLiveRequest,
-  updateSlashLiveRequest,
-} from "../src/core/slash-live-state.js";
+import { ExecutionStateStore } from "../src/core/execution-state.js";
 import {
   buildSubagentCallText,
   buildSubagentResultText,
@@ -93,13 +87,12 @@ function createSlashLiveDetails(
 
 describe("slash live state", () => {
   afterEach(() => {
-    clearSlashLiveRequest("req-widget");
-    clearSlashLiveRequest("req-tick");
     vi.useRealTimers();
   });
 
-  test("tickSlashLiveRequest refreshes duration from elapsed time", () => {
-    const details = startSlashLiveRequest({
+  test("tickLive refreshes duration from elapsed time", () => {
+    const store = new ExecutionStateStore();
+    store.startLive({
       requestId: "req-widget",
       agent: "Scout",
       task: "inspect this repo",
@@ -107,9 +100,9 @@ describe("slash live state", () => {
       startedAtMs: 1_000,
     });
 
-    tickSlashLiveRequest("req-widget", 1_450);
+    const result = store.tickLive("req-widget", 1_450);
 
-    expect(details.durationMs).toBe(450);
+    expect(result?.durationMs).toBe(450);
   });
 });
 
@@ -188,7 +181,8 @@ describe("subagent render helpers", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"));
 
-    const details = startSlashLiveRequest({
+    const store = new ExecutionStateStore();
+    const details = store.startLive({
       requestId: "req-live-1",
       agent: "Scout",
       task: "inspect repo",
@@ -205,6 +199,7 @@ describe("subagent render helpers", () => {
       } as never,
       { expanded: false } as never,
       createTheme() as never,
+      store,
     );
 
     expect(component.render(80).join("\n")).toContain("0ms");
@@ -215,14 +210,15 @@ describe("subagent render helpers", () => {
   });
 
   test("renderSubagentMessage resolves slash details from the latest snapshot", () => {
-    const details = startSlashLiveRequest({
+    const store = new ExecutionStateStore();
+    const details = store.startLive({
       requestId: "req-1",
       agent: "Scout",
       task: "inspect this repo",
       cwd: "/repo",
     });
 
-    updateSlashLiveRequest("req-1", {
+    store.updateLive("req-1", {
       durationMs: 10,
       activity: { label: "read done", preview: '{"path":"package.json"}' },
     });
@@ -234,13 +230,15 @@ describe("subagent render helpers", () => {
       },
       { expanded: false } as never,
       createTheme() as never,
+      store,
     ).render(120).join("\n");
 
     expect(text).toContain("read done");
   });
 
   test("slash live render shows updated duration after a tick", () => {
-    startSlashLiveRequest({
+    const store = new ExecutionStateStore();
+    store.startLive({
       requestId: "req-tick",
       agent: "Scout",
       task: "inspect this repo",
@@ -248,11 +246,11 @@ describe("subagent render helpers", () => {
       startedAtMs: 1_000,
     });
 
-    tickSlashLiveRequest("req-tick", 1_250);
+    store.tickLive("req-tick", 1_250);
 
     const text = buildSubagentResultText(
       "",
-      createSlashLiveDetails({ requestId: "req-tick", durationMs: 0 }),
+      createSlashLiveDetails({ requestId: "req-tick", durationMs: 250 }),
       false,
       theme,
     );
@@ -264,7 +262,8 @@ describe("subagent render helpers", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"));
 
-    const details = startSlashLiveRequest({
+    const store = new ExecutionStateStore();
+    const details = store.startLive({
       requestId: "req-freeze-check",
       agent: "scout",
       task: "explore this repo",
@@ -275,6 +274,7 @@ describe("subagent render helpers", () => {
       { content: "", details },
       { expanded: false } as never,
       createTheme() as never,
+      store,
     );
 
     const first = component.render(120).join("\n");
@@ -283,12 +283,12 @@ describe("subagent render helpers", () => {
 
     expect(first).not.toContain("2500ms");
     expect(second).toContain("2500ms");
-    clearSlashLiveRequest("req-freeze-check");
     vi.useRealTimers();
   });
 
   test("slash live message component refreshes when snapshot changes", () => {
-    const details = startSlashLiveRequest({
+    const store = new ExecutionStateStore();
+    const details = store.startLive({
       requestId: "req-live",
       agent: "Scout",
       task: "inspect this repo",
@@ -302,13 +302,14 @@ describe("subagent render helpers", () => {
       },
       { expanded: false } as never,
       createTheme() as never,
+      store,
     );
 
     const initial = component.render(120).join("\n");
     expect(initial).toContain("RUNNING");
     expect(initial).not.toContain("read done");
 
-    updateSlashLiveRequest("req-live", {
+    store.updateLive("req-live", {
       durationMs: 10,
       activity: { label: "read done", preview: '{"path":"package.json"}' },
     });
@@ -318,14 +319,15 @@ describe("subagent render helpers", () => {
   });
 
   test("renderSubagentMessage shows final output after slash snapshot finalizes", () => {
-    const details = startSlashLiveRequest({
+    const store = new ExecutionStateStore();
+    const details = store.startLive({
       requestId: "req-final",
       agent: "Scout",
       task: "inspect this repo",
       cwd: "/repo",
     });
 
-    finalizeSlashLiveRequest("req-final", {
+    store.finalizeLive("req-final", {
       content: "final answer",
       isError: false,
       details: createDetails(),
@@ -338,6 +340,7 @@ describe("subagent render helpers", () => {
       },
       { expanded: true } as never,
       createTheme() as never,
+      store,
     ).render(120).join("\n");
 
     expect(text).toContain("final output:");

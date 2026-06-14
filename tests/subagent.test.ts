@@ -16,13 +16,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import { encodePiCwd } from "../src/shared/artifacts.js";
-import {
-  getDeferredSlashRequest,
-  hydrateDeferredSlashRequestsFromSession,
-  setDeferredSlashRuntimeState,
-  takeDeferredSlashRuntimeState,
-} from "../src/core/deferred-slash-state.js";
-import { startSlashLiveRequest } from "../src/core/slash-live-state.js";
+import { ExecutionStateStore } from "../src/core/execution-state.js";
 import {
   executeSubagent,
   parseAgentCommandArgs,
@@ -31,12 +25,12 @@ import {
   registerSubagentTool,
   type SubagentRuntimeDeps,
 } from "../src/core/subagent.js";
+import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
   LoadedConfig,
   ResolvedPaths,
-  RuntimeDeps,
 } from "../src/shared/types.js";
 
 function createPaths(rootDir: string): ResolvedPaths {
@@ -94,6 +88,7 @@ function createDeps(paths: ResolvedPaths, discovery: AgentDiscoveryResult): Runt
     saveConfig: () => {
       throw new Error("not used");
     },
+    stateStore: new ExecutionStateStore(),
   };
 }
 
@@ -1424,6 +1419,7 @@ describe("subagent execution", () => {
 
 describe("deferred slash state", () => {
   test("deferred slash requests survive reload via session-backed persistence", () => {
+    const store = new ExecutionStateStore();
     const entries = [
       {
         type: "custom",
@@ -1438,13 +1434,13 @@ describe("deferred slash state", () => {
       },
     ];
 
-    hydrateDeferredSlashRequestsFromSession({
+    store.hydrateFromSession({
       getEntries() {
         return entries as never[];
       },
-    } as never);
+    });
 
-    expect(getDeferredSlashRequest("req-persist-1")).toMatchObject({
+    expect(store.getDeferredRequest("req-persist-1")).toMatchObject({
       requestId: "req-persist-1",
       agent: "Scout",
       task: "inspect repo",
@@ -1452,14 +1448,15 @@ describe("deferred slash state", () => {
   });
 
   test("runtime-only deferred slash state is returned once", () => {
-    setDeferredSlashRuntimeState("req-runtime-1", {
+    const store = new ExecutionStateStore();
+    store.setDeferredRuntimeState("req-runtime-1", {
       signal: undefined,
       requestRender: () => undefined,
       cleanup: () => undefined,
     });
 
-    expect(takeDeferredSlashRuntimeState("req-runtime-1")).toBeDefined();
-    expect(takeDeferredSlashRuntimeState("req-runtime-1")).toBeUndefined();
+    expect(store.takeDeferredRuntimeState("req-runtime-1")).toBeDefined();
+    expect(store.takeDeferredRuntimeState("req-runtime-1")).toBeUndefined();
   });
 });
 
@@ -1530,7 +1527,7 @@ describe("subagent registration", () => {
       diagnostics: [],
     });
     const runtime = createRuntime(vi.fn() as never, { runId: "req-missing-1" });
-    startSlashLiveRequest({
+    deps.stateStore.startLive({
       requestId: "req-missing-1",
       agent: "Scout",
       task: "inspect repo",
