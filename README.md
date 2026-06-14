@@ -7,7 +7,7 @@
 
 Delegate work to specialized Pi subagents without leaving your current session.
 
-> Early adopter release: `v0.1.0` is a small, focused first version built around a ready-to-use set of bundled agents.
+> Early adopter release: `v0.2.0` keeps the package small and focused while expanding the built-in agent workflow.
 
 ## Install
 
@@ -30,14 +30,20 @@ After install, the bundled agents are available right away.
 
 From `/agents` you can:
 
-- create a global agent
+- create a user agent override
+- edit a user agent override
 - export a bundled agent into Pi global scope
 - disable an agent via global override
 - delete a global override
 - manage `maxConcurrency`, `maxRecursiveLevel`, and `defaultTimeoutMs`
 
-`/agents:add` has been removed.
 Background runs are not part of this release.
+
+## What's New In v0.2.0
+
+- interactive `/agents` menu for managing bundled and global agents
+- improved live foreground progress for `/agent` runs
+- skills support for bundled agents and user-configured agents
 
 ## Bundled Agents
 
@@ -46,6 +52,60 @@ Background runs are not part of this release.
 - `researcher` — gathers evidence, tradeoffs, and implementation context
 - `worker` — handles focused implementation work
 - `reviewer` — reviews changes and looks for defects
+
+## Agent Files
+
+User overrides live in Pi's user agent directory and use markdown frontmatter plus a prompt body.
+
+```md
+---
+name: my-worker
+description: Focused implementation helper.
+tools: read, write, bash
+model: provider/model
+thinking: low
+subagent_agents: scout, reviewer
+skills: tdd, verification-before-completion
+timeout_ms: 180000
+---
+
+You are My Worker.
+
+Make the smallest safe change that completes the task.
+```
+
+Supported frontmatter fields:
+
+- `name` — optional display name; if omitted, the filename slug is used
+- `description` — required short summary
+- `tools` — comma-separated tool allowlist
+- `model` — optional model override; `default` falls back to the host/session default
+- `thinking` — optional thinking level
+- `subagent_agents` — optional allowlist of child agents this agent may invoke
+- `skills` — optional skill policy: comma-separated names, `all`, or `none`
+- `timeout_ms` — optional per-agent timeout in milliseconds
+
+The interactive create flow currently asks for `name`, `description`, `tools`, `model`, `thinking`, `subagent_agents`, `timeout_ms`, and the markdown body. To add or change `skills`, edit the agent markdown after creation or export a bundled agent and modify the file.
+
+## Skill Resolution
+
+When an agent specifies `skills`, pi-subagents resolves them from the first matching location in:
+
+- `.pi/skills/` in the current workspace
+- `.agents/skills/` in the current workspace
+- the global Pi agent skills directory
+- `~/.agents/skills/`
+- `~/.pi/skills/`
+
+Skill names must be simple names without path separators or whitespace.
+
+## Settings
+
+Global subagent settings are stored in Pi's `subagents.json` file. The current defaults are:
+
+- `maxConcurrency: 3`
+- `maxRecursiveLevel: 3`
+- `defaultTimeoutMs: 600000`
 
 ## Typical Flow
 

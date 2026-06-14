@@ -1,6 +1,6 @@
 {
   "name": "@pi-vault/pi-subagents",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Pi extension for delegating tasks to isolated and specialized subagents",
   "author": "Lanh Hoang <lanhhoang@users.noreply.github.com>",
@@ -41,7 +41,8 @@
   "files": [
     "src",
     "agents",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
