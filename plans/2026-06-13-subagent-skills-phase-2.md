@@ -109,7 +109,7 @@ Expected: PASS — new optional fields don't break anything.
 
 - [ ] **Step 1: Add skills parsing after the `enabled` block**
 
-In `src/core/agents.ts`, add after the `enabled` parsing block (which ends around line 333 after Phase 1) and before the `return { ok: true, agent: {...} }` statement:
+In `src/core/agents.ts`, add after the `enabled` parsing block (which ends around line 335 after Phase 1) and before the `return { ok: true, agent: {...} }` statement:
 
 ```typescript
 let skills: string[] | boolean | undefined;
@@ -171,7 +171,7 @@ return {
 
 - [ ] **Step 3: Add `skills` serialization to `createAgentMarkdown`**
 
-In `src/core/agents.ts`, in the `createAgentMarkdown` function, add before `frontmatter.push("---", systemPrompt);` (line 448):
+In `src/core/agents.ts`, in the `createAgentMarkdown` function, add before `frontmatter.push("---", systemPrompt);` (line 459):
 
 ```typescript
 if (input.skills === false) {
@@ -185,7 +185,7 @@ if (input.skills === false) {
 
 - [ ] **Step 4: Pass `skills` through in `exportAgentToUserScope`**
 
-In `src/core/agents.ts`, in the `exportAgentToUserScope` function (around line 465), add `skills: agent.skills,` to the `createAgentMarkdown` call:
+In `src/core/agents.ts`, in the `exportAgentToUserScope` function (around line 464), add `skills: agent.skills,` to the `createAgentMarkdown` call:
 
 ```typescript
 const markdown = createAgentMarkdown({
