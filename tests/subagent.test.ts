@@ -1203,6 +1203,221 @@ describe("subagent execution", () => {
       preview: '{"path":"file-11.ts"}',
     });
   });
+
+  test("passes --no-skills and --skill flags for explicit skill list", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-subagent-skills-"));
+    const skillsDir = join(cwd, ".pi", "skills");
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(join(skillsDir, "test-skill.md"), "# Test Skill\nDo TDD.");
+
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [createAgent({ skills: ["test-skill"], systemPrompt: "You are Worker." })],
+      diagnostics: [],
+    };
+
+    const spawnCalls: Array<{ args: string[] }> = [];
+    const writtenFiles: Array<{ path: string; content: string }> = [];
+    const runtime: SubagentRuntimeDeps = {
+      spawnChild: ((_command, args, _options) => {
+        spawnCalls.push({ args: args as string[] });
+        const child = new FakeChildProcess();
+        queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end"}}\n',
+          );
+          child.close(0);
+        });
+        return child as never;
+      }) as SubagentRuntimeDeps["spawnChild"],
+      now: (() => {
+        let time = 0;
+        return () => ++time;
+      })(),
+      createRunId: () => "run-123",
+      mkdtemp: (prefix) => mkdtempSync(prefix),
+      writeFile: (path, content) => {
+        writtenFiles.push({ path, content });
+        writeFileSync(path, content, { encoding: "utf8", mode: 0o600 });
+      },
+      mkdirp: (path) => {
+        mkdirSync(path, { recursive: true });
+      },
+      removePath: (path) => {
+        rmSync(path, { recursive: true, force: true });
+      },
+      resolvePiInvocation: (childArgs) => ({ command: "pi", args: childArgs }),
+    };
+
+    await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Do work", cwd },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args).toContain("--no-skills");
+    expect(spawnCalls[0]?.args).toContain("--skill");
+    const skillIdx = spawnCalls[0]?.args.indexOf("--skill");
+    expect(spawnCalls[0]?.args[skillIdx! + 1]).toBe(
+      join(skillsDir, "test-skill.md"),
+    );
+
+    // Prompt file should NOT contain skill content (only base systemPrompt)
+    const promptFile = writtenFiles.find((f) => f.path.endsWith(".md"));
+    expect(promptFile).toBeDefined();
+    expect(promptFile?.content).toBe("You are Worker.");
+    expect(promptFile?.content).not.toContain("Preloaded Skill");
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("skills: false passes --no-skills with no --skill flags", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-subagent-no-skills-"));
+    const skillsDir = join(cwd, ".pi", "skills");
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(
+      join(skillsDir, "unwanted.md"),
+      "# Unwanted\nShould not appear.",
+    );
+
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    const discovery = {
+      agents: [createAgent({ skills: false, systemPrompt: "You are Worker." })],
+      diagnostics: [],
+    };
+
+    const spawnCalls: Array<{ args: string[] }> = [];
+    const writtenFiles: Array<{ path: string; content: string }> = [];
+    const runtime: SubagentRuntimeDeps = {
+      spawnChild: ((_command, args, _options) => {
+        spawnCalls.push({ args: args as string[] });
+        const child = new FakeChildProcess();
+        queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end"}}\n',
+          );
+          child.close(0);
+        });
+        return child as never;
+      }) as SubagentRuntimeDeps["spawnChild"],
+      now: (() => {
+        let time = 0;
+        return () => ++time;
+      })(),
+      createRunId: () => "run-123",
+      mkdtemp: (prefix) => mkdtempSync(prefix),
+      writeFile: (path, content) => {
+        writtenFiles.push({ path, content });
+        writeFileSync(path, content, { encoding: "utf8", mode: 0o600 });
+      },
+      mkdirp: (path) => {
+        mkdirSync(path, { recursive: true });
+      },
+      removePath: (path) => {
+        rmSync(path, { recursive: true, force: true });
+      },
+      resolvePiInvocation: (childArgs) => ({ command: "pi", args: childArgs }),
+    };
+
+    await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Do work", cwd },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args).toContain("--no-skills");
+    expect(spawnCalls[0]?.args).not.toContain("--skill");
+
+    // Prompt file should only contain base systemPrompt
+    const promptFile = writtenFiles.find((f) => f.path.endsWith(".md"));
+    expect(promptFile).toBeDefined();
+    expect(promptFile?.content).toBe("You are Worker.");
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("skills: undefined passes --no-skills with no --skill flags", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-subagent-undef-skills-"));
+    const skillsDir = join(cwd, ".pi", "skills");
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(join(skillsDir, "available.md"), "# Available\nShould not be passed.");
+
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-subagent-"));
+    const paths = createPaths(rootDir);
+    // skills field not set (undefined)
+    const discovery = {
+      agents: [createAgent({ systemPrompt: "You are Worker." })],
+      diagnostics: [],
+    };
+
+    const spawnCalls: Array<{ args: string[] }> = [];
+    const runtime: SubagentRuntimeDeps = {
+      spawnChild: ((_command, args, _options) => {
+        spawnCalls.push({ args: args as string[] });
+        const child = new FakeChildProcess();
+        queueMicrotask(() => {
+          child.stdout.write(
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"end"}}\n',
+          );
+          child.close(0);
+        });
+        return child as never;
+      }) as SubagentRuntimeDeps["spawnChild"],
+      now: (() => {
+        let time = 0;
+        return () => ++time;
+      })(),
+      createRunId: () => "run-123",
+      mkdtemp: (prefix) => mkdtempSync(prefix),
+      writeFile: (path, content) => {
+        writeFileSync(path, content, { encoding: "utf8", mode: 0o600 });
+      },
+      mkdirp: (path) => {
+        mkdirSync(path, { recursive: true });
+      },
+      removePath: (path) => {
+        rmSync(path, { recursive: true, force: true });
+      },
+      resolvePiInvocation: (childArgs) => ({ command: "pi", args: childArgs }),
+    };
+
+    await executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Do work", cwd },
+      "/repo",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runtime,
+    );
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args).toContain("--no-skills");
+    expect(spawnCalls[0]?.args).not.toContain("--skill");
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
 });
 
 describe("deferred slash state", () => {

@@ -47,6 +47,7 @@ import {
   renderSubagentResult,
   toSubagentCommandMessage,
 } from "../tui/render.js";
+import { resolveSkillPaths } from "./skill-loader.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -422,6 +423,7 @@ function buildChildArgs(
   childSessionPath: string,
   recursionEnabled: boolean,
   effectiveModel: string | undefined,
+  cwd: string,
 ): string[] {
   const args = [
     "--mode",
@@ -452,6 +454,14 @@ function buildChildArgs(
   }
   if (promptPath) {
     args.push("--append-system-prompt", promptPath);
+  }
+
+  // Always suppress host autodiscovery; only pass explicit skills
+  args.push("--no-skills");
+  if (Array.isArray(agent.skills)) {
+    for (const skill of resolveSkillPaths(agent.skills, cwd)) {
+      args.push("--skill", skill.path);
+    }
   }
 
   return args;
@@ -503,6 +513,7 @@ function createNestedChildLaunch(
     childSessionPath,
     recursionEnabled,
     effectiveModel,
+    cwd,
   );
 
   if (!recursionEnabled) {
@@ -905,7 +916,7 @@ export async function executeSubagent(
         promptDir,
         `${resolvedAgent.name.replace(/[^A-Za-z0-9_-]+/g, "_").toLowerCase()}.md`,
       );
-      runtime.writeFile(promptPath, resolvedAgent.systemPrompt);
+      runtime.writeFile(promptPath, resolvedAgent.systemPrompt.trim());
     }
 
     const launch = createNestedChildLaunch(
