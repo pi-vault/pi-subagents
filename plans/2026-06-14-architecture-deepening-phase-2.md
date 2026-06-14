@@ -12,16 +12,17 @@
 
 ## File Map
 
-| File | Action | Responsibility |
-| ---- | ------ | -------------- |
-| `src/core/skill-loader.ts` | Modify | Add `SkillEntry` type and `walkSkillTree` utility; rewrite 4 BFS functions + 2 "InRoot" functions to use it |
-| `tests/skill-loader.test.ts` | Modify | Add dedicated `walkSkillTree` test suite |
+| File                         | Action | Responsibility                                                                                              |
+| ---------------------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
+| `src/core/skill-loader.ts`   | Modify | Add `SkillEntry` type and `walkSkillTree` utility; rewrite 4 BFS functions + 2 "InRoot" functions to use it |
+| `tests/skill-loader.test.ts` | Modify | Add dedicated `walkSkillTree` test suite                                                                    |
 
 ---
 
 ### Task 1: Extract `walkSkillTree` utility
 
 **Files:**
+
 - Modify: `src/core/skill-loader.ts`
 
 - [ ] **Step 1: Add the `SkillEntry` type after the existing interfaces (after line 15)**
@@ -34,7 +35,7 @@
 
   This is an internal (non-exported) type for now. It will be exported in Step 4 for testing.
 
-- [ ] **Step 2: Add the `walkSkillTree` function (insert after `isSymlink` helper, around line 83)**
+- [ ] **Step 2: Add the `walkSkillTree` function (insert after `safeReadFile` helper, around line 92)**
 
   Place it after the low-level helpers (`isUnsafeName`, `isSymlink`, `safeReadFile`) but before the higher-level functions that will consume it.
 
@@ -89,7 +90,8 @@
 
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
-        if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+        if (entry.name.startsWith(".") || entry.name === "node_modules")
+          continue;
 
         const entryPath = join(current, entry.name);
         if (isSymlink(entryPath)) continue;
@@ -148,6 +150,7 @@
 ### Task 2: Rewrite public functions to use `walkSkillTree`
 
 **Files:**
+
 - Modify: `src/core/skill-loader.ts`
 
 - [ ] **Step 1: Rewrite `findInRoot` (lines 105-123) and delete `findSkillBFS` (lines 125-166)**
@@ -242,6 +245,7 @@
 ### Task 3: Add direct `walkSkillTree` tests
 
 **Files:**
+
 - Modify: `tests/skill-loader.test.ts`
 
 - [ ] **Step 1: Import `walkSkillTree` and `SkillEntry` in the test file**
@@ -357,11 +361,7 @@
     });
 
     test("skips node_modules directories", () => {
-      writeSkillDir(
-        join(piSkillsDir(), "node_modules", "pkg"),
-        "leaked",
-        "no",
-      );
+      writeSkillDir(join(piSkillsDir(), "node_modules", "pkg"), "leaked", "no");
       const entries: SkillEntry[] = [];
       walkSkillTree(piSkillsDir(), (entry) => {
         entries.push(entry);
@@ -430,16 +430,16 @@
 
 ## Summary of changes
 
-| Metric | Before | After |
-| ------ | ------ | ----- |
-| Lines in `skill-loader.ts` | 338 | ~160 (estimated) |
-| BFS implementations | 4 | 1 (`walkSkillTree`) |
-| Security guard locations | 4 (duplicated per BFS) | 1 (centralized in `walkSkillTree`) |
-| Direct walk tests | 0 | ~12 |
-| Public API changes | - | None |
+| Metric                     | Before                 | After                              |
+| -------------------------- | ---------------------- | ---------------------------------- |
+| Lines in `skill-loader.ts` | 338                    | ~160 (estimated)                   |
+| BFS implementations        | 4                      | 1 (`walkSkillTree`)                |
+| Security guard locations   | 4 (duplicated per BFS) | 1 (centralized in `walkSkillTree`) |
+| Direct walk tests          | 0                      | ~12                                |
+| Public API changes         | -                      | None                               |
 
 ## Risks and notes
 
 - **Ordering subtlety:** The existing `findSkillBFS` and `findSkillPathBFS` sort entries (`entries.sort(...)`) but `collectSkillNames` and `collectSkillPaths` do not. The unified `walkSkillTree` sorts in the BFS phase (matching the "find" functions). This is a minor behavioral change for `collectSkillNames`/`collectSkillPaths` but has no observable effect since those functions already use `Set`/`Map` (unordered) and the callers sort the final output.
 - **Flat file ordering:** The existing `collectSkillNames` iterates flat files in readdir order (unsorted). `walkSkillTree` preserves this (no sort on flat files). The existing `findInRoot` also uses unsorted readdir for flat files. This matches.
-- **Early-exit correctness:** The `findInRoot` rewrite finds the *first* matching skill by name across flat+BFS. This preserves the existing priority: flat files at root are checked first (before BFS descends into categories), matching the original `findInRoot` logic (lines 109-122).
+- **Early-exit correctness:** The `findInRoot` rewrite finds the _first_ matching skill by name across flat+BFS. This preserves the existing priority: flat files at root are checked first (before BFS descends into categories), matching the original `findInRoot` logic (lines 109-122).
