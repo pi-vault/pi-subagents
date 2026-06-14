@@ -1272,7 +1272,7 @@ describe("subagent execution", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  test("skills: false suppresses skill injection", async () => {
+  test("skills: false suppresses skill injection and passes --no-skills", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-subagent-no-skills-"));
     const skillsDir = join(cwd, ".pi", "skills");
     mkdirSync(skillsDir, { recursive: true });
@@ -1288,9 +1288,11 @@ describe("subagent execution", () => {
       diagnostics: [],
     };
 
+    const spawnCalls: Array<{ args: string[] }> = [];
     const writtenFiles: Array<{ path: string; content: string }> = [];
     const runtime: SubagentRuntimeDeps = {
-      spawnChild: ((_command, _args, _options) => {
+      spawnChild: ((_command, args, _options) => {
+        spawnCalls.push({ args: args as string[] });
         const child = new FakeChildProcess();
         queueMicrotask(() => {
           child.stdout.write(
@@ -1339,6 +1341,9 @@ describe("subagent execution", () => {
     expect(writtenPrompt).toContain("You are Worker.");
     expect(writtenPrompt).not.toContain("Preloaded Skill");
     expect(writtenPrompt).not.toContain("Unwanted");
+
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args).toContain("--no-skills");
 
     rmSync(cwd, { recursive: true, force: true });
   });

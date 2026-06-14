@@ -478,6 +478,9 @@ function buildChildArgs(
   if (promptPath) {
     args.push("--append-system-prompt", promptPath);
   }
+  if (agent.skills === false) {
+    args.push("--no-skills");
+  }
 
   return args;
 }
