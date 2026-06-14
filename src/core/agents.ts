@@ -286,6 +286,7 @@ export function createAgentFile(
     thinking: normalizeOptionalString(input.thinking),
     subagentAgents,
     timeoutMs: input.timeoutMs,
+    skills: input.skills,
     systemPrompt,
   });
   writeFileSync(filePath, markdown, { encoding: "utf8", flag: "wx" });

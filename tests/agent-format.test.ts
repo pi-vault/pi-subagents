@@ -479,6 +479,20 @@ describe("serializeAgent", () => {
     expect(result).not.toContain("skills");
   });
 
+  test("deduplicates skills array", () => {
+    const result = serializeAgent({
+      description: "d",
+      tools: ["read"],
+      subagentAgents: [],
+      skills: ["tdd", "tdd", "writing-go", "writing-go"],
+      systemPrompt: "body",
+    });
+    expect(result).toContain("skills: tdd, writing-go");
+    // Should not have duplicates
+    const skillsLine = result.split("\n").find((l) => l.startsWith("skills:"));
+    expect(skillsLine).toBe("skills: tdd, writing-go");
+  });
+
   test("deduplicates and trims tool names", () => {
     const result = serializeAgent({
       description: "d",

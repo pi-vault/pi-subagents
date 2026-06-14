@@ -821,6 +821,26 @@ describe("tool discovery and agent creation", () => {
     expect(markdown).not.toContain("skills");
   });
 
+  test("createAgentFile preserves skills field in the created agent", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [], diagnostics: [] };
+    const toolNames = discoverToolNames([]);
+
+    const created = createAgentFile(
+      paths,
+      createValidInput({
+        name: "Planner",
+        subagentAgents: [],
+        skills: ["tdd", "writing-go"],
+      }),
+      discovery,
+      toolNames,
+    );
+
+    expect(created.skills).toEqual(["tdd", "writing-go"]);
+  });
+
   test("created agents are discoverable immediately without restart", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-create-"));
     const paths = createPaths(rootDir);

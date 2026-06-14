@@ -379,7 +379,7 @@ export function serializeAgent(input: AgentCreationInput): string {
   } else if (input.skills === true) {
     frontmatter.push("skills: all");
   } else if (Array.isArray(input.skills) && input.skills.length > 0) {
-    frontmatter.push(`skills: ${input.skills.join(", ")}`);
+    frontmatter.push(`skills: ${uniqueStrings(input.skills).join(", ")}`);
   }
   frontmatter.push("---", systemPrompt);
 
