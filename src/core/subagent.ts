@@ -45,7 +45,6 @@ import type {
 import {
   renderSubagentCall,
   renderSubagentResult,
-  toSubagentCommandMessage,
 } from "../tui/render.js";
 import { resolveSkillPaths } from "./skill-loader.js";
 
