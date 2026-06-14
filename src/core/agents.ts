@@ -318,10 +318,21 @@ export function parseAgentFile(
     typeof frontmatter.thinking === "string" && frontmatter.thinking.trim()
       ? frontmatter.thinking.trim()
       : undefined;
-  const disabled =
-    typeof frontmatter.disabled === "string"
-      ? frontmatter.disabled.trim().toLowerCase() === "true"
-      : false;
+  let enabled: boolean | undefined;
+  if (frontmatter.enabled !== undefined) {
+    const raw =
+      typeof frontmatter.enabled === "string"
+        ? frontmatter.enabled.trim().toLowerCase()
+        : "";
+    enabled = raw !== "false";
+  } else if (frontmatter.disabled !== undefined) {
+    // Backward compat: support legacy `disabled: true` in user files
+    const raw =
+      typeof frontmatter.disabled === "string"
+        ? frontmatter.disabled.trim().toLowerCase()
+        : "";
+    enabled = raw !== "true";
+  }
 
   return {
     ok: true,
@@ -333,7 +344,7 @@ export function parseAgentFile(
       thinking,
       subagentAgents: subagentAgents.value,
       timeoutMs,
-      disabled,
+      enabled,
       systemPrompt,
       sourcePath: filePath,
     },
@@ -381,7 +392,7 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
       continue;
     }
 
-    if (agent.disabled) {
+    if (agent.enabled === false) {
       blockedNames.add(comparisonName);
       continue;
     }
@@ -498,7 +509,7 @@ export function disableAgentInUserScope(
     `name: ${agent.name}`,
     `description: ${agent.description}`,
     "tools:",
-    "disabled: true",
+    "enabled: false",
     "---",
     agent.systemPrompt.trim(),
     "",

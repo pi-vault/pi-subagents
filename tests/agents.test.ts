@@ -596,7 +596,7 @@ describe("tool discovery and agent creation", () => {
     expect(before.agents.map((agent) => agent.name)).toEqual(["Scout"]);
 
     const disabled = disableAgentInUserScope(paths, before, "Scout");
-    expect(disabled.disabled).toBe(true);
+    expect(disabled.enabled).toBe(false);
 
     const after = discoverAgents(paths);
     expect(after.agents).toEqual([]);
@@ -625,6 +625,85 @@ describe("tool discovery and agent creation", () => {
 
     deleteUserAgentOverride(paths, "Scout");
     expect(discoverAgents(paths).agents.map((agent) => agent.name)).toEqual(["Scout"]);
+  });
+
+  test("parses enabled: true", () => {
+    const parsed = parseAgentFile(
+      "/tmp/worker.md",
+      [
+        "---",
+        "name: worker",
+        "description: Does work",
+        "tools: read",
+        "enabled: true",
+        "---",
+        "Do the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: { enabled: true },
+    });
+  });
+
+  test("parses enabled: false", () => {
+    const parsed = parseAgentFile(
+      "/tmp/worker.md",
+      [
+        "---",
+        "name: worker",
+        "description: Does work",
+        "tools: read",
+        "enabled: false",
+        "---",
+        "Do the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: { enabled: false },
+    });
+  });
+
+  test("supports legacy disabled: true (backward compat)", () => {
+    const parsed = parseAgentFile(
+      "/tmp/worker.md",
+      [
+        "---",
+        "name: worker",
+        "description: Does work",
+        "tools: read",
+        "disabled: true",
+        "---",
+        "Do the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: { enabled: false },
+    });
+  });
+
+  test("omitting both enabled and disabled leaves enabled undefined", () => {
+    const parsed = parseAgentFile(
+      "/tmp/worker.md",
+      [
+        "---",
+        "name: worker",
+        "description: Does work",
+        "tools: read",
+        "---",
+        "Do the work.",
+      ].join("\n"),
+    );
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: { enabled: undefined },
+    });
   });
 
   test("created agents are discoverable immediately without restart", () => {

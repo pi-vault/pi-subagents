@@ -232,7 +232,7 @@ function buildAgentMenuEntries(paths: ResolvedPaths): AgentMenuEntry[] {
     .map((normalizedName) => {
       const bundledAgent = bundledByName.get(normalizedName);
       const overrideAgent = userByName.get(normalizedName);
-      if (overrideAgent?.disabled) {
+      if (overrideAgent?.enabled === false) {
         return {
           name: overrideAgent.name,
           state: "disabled",

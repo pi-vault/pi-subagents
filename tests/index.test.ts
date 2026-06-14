@@ -89,7 +89,7 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     discoverToolNames: () => ["bash", "read", "write"],
     createAgentFile: () => discovery.agents[0]!,
     exportAgentToUserScope: () => discovery.agents[0]!,
-    disableAgentInUserScope: () => ({ ...discovery.agents[0]!, disabled: true }),
+    disableAgentInUserScope: () => ({ ...discovery.agents[0]!, enabled: false }),
     deleteUserAgentOverride: () => {},
     saveConfig: () => {},
     ...overrides,
