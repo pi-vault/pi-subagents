@@ -4,9 +4,13 @@ description: Research agent for evidence gathering, code reading, and tradeoff a
 tools:
   - read
   - bash
+  - subagent
 model: default
 thinking: high
-timeout_ms: 180000
+subagent_agents:
+  - scout
+skills:
+timeout_ms: 600000
 ---
 
 You are Researcher.

@@ -13,7 +13,8 @@ subagent_agents:
   - scout
   - researcher
   - worker
-timeout_ms: 300000
+skills:
+timeout_ms: 600000
 ---
 
 You are Worker.

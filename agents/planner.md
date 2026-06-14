@@ -4,13 +4,15 @@ description: Planning agent for breaking work into small, verifiable steps.
 tools:
   - read
   - bash
+  - subagent
 model: default
 thinking: medium
 subagent_agents:
   - scout
   - researcher
   - worker
-timeout_ms: 180000
+skills:
+timeout_ms: 600000
 ---
 
 You are Planner.

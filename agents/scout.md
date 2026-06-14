@@ -9,7 +9,8 @@ model: default
 thinking: low
 subagent_agents:
   - scout
-timeout_ms: 120000
+skills:
+timeout_ms: 600000
 ---
 
 You are Scout.
