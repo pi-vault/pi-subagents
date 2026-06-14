@@ -127,6 +127,9 @@ async function showRowsMenu<T>(
     if (ctx.ui.select) {
       const selectLabels = buildSelectLabels(rows);
       const selectedLabel = await ctx.ui.select(title, selectLabels);
+      if (selectedLabel === undefined) {
+        return undefined;
+      }
       const index = selectLabels.indexOf(selectedLabel);
       return index >= 0 ? rows[index]?.value : undefined;
     }
