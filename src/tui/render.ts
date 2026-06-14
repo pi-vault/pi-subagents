@@ -1,9 +1,5 @@
 import { Container, Text } from "@earendil-works/pi-tui";
-import {
-  getSlashRenderableMessage,
-  getSlashSnapshot,
-  isSlashLiveRunning,
-} from "../core/slash-live-state.js";
+import type { ExecutionStateStore } from "../core/execution-state.js";
 import type {
   AgentToolResult,
   MessageRenderOptions,
@@ -150,12 +146,7 @@ export function buildSubagentResultText(
   }
 
   if (isSlashLiveDetails(details)) {
-    const snapshotDetails = getSlashSnapshot(details.requestId)?.live;
-    const liveDetails =
-      snapshotDetails && snapshotDetails.durationMs >= details.durationMs
-        ? snapshotDetails
-        : details;
-    return buildSlashLiveText(liveDetails, expanded, theme);
+    return buildSlashLiveText(details, expanded, theme);
   }
 
   const statusColor = getStatusColor(details.status);
@@ -241,17 +232,20 @@ export function renderSubagentResult(
   result: AgentToolResult<unknown>,
   options: ToolRenderResultOptions,
   theme: Theme,
+  store: ExecutionStateStore,
 ): Text {
   const content = normalizeMessageContent(
     result.content as string | Array<{ type: string; text?: string }>,
   );
+  let details = result.details as SubagentMessageDetails | undefined;
+  if (store && details && isSlashLiveDetails(details)) {
+    const snapshot = store.getSnapshot(details.requestId);
+    if (snapshot?.live && snapshot.live.durationMs >= details.durationMs) {
+      details = snapshot.live;
+    }
+  }
   return new Text(
-    buildSubagentResultText(
-      content,
-      result.details as SubagentMessageDetails | undefined,
-      options.expanded,
-      theme,
-    ),
+    buildSubagentResultText(content, details, options.expanded, theme),
     0,
     0,
   );
@@ -264,6 +258,7 @@ export function renderSubagentMessage(
   },
   options: MessageRenderOptions,
   theme: Theme,
+  store: ExecutionStateStore,
 ): Text | Container {
   if (isSlashLiveDetails(message.details)) {
     return createSlashLiveMessageComponent(
@@ -273,6 +268,7 @@ export function renderSubagentMessage(
       },
       options,
       theme,
+      store,
     );
   }
 
@@ -299,18 +295,19 @@ function createSlashLiveMessageComponent(
   },
   options: MessageRenderOptions,
   theme: Theme,
+  store: ExecutionStateStore,
 ): Container {
   const container = new Container();
   let lastVersion = -1;
 
   container.render = (width: number): string[] => {
-    const snapshot = getSlashSnapshot(message.details.requestId);
+    const snapshot = store.getSnapshot(message.details.requestId);
     const currentVersion = snapshot?.version ?? 0;
-    const running = isSlashLiveRunning(message.details.requestId);
+    const running = store.isLiveRunning(message.details.requestId);
 
     if (currentVersion !== lastVersion || running) {
       lastVersion = currentVersion;
-      const resolved = getSlashRenderableMessage(message.details);
+      const resolved = store.getRenderableMessage(message.details);
       const baseContent = normalizeMessageContent(
         message.content as string | Array<{ type: string; text?: string }>,
       );
