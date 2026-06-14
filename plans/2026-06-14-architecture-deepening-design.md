@@ -16,6 +16,31 @@
 
 ---
 
+## Split into 5 independently-mergeable phases
+
+| Phase | Plan                                                                                          | Deliverable                                                                                                   |
+| ----- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 1     | [phase-1-execution-state](./2026-06-14-architecture-deepening-phase-1.md)                     | Merge deferred + live state into `ExecutionStateStore` class. Inject via deps.                                 |
+| 2     | [phase-2-skill-loader-bfs](./2026-06-14-architecture-deepening-phase-2.md)                    | Collapse 4 duplicated BFS traversals into `walkSkillTree(root, visitor)`.                                     |
+| 3     | [phase-3-agent-format](./2026-06-14-architecture-deepening-phase-3.md)                        | Extract frontmatter parsing/serialization into `agent-format.ts`.                                             |
+| 4     | [phase-4-nested-context](./2026-06-14-architecture-deepening-phase-4.md)                      | Encapsulate 16 env-var constants behind `nested-context.ts`.                                                  |
+| 5     | [phase-5-subagent-split](./2026-06-14-architecture-deepening-phase-5.md)                      | Split `subagent.ts` into orchestrator + spawner + artifacts.                                                  |
+
+Each phase passes `pnpm check` on its own and can be merged independently (except Phase 5 which requires 1 + 4).
+
+## Dependency Order
+
+```
+Phase 2 (skill-loader BFS)     ← independent
+Phase 3 (agent-format)         ← independent
+
+Phase 1 (execution state)  ──┐
+                              ├──→ Phase 5 (subagent split)
+Phase 4 (nested-context)   ──┘
+```
+
+---
+
 ## Phase 1: Unify execution state into `ExecutionStateStore`
 
 ### Files involved
