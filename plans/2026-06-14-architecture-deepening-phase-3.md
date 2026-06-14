@@ -12,13 +12,13 @@
 
 ## File Map
 
-| File | Action | Responsibility |
-| ---- | ------ | -------------- |
-| `src/core/agent-format.ts` | **Create** | Owns `parseAgentContent`, `serializeAgent`, and all internal helpers: `parseFrontmatter`, `parseStringArray`, `uniqueStrings`, `normalizeOptionalString`, `normalizeAgentModel`, `serializeStringList` |
-| `src/core/agents.ts` | **Slim** | Retains `discoverAgents`, `discoverToolNames`, `createAgentFile`, `exportAgentToUserScope`, `disableAgentInUserScope`, `deleteUserAgentOverride`, and private helpers: `normalizeNameForComparison`, `ensureUserAgentsDir`, `fileSlugForAgent`, `findAgentDefinition`, `discoverAgentsFromDirectory`. Imports `parseAgentContent` + `serializeAgent` from `agent-format.ts` |
-| `src/tui/agents-menu.ts` | **Update import** | Changes `parseAgentFile` import from `../core/agents.js` to `../core/agent-format.js` |
-| `tests/agent-format.test.ts` | **Create** | Exhaustive unit tests for the format module in isolation |
-| `tests/agents.test.ts` | **Update imports** | Adds import of `parseAgentContent` from `agent-format.js`; updates tests that call `parseAgentFile` to use the new name. Tests that exercise discovery/create/export/disable remain here |
+| File                         | Action             | Responsibility                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/core/agent-format.ts`   | **Create**         | Owns `parseAgentContent`, `serializeAgent`, and all internal helpers: `parseFrontmatter`, `parseStringArray`, `uniqueStrings`, `normalizeOptionalString`, `normalizeAgentModel`, `serializeStringList`                                                                                                                                                                      |
+| `src/core/agents.ts`         | **Slim**           | Retains `discoverAgents`, `discoverToolNames`, `createAgentFile`, `exportAgentToUserScope`, `disableAgentInUserScope`, `deleteUserAgentOverride`, and private helpers: `normalizeNameForComparison`, `ensureUserAgentsDir`, `fileSlugForAgent`, `findAgentDefinition`, `discoverAgentsFromDirectory`. Imports `parseAgentContent` + `serializeAgent` from `agent-format.ts` |
+| `src/tui/agents-menu.ts`     | **Update import**  | Changes `parseAgentFile` import from `../core/agents.js` to `../core/agent-format.js`                                                                                                                                                                                                                                                                                       |
+| `tests/agent-format.test.ts` | **Create**         | Exhaustive unit tests for the format module in isolation                                                                                                                                                                                                                                                                                                                    |
+| `tests/agents.test.ts`       | **Update imports** | Adds import of `parseAgentContent` from `agent-format.js`; updates tests that call `parseAgentFile` to use the new name. Tests that exercise discovery/create/export/disable remain here                                                                                                                                                                                    |
 
 ---
 
@@ -31,13 +31,20 @@ Extract format concerns into a new pure module with a clean public interface.
 ```typescript
 // src/core/agent-format.ts
 
-import type { AgentCreationInput, AgentDefinition, AgentDiscoveryDiagnostic } from "../shared/types.js";
+import type {
+  AgentCreationInput,
+  AgentDefinition,
+  AgentDiscoveryDiagnostic,
+} from "../shared/types.js";
 
 type ParseResult =
   | { ok: true; agent: AgentDefinition }
   | { ok: false; diagnostic: AgentDiscoveryDiagnostic };
 
-export function parseAgentContent(filePath: string, content: string): ParseResult;
+export function parseAgentContent(
+  filePath: string,
+  content: string,
+): ParseResult;
 export function serializeAgent(input: AgentCreationInput): string;
 ```
 
