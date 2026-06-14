@@ -36,10 +36,11 @@ export interface AgentDefinition {
   model?: string;
   thinking?: string;
   subagentAgents: string[];
-  timeoutMs?: number;
   enabled?: boolean;
+  skills?: string[] | boolean;
   systemPrompt: string;
   sourcePath: string;
+  timeoutMs?: number;
 }
 
 export interface AgentDiscoveryDiagnostic {
@@ -60,8 +61,9 @@ export interface AgentCreationInput {
   model?: string;
   thinking?: string;
   subagentAgents: string[];
-  timeoutMs?: number;
+  skills?: string[] | boolean;
   systemPrompt: string;
+  timeoutMs?: number;
 }
 
 export interface RuntimeDeps {
@@ -142,7 +144,8 @@ export interface SlashSubagentRequestPayload {
   cleanup: (() => void) | undefined;
 }
 
-export const DEFERRED_SLASH_REQUEST_ENTRY = "pi-subagents:deferred-request" as const;
+export const DEFERRED_SLASH_REQUEST_ENTRY =
+  "pi-subagents:deferred-request" as const;
 export const DEFERRED_SLASH_REQUEST_CONSUMED_ENTRY =
   "pi-subagents:deferred-request-consumed" as const;
 
