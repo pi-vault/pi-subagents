@@ -14,6 +14,11 @@ export interface ResolvedSkill {
   path: string;
 }
 
+/** @internal Exported for testing. */
+export type SkillEntry =
+  | { kind: "flat"; name: string; filePath: string }
+  | { kind: "directory"; name: string; dirPath: string; skillMdPath: string };
+
 export function preloadSkills(
   skillNames: string[],
   cwd: string,
@@ -91,6 +96,89 @@ function safeReadFile(filePath: string): string | undefined {
   }
 }
 
+/**
+ * BFS walk over a skill root directory. Visits flat .md files at the root level,
+ * then descends into subdirectories. Directories containing SKILL.md are skills;
+ * directories without are categories (descended into).
+ *
+ * The visitor receives each discovered SkillEntry. Return `true` to stop early.
+ *
+ * @internal Exported for testing.
+ */
+export function walkSkillTree(
+  root: string,
+  visitor: (entry: SkillEntry) => boolean,
+): void {
+  if (isSymlink(root)) return;
+  if (!existsSync(root)) return;
+
+  // Phase 1: Flat .md files at root level
+  let rootEntries: Dirent[];
+  try {
+    rootEntries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of rootEntries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".md")) continue;
+    const filePath = join(root, entry.name);
+    if (isSymlink(filePath)) continue;
+    const name = entry.name.slice(0, -3); // strip .md
+    if (isUnsafeName(name)) continue;
+    const stop = visitor({ kind: "flat", name, filePath });
+    if (stop) return;
+  }
+
+  // Phase 2: BFS over directories
+  const queue: string[] = [root];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === undefined) continue;
+
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith(".") || entry.name === "node_modules")
+        continue;
+
+      const entryPath = join(current, entry.name);
+      if (isSymlink(entryPath)) continue;
+
+      const skillMdPath = join(entryPath, "SKILL.md");
+      const hasSkillMd = existsSync(skillMdPath) && !isSymlink(skillMdPath);
+
+      if (hasSkillMd) {
+        // This directory IS a skill
+        if (!isUnsafeName(entry.name)) {
+          const stop = visitor({
+            kind: "directory",
+            name: entry.name,
+            dirPath: entryPath,
+            skillMdPath,
+          });
+          if (stop) return;
+        }
+        // Don't descend into skill directories
+        continue;
+      }
+
+      // Category directory - descend
+      queue.push(entryPath);
+    }
+  }
+}
+
 function loadSkillContent(name: string, cwd: string): string {
   if (isUnsafeName(name)) {
     return `(Skill "${name}" skipped: name contains unsafe characters)`;
@@ -103,118 +191,24 @@ function loadSkillContent(name: string, cwd: string): string {
 }
 
 function findInRoot(root: string, name: string): string | undefined {
-  if (isSymlink(root)) return undefined;
-  if (!existsSync(root)) return undefined;
-
-  // Flat file at root level
-  const flatPath = join(root, `${name}.md`);
-  const flat = safeReadFile(flatPath)?.trim();
-  if (flat !== undefined) return flat;
-
-  // Directory skill at root level
-  const dirPath = join(root, name);
-  if (!isSymlink(dirPath)) {
-    const dirContent = safeReadFile(join(dirPath, "SKILL.md"))?.trim();
-    if (dirContent !== undefined) return dirContent;
-  }
-
-  // BFS for nested directory skills in category folders
-  return findSkillBFS(root, name);
-}
-
-function findSkillBFS(root: string, name: string): string | undefined {
-  const queue: string[] = [root];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === undefined) continue;
-
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
+  let result: string | undefined;
+  walkSkillTree(root, (entry) => {
+    if (entry.name !== name) return false;
+    if (entry.kind === "flat") {
+      result = safeReadFile(entry.filePath)?.trim();
+    } else {
+      result = safeReadFile(entry.skillMdPath)?.trim();
     }
-
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-
-      const entryPath = join(current, entry.name);
-      if (isSymlink(entryPath)) continue;
-
-      const skillMd = join(entryPath, "SKILL.md");
-      const hasSkillMd = existsSync(skillMd) && !isSymlink(skillMd);
-
-      if (hasSkillMd) {
-        // This directory IS a skill
-        if (entry.name === name) {
-          const content = safeReadFile(skillMd)?.trim();
-          if (content !== undefined) return content;
-        }
-        // Don't descend into skill directories
-        continue;
-      }
-
-      // Category directory — descend
-      queue.push(entryPath);
-    }
-  }
-  return undefined;
+    return result !== undefined; // stop if we found content
+  });
+  return result;
 }
 
 function collectSkillNames(root: string, seen: Set<string>): void {
-  if (isSymlink(root)) return;
-  if (!existsSync(root)) return;
-
-  // Flat files at root level
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      const entryPath = join(root, entry.name);
-      if (isSymlink(entryPath)) continue;
-      const skillName = entry.name.slice(0, -3);
-      if (!isUnsafeName(skillName)) seen.add(skillName);
-    }
-  }
-
-  // BFS for directory skills
-  const queue: string[] = [root];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === undefined) continue;
-
-    let dirEntries: Dirent[];
-    try {
-      dirEntries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of dirEntries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-
-      const entryPath = join(current, entry.name);
-      if (isSymlink(entryPath)) continue;
-
-      const skillMd = join(entryPath, "SKILL.md");
-      if (existsSync(skillMd) && !isSymlink(skillMd)) {
-        if (!isUnsafeName(entry.name)) seen.add(entry.name);
-        continue;
-      }
-
-      queue.push(entryPath);
-    }
-  }
+  walkSkillTree(root, (entry) => {
+    seen.add(entry.name);
+    return false;
+  });
 }
 
 function findPathForSkill(name: string, cwd: string): string | undefined {
@@ -226,113 +220,21 @@ function findPathForSkill(name: string, cwd: string): string | undefined {
 }
 
 function findPathInRoot(root: string, name: string): string | undefined {
-  if (isSymlink(root)) return undefined;
-  if (!existsSync(root)) return undefined;
-
-  // Flat file at root level
-  const flatPath = join(root, `${name}.md`);
-  if (!isSymlink(flatPath) && existsSync(flatPath)) return flatPath;
-
-  // Directory skill at root level
-  const dirPath = join(root, name);
-  if (!isSymlink(dirPath)) {
-    const skillMd = join(dirPath, "SKILL.md");
-    if (existsSync(skillMd) && !isSymlink(skillMd)) return dirPath;
-  }
-
-  // BFS for nested directory skills
-  return findSkillPathBFS(root, name);
-}
-
-function findSkillPathBFS(root: string, name: string): string | undefined {
-  const queue: string[] = [root];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === undefined) continue;
-
-    let entries: Dirent[];
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-
-      const entryPath = join(current, entry.name);
-      if (isSymlink(entryPath)) continue;
-
-      const skillMd = join(entryPath, "SKILL.md");
-      const hasSkillMd = existsSync(skillMd) && !isSymlink(skillMd);
-
-      if (hasSkillMd) {
-        if (entry.name === name) return entryPath;
-        continue;
-      }
-
-      queue.push(entryPath);
-    }
-  }
-  return undefined;
+  let result: string | undefined;
+  walkSkillTree(root, (entry) => {
+    if (entry.name !== name) return false;
+    result = entry.kind === "flat" ? entry.filePath : entry.dirPath;
+    return true;
+  });
+  return result;
 }
 
 function collectSkillPaths(root: string, seen: Map<string, string>): void {
-  if (isSymlink(root)) return;
-  if (!existsSync(root)) return;
-
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  // Flat files at root level
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      const entryPath = join(root, entry.name);
-      if (isSymlink(entryPath)) continue;
-      const skillName = entry.name.slice(0, -3);
-      if (!isUnsafeName(skillName) && !seen.has(skillName)) {
-        seen.set(skillName, entryPath);
-      }
+  walkSkillTree(root, (entry) => {
+    if (!seen.has(entry.name)) {
+      const path = entry.kind === "flat" ? entry.filePath : entry.dirPath;
+      seen.set(entry.name, path);
     }
-  }
-
-  // BFS for directory skills
-  const queue: string[] = [root];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === undefined) continue;
-
-    let dirEntries: Dirent[];
-    try {
-      dirEntries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of dirEntries) {
-      if (!entry.isDirectory()) continue;
-      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-
-      const entryPath = join(current, entry.name);
-      if (isSymlink(entryPath)) continue;
-
-      const skillMd = join(entryPath, "SKILL.md");
-      if (existsSync(skillMd) && !isSymlink(skillMd)) {
-        if (!isUnsafeName(entry.name) && !seen.has(entry.name)) {
-          seen.set(entry.name, entryPath);
-        }
-        continue;
-      }
-
-      queue.push(entryPath);
-    }
-  }
+    return false;
+  });
 }

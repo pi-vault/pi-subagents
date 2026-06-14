@@ -13,7 +13,9 @@ import {
   discoverAvailableSkills,
   preloadSkills,
   resolveSkillPaths,
+  walkSkillTree,
 } from "../src/core/skill-loader.js";
+import type { SkillEntry } from "../src/core/skill-loader.js";
 
 describe("skill-loader", () => {
   let tmpDir: string;
@@ -297,6 +299,166 @@ describe("skill-loader", () => {
       const shared = result.filter((r) => r.name === "shared");
       expect(shared).toHaveLength(1);
       expect(shared[0].path).toBe(join(piSkillsDir(), "shared.md"));
+    });
+  });
+
+  describe("walkSkillTree", () => {
+    test("visits flat .md files at root level", () => {
+      writeFlat(piSkillsDir(), "alpha", "A");
+      writeFlat(piSkillsDir(), "beta", "B");
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(2);
+      expect(entries.every((e) => e.kind === "flat")).toBe(true);
+      expect(entries.map((e) => e.name).sort()).toEqual(["alpha", "beta"]);
+    });
+
+    test("visits directory skills with SKILL.md", () => {
+      writeSkillDir(piSkillsDir(), "debug", "# Debug");
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0].kind).toBe("directory");
+      if (entries[0].kind === "directory") {
+        expect(entries[0].name).toBe("debug");
+        expect(entries[0].skillMdPath).toBe(
+          join(piSkillsDir(), "debug", "SKILL.md"),
+        );
+      }
+    });
+
+    test("visits nested directory skills inside category folders", () => {
+      const category = join(piSkillsDir(), "dev-tools");
+      writeSkillDir(category, "linting", "# Lint");
+      writeSkillDir(category, "testing", "# Test");
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries.map((e) => e.name).sort()).toEqual(["linting", "testing"]);
+    });
+
+    test("stops early when visitor returns true (flat phase)", () => {
+      writeFlat(piSkillsDir(), "aaa", "A");
+      writeFlat(piSkillsDir(), "bbb", "B");
+      writeFlat(piSkillsDir(), "ccc", "C");
+      const visited: string[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        visited.push(entry.name);
+        return visited.length >= 2;
+      });
+      expect(visited).toHaveLength(2);
+    });
+
+    test("stops early when visitor returns true (BFS phase)", () => {
+      writeSkillDir(piSkillsDir(), "aaa", "A");
+      writeSkillDir(piSkillsDir(), "bbb", "B");
+      writeSkillDir(piSkillsDir(), "ccc", "C");
+      const visited: string[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        visited.push(entry.name);
+        return true; // stop on first
+      });
+      expect(visited).toHaveLength(1);
+    });
+
+    test("skips symlinked files", () => {
+      mkdirSync(piSkillsDir(), { recursive: true });
+      const real = join(tmpDir, "real.md");
+      writeFileSync(real, "SECRET");
+      symlinkSync(real, join(piSkillsDir(), "evil.md"));
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(0);
+    });
+
+    test("skips symlinked directories", () => {
+      mkdirSync(piSkillsDir(), { recursive: true });
+      const realDir = join(tmpDir, "real-skill");
+      mkdirSync(realDir, { recursive: true });
+      writeFileSync(join(realDir, "SKILL.md"), "SECRET");
+      symlinkSync(realDir, join(piSkillsDir(), "evil-dir"));
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(0);
+    });
+
+    test("skips dotfile directories", () => {
+      writeSkillDir(join(piSkillsDir(), ".hidden"), "secret", "no");
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(0);
+    });
+
+    test("skips node_modules directories", () => {
+      writeSkillDir(join(piSkillsDir(), "node_modules", "pkg"), "leaked", "no");
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(0);
+    });
+
+    test("does not descend into skill directories", () => {
+      writeSkillDir(piSkillsDir(), "outer", "outer-content");
+      writeSkillDir(join(piSkillsDir(), "outer"), "inner", "inner-content");
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries.map((e) => e.name)).toEqual(["outer"]);
+    });
+
+    test("returns nothing for non-existent root", () => {
+      const entries: SkillEntry[] = [];
+      walkSkillTree(join(tmpDir, "nope"), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(0);
+    });
+
+    test("returns nothing for symlinked root", () => {
+      const realRoot = join(tmpDir, "real-root");
+      mkdirSync(realRoot, { recursive: true });
+      writeFileSync(join(realRoot, "skill.md"), "content");
+      const symRoot = join(tmpDir, "sym-root");
+      symlinkSync(realRoot, symRoot);
+      const entries: SkillEntry[] = [];
+      walkSkillTree(symRoot, (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(0);
+    });
+
+    test("skips names that fail isUnsafeName validation", () => {
+      mkdirSync(piSkillsDir(), { recursive: true });
+      writeFileSync(join(piSkillsDir(), ".hidden.md"), "content");
+      const entries: SkillEntry[] = [];
+      walkSkillTree(piSkillsDir(), (entry) => {
+        entries.push(entry);
+        return false;
+      });
+      expect(entries).toHaveLength(0);
     });
   });
 });
