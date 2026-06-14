@@ -2,9 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, Text, matchesKey } from "@earendil-works/pi-tui";
-import {
-  parseAgentFile,
-} from "../core/agents.js";
+import { parseAgentContent as parseAgentFile } from "../core/agent-format.js";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentCreationInput,
