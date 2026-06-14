@@ -1204,7 +1204,7 @@ describe("subagent execution", () => {
     });
   });
 
-  test("injects preloaded skills into the system prompt file", async () => {
+  test("passes --no-skills and --skill flags for explicit skill list", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-subagent-skills-"));
     const skillsDir = join(cwd, ".pi", "skills");
     mkdirSync(skillsDir, { recursive: true });
@@ -1217,9 +1217,11 @@ describe("subagent execution", () => {
       diagnostics: [],
     };
 
+    const spawnCalls: Array<{ args: string[] }> = [];
     const writtenFiles: Array<{ path: string; content: string }> = [];
     const runtime: SubagentRuntimeDeps = {
-      spawnChild: ((_command, _args, _options) => {
+      spawnChild: ((_command, args, _options) => {
+        spawnCalls.push({ args: args as string[] });
         const child = new FakeChildProcess();
         queueMicrotask(() => {
           child.stdout.write(
@@ -1261,18 +1263,24 @@ describe("subagent execution", () => {
       runtime,
     );
 
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args).toContain("--no-skills");
+    expect(spawnCalls[0]?.args).toContain("--skill");
+    const skillIdx = spawnCalls[0]?.args.indexOf("--skill");
+    expect(spawnCalls[0]?.args[skillIdx! + 1]).toBe(
+      join(skillsDir, "test-skill.md"),
+    );
+
+    // Prompt file should NOT contain skill content (only base systemPrompt)
     const promptFile = writtenFiles.find((f) => f.path.endsWith(".md"));
     expect(promptFile).toBeDefined();
-    const writtenPrompt = promptFile?.content ?? "";
-
-    expect(writtenPrompt).toContain("You are Worker.");
-    expect(writtenPrompt).toContain("# Preloaded Skill: test-skill");
-    expect(writtenPrompt).toContain("Do TDD.");
+    expect(promptFile?.content).toBe("You are Worker.");
+    expect(promptFile?.content).not.toContain("Preloaded Skill");
 
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  test("skills: false suppresses skill injection and passes --no-skills", async () => {
+  test("skills: false passes --no-skills with no --skill flags", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-subagent-no-skills-"));
     const skillsDir = join(cwd, ".pi", "skills");
     mkdirSync(skillsDir, { recursive: true });
@@ -1334,16 +1342,14 @@ describe("subagent execution", () => {
       runtime,
     );
 
-    const promptFile = writtenFiles.find((f) => f.path.endsWith(".md"));
-    expect(promptFile).toBeDefined();
-    const writtenPrompt = promptFile?.content ?? "";
-
-    expect(writtenPrompt).toContain("You are Worker.");
-    expect(writtenPrompt).not.toContain("Preloaded Skill");
-    expect(writtenPrompt).not.toContain("Unwanted");
-
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0]?.args).toContain("--no-skills");
+    expect(spawnCalls[0]?.args).not.toContain("--skill");
+
+    // Prompt file should only contain base systemPrompt
+    const promptFile = writtenFiles.find((f) => f.path.endsWith(".md"));
+    expect(promptFile).toBeDefined();
+    expect(promptFile?.content).toBe("You are Worker.");
 
     rmSync(cwd, { recursive: true, force: true });
   });

@@ -47,31 +47,7 @@ import {
   renderSubagentResult,
   toSubagentCommandMessage,
 } from "../tui/render.js";
-import { discoverAvailableSkills, preloadSkills } from "./skill-loader.js";
-
-function buildSkillSuffix(
-  skills: AgentDefinition["skills"],
-  cwd: string,
-): string {
-  if (skills === false) return "";
-
-  let skillNames: string[];
-  if (Array.isArray(skills)) {
-    skillNames = skills;
-  } else {
-    // undefined or true = discover all available
-    skillNames = discoverAvailableSkills(cwd);
-  }
-
-  if (skillNames.length === 0) return "";
-
-  const loaded = preloadSkills(skillNames, cwd);
-  const sections = loaded
-    .filter((s) => !s.content.startsWith("(Skill"))
-    .map((s) => `\n# Preloaded Skill: ${s.name}\n\n${s.content}`);
-
-  return sections.length > 0 ? `\n${sections.join("\n")}` : "";
-}
+import { discoverAvailableSkillPaths, resolveSkillPaths } from "./skill-loader.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -447,6 +423,7 @@ function buildChildArgs(
   childSessionPath: string,
   recursionEnabled: boolean,
   effectiveModel: string | undefined,
+  cwd: string,
 ): string[] {
   const args = [
     "--mode",
@@ -478,8 +455,16 @@ function buildChildArgs(
   if (promptPath) {
     args.push("--append-system-prompt", promptPath);
   }
-  if (agent.skills === false) {
-    args.push("--no-skills");
+
+  // Always suppress host autodiscovery; explicitly pass desired skills
+  args.push("--no-skills");
+  if (agent.skills !== false) {
+    const resolved = Array.isArray(agent.skills)
+      ? resolveSkillPaths(agent.skills, cwd)
+      : discoverAvailableSkillPaths(cwd);
+    for (const skill of resolved) {
+      args.push("--skill", skill.path);
+    }
   }
 
   return args;
@@ -531,6 +516,7 @@ function createNestedChildLaunch(
     childSessionPath,
     recursionEnabled,
     effectiveModel,
+    cwd,
   );
 
   if (!recursionEnabled) {
@@ -927,15 +913,13 @@ export async function executeSubagent(
 
     runtime.mkdirp(childSessionDir);
     onProgress?.({ childSessionPath, durationMs: runtime.now() - startedAt });
-    const skillSuffix = buildSkillSuffix(resolvedAgent.skills, effectiveCwd);
-    const fullPrompt = resolvedAgent.systemPrompt.trim() + skillSuffix;
-    if (fullPrompt) {
+    if (resolvedAgent.systemPrompt.trim()) {
       promptDir = runtime.mkdtemp(join(tmpdir(), "pi-subagents-"));
       promptPath = join(
         promptDir,
         `${resolvedAgent.name.replace(/[^A-Za-z0-9_-]+/g, "_").toLowerCase()}.md`,
       );
-      runtime.writeFile(promptPath, fullPrompt);
+      runtime.writeFile(promptPath, resolvedAgent.systemPrompt.trim());
     }
 
     const launch = createNestedChildLaunch(
