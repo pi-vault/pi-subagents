@@ -47,6 +47,31 @@ import {
   renderSubagentResult,
   toSubagentCommandMessage,
 } from "../tui/render.js";
+import { discoverAvailableSkills, preloadSkills } from "./skill-loader.js";
+
+function buildSkillSuffix(
+  skills: AgentDefinition["skills"],
+  cwd: string,
+): string {
+  if (skills === false) return "";
+
+  let skillNames: string[];
+  if (Array.isArray(skills)) {
+    skillNames = skills;
+  } else {
+    // undefined or true = discover all available
+    skillNames = discoverAvailableSkills(cwd);
+  }
+
+  if (skillNames.length === 0) return "";
+
+  const loaded = preloadSkills(skillNames, cwd);
+  const sections = loaded
+    .filter((s) => !s.content.startsWith("(Skill"))
+    .map((s) => `\n# Preloaded Skill: ${s.name}\n\n${s.content}`);
+
+  return sections.length > 0 ? `\n${sections.join("\n")}` : "";
+}
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -899,13 +924,15 @@ export async function executeSubagent(
 
     runtime.mkdirp(childSessionDir);
     onProgress?.({ childSessionPath, durationMs: runtime.now() - startedAt });
-    if (resolvedAgent.systemPrompt.trim()) {
+    const skillSuffix = buildSkillSuffix(resolvedAgent.skills, effectiveCwd);
+    const fullPrompt = resolvedAgent.systemPrompt.trim() + skillSuffix;
+    if (fullPrompt) {
       promptDir = runtime.mkdtemp(join(tmpdir(), "pi-subagents-"));
       promptPath = join(
         promptDir,
         `${resolvedAgent.name.replace(/[^A-Za-z0-9_-]+/g, "_").toLowerCase()}.md`,
       );
-      runtime.writeFile(promptPath, resolvedAgent.systemPrompt);
+      runtime.writeFile(promptPath, fullPrompt);
     }
 
     const launch = createNestedChildLaunch(
