@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Split the 1380-line `src/core/subagent.ts` into three focused modules: a process spawner, an artifact writer, and a slimmed orchestrator. Each module passes the deletion test — removing it breaks a clear, distinct capability.
+**Goal:** Split `src/core/subagent.ts` (1163 lines after phases 1–4) into three focused modules: a process spawner, an artifact writer, and a slimmed orchestrator. Each module passes the deletion test — removing it breaks a clear, distinct capability.
 
 **Architecture:** The orchestrator (`subagent.ts`) delegates downward to `subagent-spawner.ts` for child process lifecycle and to `subagent-artifacts.ts` for artifact I/O. The spawner returns a `RawChildResult` struct; the orchestrator maps it to `SubagentExecutionResult` and hands it to artifacts for persistence. Registration glue stays in the orchestrator since it coordinates all three concerns.
 
@@ -14,14 +14,14 @@
 
 ## File Map
 
-| New / Changed File | Responsibility |
-| --- | --- |
-| `src/core/subagent-spawner.ts` | Child process lifecycle: arg assembly, spawn, stream parsing, timeout/signal, usage accumulation |
-| `src/core/subagent-artifacts.ts` | Artifact markdown generation and disk writes |
-| `src/core/subagent.ts` | Orchestration (`executeSubagent`), registration, request parsing, session resolution |
-| `tests/subagent-spawner.test.ts` | Spawner-focused tests (stream parsing, timeout, signal, usage) |
-| `tests/subagent-artifacts.test.ts` | Artifact generation and write tests |
-| `tests/subagent.test.ts` | Slimmed: orchestration + registration tests only (spawner injected) |
+| New / Changed File                 | Responsibility                                                                                   |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `src/core/subagent-spawner.ts`     | Child process lifecycle: arg assembly, spawn, stream parsing, timeout/signal, usage accumulation |
+| `src/core/subagent-artifacts.ts`   | Artifact markdown generation and disk writes                                                     |
+| `src/core/subagent.ts`             | Orchestration (`executeSubagent`), registration, request parsing, session resolution             |
+| `tests/subagent-spawner.test.ts`   | Spawner-focused tests (stream parsing, timeout, signal, usage)                                   |
+| `tests/subagent-artifacts.test.ts` | Artifact generation and write tests                                                              |
+| `tests/subagent.test.ts`           | Slimmed: orchestration + registration tests only (spawner injected)                              |
 
 ---
 
@@ -36,6 +36,7 @@ Move all child-process mechanics into a dedicated module with a single public en
   - `getParentModelId(model): string | undefined`
   - Types: `RawChildResult`, `SpawnCollectParams`, `JsonContentPart`, `JsonAssistantMessage`, `JsonMessageEndEvent`, `JsonToolExecutionStartEvent`, `JsonToolExecutionEndEvent`, `ChildSpawn`, `SpawnChildFn`, `ProgressUpdate`
   - Constants: `TERMINATION_GRACE_MS`, `SUBAGENT_EXTENSION_ENTRY`
+  - Import: `resolveSkillPaths` from `./skill-loader.js` (consumed by `buildChildArgs`)
 - [ ] Move internal helpers from `subagent.ts` into the new module as private functions:
   - `processLine()` (adapted as a factory or closure inside `spawnAndCollect`)
   - `getAssistantText(message): string`
@@ -68,7 +69,7 @@ Move all child-process mechanics into a dedicated module with a single public en
     timeoutMs: number;
     signal: AbortSignal | undefined;
     effectiveModel: string | undefined;
-    runtime: Pick<SubagentRuntimeDeps, 'spawnChild' | 'now'>;
+    runtime: Pick<SubagentRuntimeDeps, "spawnChild" | "now">;
     onProgress?: (update: ProgressUpdate) => void;
     childSessionPath?: string;
     startedAt: number;
@@ -107,9 +108,11 @@ After Tasks 1–2, `subagent.ts` should contain only orchestration and registrat
   - `executeSubagent()` — orchestrates: validate → resolve session → prepare launch → call `spawnAndCollect` → map `RawChildResult` to `SubagentExecutionResult` → write artifacts → return
   - `registerSubagentTool()`, `registerSlashAgentBridge()`, `registerAgentCommand()`
   - `findAgentByName()`, `parseSubagentRequest()`, `listAvailableAgents()`
-  - `resolveChildSessionTarget()`, `buildExecutionResult()`, `buildSlashBridgeErrorResult()`
+  - `createNestedChildLaunch()` — bridges `buildChildArgs` (spawner) and `buildChildEnv` (nested-context)
+  - `getParentSessionStem()`, `resolveChildSessionTarget()`, `buildExecutionResult()`, `buildSlashBridgeErrorResult()`
   - `parseAgentCommandArgs()`, `encodeDeferredTicket()`, `decodeDeferredTicket()`
   - Constants: `CHILD_SESSION_FILE_NAME`, `SYNTHETIC_PARENT_SESSION_STEM`, `DEFERRED_TICKET_PREFIX`, `SLASH_AGENT_BRIDGE_UNAVAILABLE`
+  - Types: `NestedChildLaunch`
   - `SubagentRuntimeDeps` interface and `createSubagentRuntimeDeps()` factory
   - `resolvePiInvocation()`
   - `SUBAGENT_TOOL_PARAMETERS` schema
@@ -142,7 +145,7 @@ After Tasks 1–2, `subagent.ts` should contain only orchestration and registrat
 
 ### Task 4: Restructure tests
 
-Split the existing 1872-line `tests/subagent.test.ts` to match the new module boundaries and add focused tests that were previously impractical.
+Split `tests/subagent.test.ts` (1869 lines, 28 tests) to match the new module boundaries and add focused tests that were previously impractical.
 
 - [ ] Create `tests/subagent-spawner.test.ts` with tests focused on:
   - `buildChildArgs` — flag assembly with various agent configurations (recursion on/off, model, thinking, skills, no-skills)
@@ -179,9 +182,6 @@ After all tasks are complete:
 - [ ] `pnpm run lint` — biome passes
 - [ ] `pnpm run typecheck` — tsc --noEmit passes
 - [ ] `pnpm run test` — vitest run passes (all existing + new tests)
-- [ ] `src/core/subagent.ts` is ≤400 lines (down from 1380)
-- [ ] `src/core/subagent-spawner.ts` is ≤350 lines
-- [ ] `src/core/subagent-artifacts.ts` is ≤100 lines
 - [ ] No public interface changes visible to `src/index.ts` or external callers
 - [ ] Each new module has at least one dedicated test file with ≥5 focused test cases
 - [ ] `src/index.ts` requires no changes (re-exports still resolve)
