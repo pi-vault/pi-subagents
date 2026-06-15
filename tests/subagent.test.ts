@@ -1417,6 +1417,143 @@ describe("subagent execution", () => {
   });
 });
 
+describe("RawChildResult → SubagentExecutionResult mapping", () => {
+  test("maps successful spawn result with full detail fidelity", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-mapping-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [createAgent()], diagnostics: [] };
+    const child = new FakeChildProcess();
+    const runtime = createRuntime(() => child as never);
+
+    const promise = executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Find bug" },
+      "/repo",
+      undefined,
+      join(rootDir, "parent.jsonl"),
+      rootDir,
+      "openai/gpt-5",
+      runtime,
+    );
+
+    const messageEnd = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Found the bug in main.ts" }],
+        usage: {
+          input: 100,
+          output: 50,
+          cacheRead: 10,
+          cacheWrite: 5,
+          totalTokens: 200,
+          cost: { total: 0.05 },
+        },
+        model: "openai/gpt-5",
+        stopReason: "end",
+      },
+    });
+    child.stdout.write(`${messageEnd}\n`);
+    child.close(0);
+
+    const result = await promise;
+
+    expect(result.isError).toBe(false);
+    expect(result.content).toBe("Found the bug in main.ts");
+    expect(result.details.status).toBe("success");
+    expect(result.details.stopReason).toBe("end");
+    expect(result.details.exitCode).toBe(0);
+    expect(result.details.model).toBe("openai/gpt-5");
+    expect(result.details.agent).toBe("Scout");
+    expect(result.details.task).toBe("Find bug");
+    expect(result.details.usage.input).toBe(100);
+    expect(result.details.usage.output).toBe(50);
+    expect(result.details.usage.cacheRead).toBe(10);
+    expect(result.details.usage.cacheWrite).toBe(5);
+    expect(result.details.usage.contextTokens).toBe(200);
+    expect(result.details.usage.cost).toBe(0.05);
+    expect(result.details.usage.turns).toBe(1);
+    expect(result.details.artifactPaths).toBeDefined();
+    expect(result.details.artifactPaths?.input).toContain("input.md");
+    expect(result.details.artifactPaths?.output).toContain("output.md");
+    expect(result.details.artifactPaths?.meta).toContain("meta.json");
+
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  test("maps timeout result with correct status and message", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-mapping-"));
+    const paths = createPaths(rootDir);
+    const agent = createAgent({ timeoutMs: 50 });
+    const discovery = { agents: [agent], diagnostics: [] };
+    const child = new FakeChildProcess();
+    const runtime = createRuntime(() => child as never);
+
+    const promise = executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Slow work" },
+      "/repo",
+      undefined,
+      join(rootDir, "parent.jsonl"),
+      rootDir,
+      undefined,
+      runtime,
+    );
+
+    // Let timeout fire, then close
+    await new Promise((r) => setTimeout(r, 100));
+    child.close(null as unknown as number);
+
+    const result = await promise;
+
+    expect(result.isError).toBe(true);
+    expect(result.details.status).toBe("timeout");
+    expect(result.details.stopReason).toBe("timeout");
+    expect(result.content).toContain("timed out after 50ms");
+
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  test("maps non-zero exit code to error with stderr content", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-mapping-"));
+    const paths = createPaths(rootDir);
+    const discovery = { agents: [createAgent()], diagnostics: [] };
+    const child = new FakeChildProcess();
+    const runtime = createRuntime(() => child as never);
+
+    const promise = executeSubagent(
+      paths,
+      createDeps(paths, discovery).loadConfig(paths),
+      discovery,
+      { agent: "Scout", task: "Crash work" },
+      "/repo",
+      undefined,
+      join(rootDir, "parent.jsonl"),
+      rootDir,
+      undefined,
+      runtime,
+    );
+
+    child.stderr.write("segfault in module X");
+    child.close(1);
+
+    const result = await promise;
+
+    expect(result.isError).toBe(true);
+    expect(result.details.status).toBe("error");
+    expect(result.details.stopReason).toBe("error");
+    expect(result.details.exitCode).toBe(1);
+    expect(result.details.stderr).toBe("segfault in module X");
+    expect(result.content).toBe("segfault in module X");
+
+    rmSync(rootDir, { recursive: true, force: true });
+  });
+});
+
 describe("deferred slash state", () => {
   test("deferred slash requests survive reload via session-backed persistence", () => {
     const store = new ExecutionStateStore();

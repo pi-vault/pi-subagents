@@ -377,7 +377,7 @@ export async function spawnAndCollect(
 // Private helpers
 // ---------------------------------------------------------------------------
 
-function createUsage(): SubagentUsage {
+export function createUsage(): SubagentUsage {
   return {
     input: 0,
     output: 0,

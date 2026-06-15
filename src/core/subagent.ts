@@ -33,6 +33,7 @@ import {
 } from "../tui/render.js";
 import {
   buildChildArgs,
+  createUsage,
   resolveEffectiveModel,
   getParentModelId,
   spawnAndCollect,
@@ -297,7 +298,7 @@ function buildExecutionResult(params: {
       stopReason: params.stopReason,
       exitCode: params.exitCode,
       stderr: params.stderr,
-      usage: params.usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+      usage: params.usage ?? createUsage(),
       recentToolActivity: params.recentToolActivity ?? [],
     },
   };
