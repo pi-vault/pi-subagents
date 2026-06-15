@@ -16,7 +16,7 @@ describe("package manifest", () => {
 
     expect(pkg.pi.extensions).toEqual(["./src/index.ts"]);
     expect(pkg.files).toEqual(
-      expect.arrayContaining(["src", "agents", "README.md"]),
+      expect.arrayContaining(["src", "agents", "CHANGELOG.md", "README.md"]),
     );
     expect(pkg.scripts).toEqual(
       expect.objectContaining({

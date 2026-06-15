@@ -5,9 +5,7 @@
 [![Node >=22.19.0](https://img.shields.io/badge/node-%3E%3D22.19.0-339933)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://github.com/pi-vault/pi-subagents/blob/master/README.md#license)
 
-Delegate work to specialized Pi subagents without leaving your current session.
-
-> Early adopter release: `v0.2.0` keeps the package small and focused while expanding the built-in agent workflow.
+Delegate focused work to bundled Pi subagents without leaving your current session.
 
 ## Install
 
@@ -15,55 +13,62 @@ Delegate work to specialized Pi subagents without leaving your current session.
 pi install npm:@pi-vault/pi-subagents
 ```
 
-Then reload Pi:
+Reload Pi after install:
 
 ```text
 /reload
 ```
 
-## Use
+## Quick Start
 
-After install, the bundled agents are available right away.
+Run a bundled agent directly:
 
-- `/agents` — open the interactive agents menu
-- `/agent <agent> <task...>` — delegate a task to a specific agent with visible foreground progress
+```text
+/agent scout trace where auth state is loaded
+```
 
-From `/agents` you can:
+Open the interactive agent manager:
 
-- create a user agent override
-- edit a user agent override
-- export a bundled agent into Pi global scope
-- disable an agent via global override
-- delete a global override
-- manage `maxConcurrency`, `maxRecursiveLevel`, and `defaultTimeoutMs`
+```text
+/agents
+```
 
-Background runs are not part of this release.
+Use `/agents` when you want to:
 
-## What's New In v0.2.0
-
-- interactive `/agents` menu for managing bundled and global agents
-- improved live foreground progress for `/agent` runs
-- skills support for bundled agents and user-configured agents
+- create or edit a user agent override
+- export a bundled agent into your global Pi agent directory
+- disable an agent with a global override
+- delete an existing global override
+- change subagent settings such as `maxConcurrency`, `maxRecursiveLevel`, and `defaultTimeoutMs`
 
 ## Bundled Agents
 
-- `scout` — quickly finds relevant files, entry points, and code paths
-- `planner` — turns a task into a short, verifiable plan
-- `researcher` — gathers evidence, tradeoffs, and implementation context
-- `worker` — handles focused implementation work
-- `reviewer` — reviews changes and looks for defects
+- `scout` finds relevant files, entry points, and code paths
+- `planner` turns a task into a short, verifiable plan
+- `researcher` gathers evidence, tradeoffs, and implementation context
+- `worker` handles focused implementation work
+- `reviewer` reviews changes and looks for defects
 
-## Agent Files
+## Typical Usage
 
-User overrides live in Pi's user agent directory and use markdown frontmatter plus a prompt body.
+- Use `/agent scout ...` to find where a feature or bug lives.
+- Use `/agent planner ...` before a non-trivial change.
+- Use `/agent worker ...` for a scoped implementation task.
+- Use `/agent reviewer ...` before shipping a diff.
+
+Foreground runs are the supported execution mode in this release.
+
+## User Agent Overrides
+
+User overrides are markdown files with frontmatter plus a prompt body. A minimal example:
 
 ```md
 ---
 name: my-worker
 description: Focused implementation helper.
 tools: read, write, bash
-model: provider/model
-thinking: low
+model: default
+thinking: medium
 subagent_agents: scout, reviewer
 skills: tdd, verification-before-completion
 timeout_ms: 180000
@@ -76,50 +81,24 @@ Make the smallest safe change that completes the task.
 
 Supported frontmatter fields:
 
-- `name` — optional display name; if omitted, the filename slug is used
-- `description` — required short summary
-- `tools` — comma-separated tool allowlist
-- `model` — optional model override; `default` falls back to the host/session default
-- `thinking` — optional thinking level
-- `subagent_agents` — optional allowlist of child agents this agent may invoke
-- `skills` — optional skill policy: comma-separated names, `all`, or `none`
-- `timeout_ms` — optional per-agent timeout in milliseconds
+- `name` optional display name; otherwise the filename slug is used
+- `description` required short summary
+- `tools` comma-separated tool allowlist
+- `model` optional model override; `default` falls back to the host session
+- `thinking` optional thinking level
+- `subagent_agents` optional allowlist of child agents this agent may invoke
+- `skills` optional skill policy: comma-separated names, `all`, or `none`
+- `timeout_ms` optional per-agent timeout in milliseconds
 
-The interactive create flow currently asks for `name`, `description`, `tools`, `model`, `thinking`, `subagent_agents`, `timeout_ms`, and the markdown body. To add or change `skills`, edit the agent markdown after creation or export a bundled agent and modify the file.
-
-## Skill Resolution
-
-When an agent specifies `skills`, pi-subagents resolves them from the first matching location in:
-
-- `.pi/skills/` in the current workspace
-- `.agents/skills/` in the current workspace
-- the global Pi agent skills directory
-- `~/.agents/skills/`
-- `~/.pi/skills/`
-
-Skill names must be simple names without path separators or whitespace.
-
-## Settings
-
-Global subagent settings are stored in Pi's `subagents.json` file. The current defaults are:
-
-- `maxConcurrency: 3`
-- `maxRecursiveLevel: 3`
-- `defaultTimeoutMs: 600000`
-
-## Typical Flow
-
-- Use `/agent scout trace where auth state is loaded` when you need fast codebase discovery.
-- Use `/agent planner outline a safe migration for the config format` before a non-trivial change.
-- Use `/agent reviewer inspect this diff for regressions` before shipping.
+If you create an agent from `/agents`, you can edit the generated markdown later to refine its prompt or `skills`.
 
 ## Compatibility
 
 - Node `>=22.19.0`
-- Peer deps: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
-- Intended for use from a Pi host session with package/extension support
+- Peer dependencies: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
+- Intended for Pi sessions with package and extension support
 
-## Development Setup
+## Development
 
 ```sh
 pnpm install
