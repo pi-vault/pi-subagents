@@ -1,6 +1,6 @@
 {
   "name": "@pi-vault/pi-subagents",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Pi extension for delegating tasks to isolated and specialized subagents",
   "author": "Lanh Hoang <lanhhoang@users.noreply.github.com>",
@@ -41,20 +41,20 @@
   "files": [
     "src",
     "agents",
-    "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "README.md"
   ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
   "dependencies": {
-    "typebox": "^1.1.38"
+    "typebox": "^1.2.10"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
-    "@earendil-works/pi-coding-agent": "^0.78.1",
-    "@earendil-works/pi-tui": "^0.78.1",
+    "@earendil-works/pi-coding-agent": "^0.79.3",
+    "@earendil-works/pi-tui": "^0.79.3",
     "@types/node": "^25.9.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"
