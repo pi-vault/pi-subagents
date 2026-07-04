@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   AgentRecord,
-  AgentInvocation,
-  LifetimeUsage,
-  ToolActivity,
-  RunOptions,
   RunResult,
-  SpawnOptions,
 } from "../src/shared/types.js";
 
 describe("new execution model types", () => {

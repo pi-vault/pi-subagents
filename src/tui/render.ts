@@ -1,5 +1,4 @@
-import { Container, Text } from "@earendil-works/pi-tui";
-import type { ExecutionStateStore } from "../core/execution-state.js";
+import { Text } from "@earendil-works/pi-tui";
 import type {
   AgentToolResult,
   MessageRenderOptions,
@@ -7,10 +6,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type {
-  SlashLiveDetails,
   SubagentCommandMessage,
   SubagentExecutionDetails,
-  SubagentMessageDetails,
   SubagentToolInput,
 } from "../shared/types.js";
 
@@ -42,12 +39,6 @@ function formatPath(value: string | undefined): string {
 
 function formatUsage(details: SubagentExecutionDetails): string {
   return `${details.usage.input}/${details.usage.output} tok, ${details.usage.turns} turns`;
-}
-
-function isSlashLiveDetails(
-  details: SubagentMessageDetails | undefined,
-): details is SlashLiveDetails {
-  return Boolean(details && "kind" in details && details.kind === "slash-live");
 }
 
 function normalizeMessageContent(
@@ -94,59 +85,14 @@ export function buildSubagentCallText(
   return text;
 }
 
-function buildSlashLiveText(
-  details: SlashLiveDetails,
-  expanded: boolean,
-  theme: RenderTheme,
-): string {
-  const status = theme.fg("warning", "RUNNING");
-  const lines = [
-    `${status} ${theme.fg("toolTitle", theme.bold(details.agent))}`,
-    theme.fg("muted", `task: ${details.task || "-"}`),
-    theme.fg("muted", `cwd: ${formatPath(details.cwd)}`),
-    theme.fg("muted", `duration: ${details.durationMs}ms`),
-  ];
-
-  const activityLabels = details.recentToolActivity.map((entry) => entry.label);
-  if (activityLabels.length > 0) {
-    lines.push(theme.fg("dim", `tools: ${activityLabels.join(", ")}`));
-  }
-
-  if (expanded && details.recentToolActivity.length > 0) {
-    lines.push(theme.fg("muted", "recent tools:"));
-    for (const activity of details.recentToolActivity) {
-      lines.push(
-        theme.fg(
-          "dim",
-          `  - ${activity.label}: ${previewText(activity.preview, MAX_ACTIVITY_PREVIEW)}`,
-        ),
-      );
-    }
-  }
-
-  if (expanded && details.childSessionPath) {
-    lines.push(theme.fg("muted", `child session path: ${details.childSessionPath}`));
-  }
-
-  if (expanded && details.stderr?.trim()) {
-    lines.push(theme.fg("error", details.stderr.trim()));
-  }
-
-  return lines.join("\n");
-}
-
 export function buildSubagentResultText(
   content: string,
-  details: SubagentMessageDetails | undefined,
+  details: SubagentExecutionDetails | undefined,
   expanded: boolean,
   theme: RenderTheme,
 ): string {
   if (!details) {
     return content || "(no output)";
-  }
-
-  if (isSlashLiveDetails(details)) {
-    return buildSlashLiveText(details, expanded, theme);
   }
 
   const statusColor = getStatusColor(details.status);
@@ -232,18 +178,11 @@ export function renderSubagentResult(
   result: AgentToolResult<unknown>,
   options: ToolRenderResultOptions,
   theme: Theme,
-  store: ExecutionStateStore,
 ): Text {
   const content = normalizeMessageContent(
     result.content as string | Array<{ type: string; text?: string }>,
   );
-  let details = result.details as SubagentMessageDetails | undefined;
-  if (store && details && isSlashLiveDetails(details)) {
-    const snapshot = store.getSnapshot(details.requestId);
-    if (snapshot?.live && snapshot.live.durationMs >= details.durationMs) {
-      details = snapshot.live;
-    }
-  }
+  const details = result.details as SubagentExecutionDetails | undefined;
   return new Text(
     buildSubagentResultText(content, details, options.expanded, theme),
     0,
@@ -254,24 +193,11 @@ export function renderSubagentResult(
 export function renderSubagentMessage(
   message: {
     content: string | Array<{ type: string; text?: string }>;
-    details?: SubagentMessageDetails;
+    details?: SubagentExecutionDetails;
   },
   options: MessageRenderOptions,
   theme: Theme,
-  store: ExecutionStateStore,
-): Text | Container {
-  if (isSlashLiveDetails(message.details)) {
-    return createSlashLiveMessageComponent(
-      {
-        content: message.content,
-        details: message.details,
-      },
-      options,
-      theme,
-      store,
-    );
-  }
-
+): Text {
   const baseContent = normalizeMessageContent(
     message.content as string | Array<{ type: string; text?: string }>,
   );
@@ -288,62 +214,9 @@ export function renderSubagentMessage(
   );
 }
 
-function createSlashLiveMessageComponent(
-  message: {
-    content: string | Array<{ type: string; text?: string }>;
-    details: SlashLiveDetails;
-  },
-  options: MessageRenderOptions,
-  theme: Theme,
-  store: ExecutionStateStore,
-): Container {
-  const container = new Container();
-  let lastVersion = -1;
-
-  container.render = (width: number): string[] => {
-    const snapshot = store.getSnapshot(message.details.requestId);
-    const currentVersion = snapshot?.version ?? 0;
-    const running = store.isLiveRunning(message.details.requestId);
-
-    if (currentVersion !== lastVersion || running) {
-      lastVersion = currentVersion;
-      const resolved = store.getRenderableMessage(message.details);
-      const baseContent = normalizeMessageContent(
-        message.content as string | Array<{ type: string; text?: string }>,
-      );
-      const content = resolved?.content ?? baseContent;
-      let details = resolved?.details ?? message.details;
-
-      if (running && "startedAt" in details) {
-        details = {
-          ...details,
-          durationMs: Math.max(0, Date.now() - details.startedAt),
-        };
-      }
-
-      container.clear();
-      container.addChild(
-        new Text(
-          buildSubagentResultText(
-            content,
-            details,
-            options.expanded,
-            theme,
-          ),
-          0,
-          0,
-        ),
-      );
-    }
-    return Container.prototype.render.call(container, width);
-  };
-
-  return container;
-}
-
 export function toSubagentCommandMessage(result: {
   content: string;
-  details: SubagentMessageDetails;
+  details: SubagentExecutionDetails;
   isError?: boolean;
 }): SubagentCommandMessage {
   return {

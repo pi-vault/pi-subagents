@@ -106,77 +106,17 @@ export interface SubagentExecutionDetails {
   recentToolActivity: SubagentToolActivity[];
 }
 
-export interface SlashSubagentRequestPayload {
-  requestId: string;
-  agent: string;
-  task: string;
-  cwd: string;
-  parentSessionFile: string | undefined;
-  parentSessionDir: string | undefined;
-  parentModel: string | undefined;
-  signal: AbortSignal | undefined;
-  requestRender: (() => void) | undefined;
-  cleanup: (() => void) | undefined;
-}
-
-export const DEFERRED_SLASH_REQUEST_ENTRY =
-  "pi-subagents:deferred-request" as const;
-export const DEFERRED_SLASH_REQUEST_CONSUMED_ENTRY =
-  "pi-subagents:deferred-request-consumed" as const;
-
-export interface PersistedDeferredSlashRequest {
-  requestId: string;
-  agent: string;
-  task: string;
-  cwd: string;
-  parentSessionFile?: string;
-  parentSessionDir?: string;
-  parentModel?: string;
-  createdAt: number;
-}
-
-export interface DeferredSlashRuntimeState {
-  signal: AbortSignal | undefined;
-  requestRender?: () => void;
-  cleanup?: () => void;
-}
-
-export interface SlashLiveDetails {
-  kind: "slash-live";
-  requestId: string;
-  status: "running" | "error";
-  agent: string;
-  task: string;
-  cwd: string;
-  durationMs: number;
-  startedAt: number;
-  recentToolActivity: SubagentToolActivity[];
-  childSessionPath?: string;
-  model?: string;
-  stderr?: string;
-}
-
-export type SubagentMessageDetails =
-  | SubagentExecutionDetails
-  | SlashLiveDetails;
-
 export interface SubagentExecutionResult {
   content: string;
   isError: boolean;
   details: SubagentExecutionDetails;
 }
 
-export type SlashSnapshot = {
-  live: SlashLiveDetails;
-  final?: SubagentExecutionResult;
-  version: number;
-};
-
 export interface SubagentCommandMessage {
   customType: string;
   content: string;
   display: boolean;
-  details?: SubagentMessageDetails;
+  details?: SubagentExecutionDetails;
 }
 
 // ---------------------------------------------------------------------------

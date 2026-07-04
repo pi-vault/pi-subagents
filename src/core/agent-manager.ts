@@ -137,7 +137,7 @@ export class AgentManager {
 
   abort(id: string): boolean {
     const record = this.agents.get(id);
-    if (!record || record.status !== "running") return false;
+    if (record?.status !== "running") return false;
     record.abortController?.abort();
     return true;
   }

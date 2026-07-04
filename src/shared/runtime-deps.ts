@@ -1,4 +1,4 @@
-import type { ExecutionStateStore } from "../core/execution-state.js";
+import type { AgentManager } from "../core/agent-manager.js";
 import type {
   AgentCreationInput,
   AgentDefinition,
@@ -31,5 +31,5 @@ export interface RuntimeDeps {
   ) => AgentDefinition;
   deleteUserAgentOverride: (paths: ResolvedPaths, agentName: string) => void;
   saveConfig: (paths: ResolvedPaths, config: SubagentsConfig) => void;
-  stateStore: ExecutionStateStore;
+  manager: AgentManager;
 }
