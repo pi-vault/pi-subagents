@@ -16,7 +16,13 @@ describe("package manifest", () => {
 
     expect(pkg.pi.extensions).toEqual(["./src/index.ts"]);
     expect(pkg.files).toEqual(
-      expect.arrayContaining(["src", "agents", "CHANGELOG.md", "README.md"]),
+      expect.arrayContaining([
+        "src",
+        "agents",
+        "LICENSE",
+        "CHANGELOG.md",
+        "README.md",
+      ]),
     );
     expect(pkg.scripts).toEqual(
       expect.objectContaining({
@@ -28,6 +34,6 @@ describe("package manifest", () => {
     );
     expect(pkg.keywords).toContain("pi-package");
     expect(pkg.peerDependencies["@earendil-works/pi-coding-agent"]).toBe("*");
-    expect(pkg.engines.node).toBe(">=22.19.0");
+    expect(pkg.engines.node).toBe(">=24.15.0");
   });
 });
