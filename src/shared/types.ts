@@ -178,3 +178,84 @@ export interface SubagentCommandMessage {
   display: boolean;
   details?: SubagentMessageDetails;
 }
+
+// ---------------------------------------------------------------------------
+// Session execution model types (Spec 1a)
+// ---------------------------------------------------------------------------
+
+export interface LifetimeUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheWriteTokens: number;
+}
+
+export interface ToolActivity {
+  type: "start" | "end";
+  toolName: string;
+}
+
+export interface AgentInvocation {
+  agent: string;
+  task: string;
+  cwd?: string;
+}
+
+export interface AgentRecord {
+  id: string;
+  type: string;
+  status: "running" | "completed" | "aborted" | "error";
+  result?: string;
+  error?: string;
+  toolUses: number;
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  session?: unknown; // AgentSession - typed as unknown to avoid import dependency
+  abortController?: AbortController;
+  lifetimeUsage: LifetimeUsage;
+  invocation?: AgentInvocation;
+}
+
+export interface RunOptions {
+  prompt: string;
+  cwd: string;
+  agentId: string;
+  model?: unknown; // Model from pi-ai
+  thinking?: string;
+  timeoutMs?: number;
+  allowRecursion?: boolean;
+  signal?: AbortSignal;
+  onToolActivity?: (activity: ToolActivity) => void;
+  onTextDelta?: (delta: string, fullText: string) => void;
+  onTurnEnd?: (turnCount: number) => void;
+  onUsage?: (usage: {
+    input: number;
+    output: number;
+    cacheWrite: number;
+  }) => void;
+  onSessionCreated?: (session: unknown) => void;
+}
+
+export interface RunResult {
+  responseText: string;
+  session: unknown; // AgentSession
+  aborted: boolean;
+}
+
+export interface SpawnOptions {
+  prompt: string;
+  cwd: string;
+  timeoutMs?: number;
+  parentSignal?: AbortSignal;
+  currentDepth?: number;
+  allowedAgents?: string[];
+  onToolActivity?: (activity: ToolActivity) => void;
+  onTextDelta?: (delta: string, fullText: string) => void;
+  onTurnEnd?: (turnCount: number) => void;
+  onUsage?: (usage: {
+    input: number;
+    output: number;
+    cacheWrite: number;
+  }) => void;
+  onSessionCreated?: (session: unknown) => void;
+}
