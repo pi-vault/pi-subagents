@@ -112,6 +112,8 @@ export function registerSubagentTool(
           cwd: effectiveCwd,
           timeoutMs,
           parentSignal: signal,
+          currentDepth: 0,
+          allowedAgents: agentDef.subagentAgents,
         });
 
         // Write artifacts
@@ -201,7 +203,23 @@ export function registerSubagentTool(
         return {
           content: [{ type: "text", text: message }],
           isError: true,
-          details: undefined as never,
+          details: {
+            status: "error" as const,
+            agent: params.agent,
+            task: params.task,
+            sourcePath: "",
+            cwd: effectiveCwd,
+            timeoutMs: 0,
+            durationMs: 0,
+            childSessionDir: "",
+            childSessionPath: "",
+            model: undefined,
+            stopReason: "error",
+            exitCode: null,
+            stderr: message,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+            recentToolActivity: [],
+          },
         };
       }
     },
@@ -229,6 +247,8 @@ export function registerAgentCommand(
           prompt: input.task.trim(),
           cwd: ctx.cwd,
           timeoutMs,
+          currentDepth: 0,
+          allowedAgents: agentDef.subagentAgents,
         });
 
         pi.sendMessage({

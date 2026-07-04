@@ -49,6 +49,11 @@ export function registerSubagentsExtension(
   registerSubagentTool(pi, deps);
   registerAgentCommand(pi, deps);
 
+  // Cleanup on session shutdown
+  pi.on("session_shutdown", () => {
+    deps.manager.dispose();
+  });
+
   pi.registerCommand("agents", {
     description: "Open the interactive pi-subagents agents menu",
     handler: async (_args, ctx) => {

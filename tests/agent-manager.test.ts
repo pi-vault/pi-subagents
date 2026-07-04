@@ -165,4 +165,36 @@ describe("AgentManager", () => {
     expect(record.status).toBe("error");
     expect(record.error).toBe("session failed");
   });
+
+  it("getRecord returns record by id", async () => {
+    const agentDef = makeAgentDef();
+    const { id } = await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    const record = manager.getRecord(id);
+    expect(record).toBeDefined();
+    expect(record?.status).toBe("completed");
+    expect(manager.getRecord("nonexistent")).toBeUndefined();
+  });
+
+  it("rejects relative cwd paths", async () => {
+    const agentDef = makeAgentDef();
+    await expect(
+      manager.spawnAndWait({}, agentDef, {
+        prompt: "test",
+        cwd: "relative/path",
+      }),
+    ).rejects.toThrow(/absolute path/i);
+  });
+
+  it("rejects non-existent cwd paths", async () => {
+    const agentDef = makeAgentDef();
+    await expect(
+      manager.spawnAndWait({}, agentDef, {
+        prompt: "test",
+        cwd: "/nonexistent/path/xyz123",
+      }),
+    ).rejects.toThrow(/does not exist/i);
+  });
 });

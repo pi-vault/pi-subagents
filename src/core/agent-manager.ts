@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { runAgent } from "./agent-runner.js";
 import type {
   AgentDefinition,
@@ -31,6 +33,14 @@ export class AgentManager {
       throw new Error(
         `Nested delegation blocked: current depth ${currentDepth} reached the nesting limit of ${this.maxDepth}.`,
       );
+    }
+
+    // Validate cwd
+    if (!isAbsolute(options.cwd)) {
+      throw new Error(`cwd must be an absolute path, got: ${options.cwd}`);
+    }
+    if (!existsSync(options.cwd)) {
+      throw new Error(`cwd directory does not exist: ${options.cwd}`);
     }
 
     // Validate allowlist
