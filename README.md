@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/%40pi-vault%2Fpi-subagents)](https://www.npmjs.com/package/@pi-vault/pi-subagents)
 [![Quality](https://github.com/pi-vault/pi-subagents/actions/workflows/quality.yml/badge.svg?branch=master)](https://github.com/pi-vault/pi-subagents/actions/workflows/quality.yml)
-[![Node >=22.19.0](https://img.shields.io/badge/node-%3E%3D22.19.0-339933)](https://nodejs.org/)
+[![Node >= 24.15.0](https://img.shields.io/badge/node-%3E%3D24.15.0-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](https://github.com/pi-vault/pi-subagents/blob/master/README.md#license)
 
 Delegate focused work to bundled Pi subagents without leaving your current session.
@@ -92,21 +92,18 @@ Supported frontmatter fields:
 
 If you create an agent from `/agents`, you can edit the generated markdown later to refine its prompt or `skills`.
 
-## Compatibility
+## Development and verification
 
-- Node `>=22.19.0`
-- Peer dependencies: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
-- Intended for Pi sessions with package and extension support
-
-## Development
-
-```sh
+```bash
 pnpm install
 pnpm check
-pnpm pack --dry-run
-pi -e .
+pnpm release:check
 ```
+
+## Changelog
+
+See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).
