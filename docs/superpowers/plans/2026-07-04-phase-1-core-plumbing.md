@@ -6,11 +6,13 @@
 
 **Architecture:** Create `AgentRunner` (stateless session execution via `createAgentSession()`) and `AgentManager` (lifecycle, policy, record tracking), then rewire the existing `subagent` tool and `/agent` command to route through the manager instead of spawning child processes. Retire `subagent-spawner.ts`, `nested-context.ts`, and `execution-state.ts`.
 
-**Tech Stack:** TypeScript, `@earendil-works/pi-coding-agent` (`createAgentSession`, `AgentSession`), `@earendil-works/pi-ai` (`Model`, `ThinkingLevel`), `@earendil-works/pi-tui` (Container, Text), Vitest, Biome, pnpm.
+**Tech Stack:** TypeScript, `@earendil-works/pi-coding-agent` (`createAgentSession`, `AgentSession`, `DefaultResourceLoader`, `SessionManager`, `SettingsManager`, `getAgentDir`), `@earendil-works/pi-ai` (`Model`, `ThinkingLevel`), `@earendil-works/pi-tui` (Container, Text), Vitest, Biome, pnpm.
 
 **Verification:** `pnpm check` (runs `biome lint . && tsc --noEmit && vitest run`).
 
 **Spec:** `docs/superpowers/specs/2026-07-04-spec-1a-session-execution-model-design.md`
+
+**Reference implementation:** `@tintinweb/pi-subagents` (v0.13.0) — uses the same session-based approach with `DefaultResourceLoader` + `createAgentSession()`.
 
 ---
 
@@ -27,8 +29,6 @@
 | Modify | `src/core/subagent.ts` | Thin orchestration: tool handler calls manager instead of spawning process |
 | Modify | `src/index.ts` | Create `AgentManager`, wire lifecycle, pass to deps |
 | Modify | `src/tui/render.ts` | Adapt rendering to `AgentRecord`-shaped details |
-| Modify | `src/core/config.ts` | Keep `defaultTimeoutMs` (adapted from SIGTERM to session.abort()) |
-| Modify | `package.json` | Add `@earendil-works/pi-ai` peer dependency |
 | Modify | `tests/subagent.test.ts` | Rewrite for new execution path |
 | Modify | `tests/index.test.ts` | Update for new deps shape |
 | Modify | `tests/render.test.ts` | Adapt for `AgentRecord`-shaped data |
@@ -38,6 +38,27 @@
 | Delete | `tests/subagent-spawner.test.ts` | Module deleted |
 | Delete | `tests/nested-context.test.ts` | Module deleted |
 | Delete | `tests/execution-state.test.ts` | Module deleted |
+
+---
+
+## SDK API Reference
+
+Key facts verified against `@earendil-works/pi-coding-agent@0.80.3`:
+
+1. **`createAgentSession(options?)`** is async, returns `Promise<{ session: AgentSession; extensionsResult: LoadExtensionsResult; modelFallbackMessage?: string }>`.
+2. **System prompt** is controlled via `DefaultResourceLoader` options:
+   - `systemPromptOverride: (base) => string | undefined` — callback that replaces the base prompt
+   - `noExtensions`, `noSkills`, `noPromptTemplates`, `noThemes`, `noContextFiles` — disable discovery
+3. **Event subscription** uses `session.subscribe((event: AgentSessionEvent) => { ... })` — a single listener discriminates by `event.type`.
+4. **Text deltas** come from `event.type === "message_update"` where `event.assistantMessageEvent.type === "text_delta"` → `event.assistantMessageEvent.delta`.
+5. **Usage** comes from `event.type === "message_end"` where `event.message.role === "assistant"` → `event.message.usage: { input, output, cacheWrite, ... }`.
+6. **Tool events** are `tool_execution_start: { toolCallId, toolName, args }` and `tool_execution_end: { toolCallId, toolName, result, isError }`.
+7. **Turn events** are `turn_end: { message, toolResults }`.
+8. **`session.bindExtensions(bindings)`** must be called after creation — bindings are optional fields for UI context, error handling, etc.
+9. **`session.abort()`** returns `Promise<void>`.
+10. **`session.prompt(text, options?)`** returns `Promise<void>`.
+11. **`session.messages`** getter returns `AgentMessage[]` (the conversation transcript).
+12. **`SessionManager.inMemory(cwd)`** creates ephemeral sessions without file persistence.
 
 ---
 
@@ -201,14 +222,32 @@ git commit -m "feat: add session execution model types (Spec 1a)"
 Create `tests/agent-runner.test.ts`:
 
 ```typescript
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { runAgent } from "../src/core/agent-runner.js";
 import type { AgentDefinition, RunOptions } from "../src/shared/types.js";
 
-// Mock createAgentSession - we'll need to mock the pi-coding-agent module
-vi.mock("@earendil-works/pi-coding-agent", () => ({
-  createAgentSession: vi.fn(),
-}));
+// Mock createAgentSession and DefaultResourceLoader
+vi.mock("@earendil-works/pi-coding-agent", () => {
+  const mockSession = {
+    subscribe: vi.fn(() => () => {}),
+    bindExtensions: vi.fn().mockResolvedValue(undefined),
+    prompt: vi.fn().mockResolvedValue(undefined),
+    abort: vi.fn().mockResolvedValue(undefined),
+    messages: [],
+  };
+  return {
+    createAgentSession: vi.fn().mockResolvedValue({
+      session: mockSession,
+      extensionsResult: { extensions: [] },
+    }),
+    DefaultResourceLoader: vi.fn().mockImplementation(() => ({
+      reload: vi.fn().mockResolvedValue(undefined),
+    })),
+    SessionManager: { inMemory: vi.fn(() => ({})) },
+    SettingsManager: { create: vi.fn(() => ({})) },
+    getAgentDir: vi.fn(() => "/fake/agent-dir"),
+  };
+});
 
 function makeAgentDef(
   overrides: Partial<AgentDefinition> = {},
@@ -234,57 +273,129 @@ function makeRunOptions(overrides: Partial<RunOptions> = {}): RunOptions {
 }
 
 describe("runAgent", () => {
-  it("creates a session and returns the response text", async () => {
-    const { createAgentSession } =
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls createAgentSession with correct options", async () => {
+    const { createAgentSession, DefaultResourceLoader } =
       await import("@earendil-works/pi-coding-agent");
-    const mockSession = {
-      prompt: vi.fn().mockResolvedValue(undefined),
-      abort: vi.fn(),
-      bindExtensions: vi.fn().mockResolvedValue(undefined),
-      on: vi.fn(),
-      subscribe: vi.fn(() => () => {}),
-    };
-    vi.mocked(createAgentSession).mockReturnValue(mockSession as never);
 
-    // Simulate text accumulation via onTextDelta
-    const textDeltaCaptures: string[] = [];
-    const options = makeRunOptions({
-      onTextDelta: (delta, full) => {
-        textDeltaCaptures.push(full);
-      },
-    });
+    const agentDef = makeAgentDef({ tools: ["read", "bash", "write"] });
+    const options = makeRunOptions();
 
-    // The session.prompt resolves after we've accumulated text
-    // We need to simulate the session events - this depends on the actual implementation
-    // For now, test that runAgent calls createAgentSession and session.prompt
-    const agentDef = makeAgentDef();
-    // This test verifies the function signature exists and is callable
-    expect(typeof runAgent).toBe("function");
+    await runAgent(agentDef, options, {});
+
+    expect(DefaultResourceLoader).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/test",
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+      }),
+    );
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/tmp/test",
+        tools: ["read", "bash", "write"],
+      }),
+    );
   });
 
   it("excludes subagent tool when allowRecursion is false", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+
     const agentDef = makeAgentDef({ tools: ["read", "bash", "subagent"] });
     const options = makeRunOptions({ allowRecursion: false });
 
-    // runAgent should filter out "subagent" from the tools list
-    // We verify this by checking the createAgentSession call args
-    expect(typeof runAgent).toBe("function");
+    await runAgent(agentDef, options, {});
+
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: ["read", "bash"],
+      }),
+    );
   });
 
   it("includes subagent tool when allowRecursion is true", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+
     const agentDef = makeAgentDef({ tools: ["read", "bash", "subagent"] });
     const options = makeRunOptions({ allowRecursion: true });
-    expect(typeof runAgent).toBe("function");
+
+    await runAgent(agentDef, options, {});
+
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: ["read", "bash", "subagent"],
+      }),
+    );
+  });
+
+  it("calls session.bindExtensions after creation", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const mockSession = {
+      subscribe: vi.fn(() => () => {}),
+      bindExtensions: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
+      messages: [],
+    };
+    vi.mocked(createAgentSession).mockResolvedValue({
+      session: mockSession as never,
+      extensionsResult: { extensions: [] } as never,
+    });
+
+    const agentDef = makeAgentDef();
+    await runAgent(agentDef, makeRunOptions(), {});
+
+    expect(mockSession.bindExtensions).toHaveBeenCalledWith({});
+  });
+
+  it("returns RunResult with responseText and aborted flag", async () => {
+    const agentDef = makeAgentDef();
+    const result = await runAgent(agentDef, makeRunOptions(), {});
+
+    expect(result).toHaveProperty("responseText");
+    expect(result).toHaveProperty("session");
+    expect(result).toHaveProperty("aborted");
+    expect(result.aborted).toBe(false);
   });
 
   it("enforces timeout via setTimeout + session.abort()", async () => {
-    const options = makeRunOptions({ timeoutMs: 100 });
-    expect(typeof runAgent).toBe("function");
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const mockSession = {
+      subscribe: vi.fn(() => () => {}),
+      bindExtensions: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn().mockImplementation(
+        () => new Promise((resolve) => setTimeout(resolve, 200)),
+      ),
+      abort: vi.fn().mockResolvedValue(undefined),
+      messages: [],
+    };
+    vi.mocked(createAgentSession).mockResolvedValue({
+      session: mockSession as never,
+      extensionsResult: { extensions: [] } as never,
+    });
+
+    const agentDef = makeAgentDef();
+    const result = await runAgent(
+      agentDef,
+      makeRunOptions({ timeoutMs: 50 }),
+      {},
+    );
+
+    expect(mockSession.abort).toHaveBeenCalled();
+    expect(result.aborted).toBe(true);
   });
 });
 ```
-
-Note: The actual test assertions depend on the `createAgentSession` API. The implementer should study the `@earendil-works/pi-coding-agent` package to understand the exact session API, event names, and how `session.prompt()` works. Adjust the mock accordingly.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -296,99 +407,122 @@ Expected: FAIL with "Cannot find module '../src/core/agent-runner.js'"
 Create `src/core/agent-runner.ts`:
 
 ```typescript
-import { createAgentSession } from "@earendil-works/pi-coding-agent";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+  getAgentDir,
+} from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type {
   AgentDefinition,
   RunOptions,
   RunResult,
 } from "../shared/types.js";
-import { resolveSkillPaths, preloadSkills } from "./skill-loader.js";
+import { preloadSkills } from "./skill-loader.js";
 
+/**
+ * Stateless session execution. Creates an AgentSession, subscribes to events,
+ * executes the prompt, and returns the result.
+ *
+ * Follows the pattern established by @tintinweb/pi-subagents:
+ * - DefaultResourceLoader with systemPromptOverride for custom system prompt
+ * - SessionManager.inMemory() for ephemeral child sessions
+ * - session.subscribe() for unified event handling
+ * - forwardAbortSignal pattern for cancellation
+ */
 export async function runAgent(
   agentDef: AgentDefinition,
   options: RunOptions,
-  ctx: { model?: unknown },
+  ctx: { model?: unknown; modelRegistry?: unknown },
 ): Promise<RunResult> {
-  // 1. Resolve tools
-  const childTools = options.allowRecursion
+  // 1. Resolve tools — exclude "subagent" unless recursion is allowed
+  const allowedTools = options.allowRecursion
     ? agentDef.tools
     : agentDef.tools.filter((t) => t !== "subagent");
 
-  // 2. Resolve skills
-  let skillBlocks = "";
-  if (Array.isArray(agentDef.skills) && agentDef.skills.length > 0) {
-    const preloaded = preloadSkills(agentDef.skills, options.cwd);
-    skillBlocks = preloaded
-      .map((s) => `<skill name="${s.name}">\n${s.content}\n</skill>`)
-      .join("\n\n");
-  } else if (agentDef.skills === true) {
-    // "all" skills - discover and preload all
-    // For now, skip - agent runner doesn't discover all skills
-  }
+  // 2. Build system prompt
+  const systemPrompt = buildReplacePrompt(agentDef, options.cwd);
 
-  // 3. Build system prompt (replace mode only for Spec 1a)
-  const systemPrompt = buildReplacePrompt(agentDef, options.cwd, skillBlocks);
+  // 3. Create ResourceLoader with overrides
+  const agentDir = getAgentDir();
+  const loader = new DefaultResourceLoader({
+    cwd: options.cwd,
+    agentDir,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPromptOverride: () => systemPrompt,
+    appendSystemPromptOverride: () => [],
+  });
+  await loader.reload();
 
   // 4. Resolve model
-  const model = options.model ?? ctx.model;
+  const model = (options.model ?? ctx.model) as Parameters<
+    typeof createAgentSession
+  >[0] extends { model?: infer M } ? M : never;
 
   // 5. Create session
-  const session = createAgentSession({
+  const settingsManager = SettingsManager.create(options.cwd, agentDir);
+  const sessionManager = SessionManager.inMemory(options.cwd);
+
+  const { session } = await createAgentSession({
     cwd: options.cwd,
-    model: model as never,
-    tools: childTools,
-    systemPromptOverride: systemPrompt,
-    thinkingLevel: agentDef.thinking as never,
-    noExtensions: true,
-    name: `${agentDef.name}#${options.agentId.slice(0, 8)}`,
+    agentDir,
+    sessionManager,
+    settingsManager,
+    model,
+    tools: allowedTools,
+    resourceLoader: loader,
+    ...(agentDef.thinking ? { thinkingLevel: agentDef.thinking as never } : {}),
   });
-  await session.bindExtensions();
+
+  // 6. Bind extensions (required even when empty)
+  await session.bindExtensions({});
   options.onSessionCreated?.(session);
 
-  // 6. Subscribe to events
+  // 7. Subscribe to events
   let responseText = "";
   let turnCount = 0;
   let aborted = false;
 
-  session.on("tool_execution_start", (event: { toolName?: string }) => {
-    options.onToolActivity?.({
-      type: "start",
-      toolName: event.toolName ?? "unknown",
-    });
-  });
-  session.on("tool_execution_end", (event: { toolName?: string }) => {
-    options.onToolActivity?.({
-      type: "end",
-      toolName: event.toolName ?? "unknown",
-    });
-  });
-  session.on("message_update", (event: { text_delta?: string }) => {
-    if (event.text_delta) {
-      responseText += event.text_delta;
-      options.onTextDelta?.(event.text_delta, responseText);
+  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+    if (event.type === "message_start") {
+      responseText = "";
     }
-  });
-  session.on("turn_end", () => {
-    turnCount++;
-    options.onTurnEnd?.(turnCount);
-  });
-  session.on(
-    "message_end",
-    (event: {
-      usage?: { input?: number; output?: number; cacheWrite?: number };
-    }) => {
-      if (event.usage) {
+    if (
+      event.type === "message_update" &&
+      event.assistantMessageEvent.type === "text_delta"
+    ) {
+      responseText += event.assistantMessageEvent.delta;
+      options.onTextDelta?.(event.assistantMessageEvent.delta, responseText);
+    }
+    if (event.type === "tool_execution_start") {
+      options.onToolActivity?.({ type: "start", toolName: event.toolName });
+    }
+    if (event.type === "tool_execution_end") {
+      options.onToolActivity?.({ type: "end", toolName: event.toolName });
+    }
+    if (event.type === "turn_end") {
+      turnCount++;
+      options.onTurnEnd?.(turnCount);
+    }
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      const usage = (event.message as { usage?: { input?: number; output?: number; cacheWrite?: number } }).usage;
+      if (usage) {
         options.onUsage?.({
-          input: event.usage.input ?? 0,
-          output: event.usage.output ?? 0,
-          cacheWrite: event.usage.cacheWrite ?? 0,
+          input: usage.input ?? 0,
+          output: usage.output ?? 0,
+          cacheWrite: usage.cacheWrite ?? 0,
         });
       }
-    },
-  );
+    }
+  });
 
-  // 7. Set up timeout
+  // 8. Set up timeout
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   if (options.timeoutMs) {
     timeoutHandle = setTimeout(() => {
@@ -397,44 +531,33 @@ export async function runAgent(
     }, options.timeoutMs);
   }
 
-  // Wire parent abort signal
-  if (options.signal) {
-    if (options.signal.aborted) {
-      aborted = true;
-      session.abort();
-    } else {
-      options.signal.addEventListener(
-        "abort",
-        () => {
-          aborted = true;
-          session.abort();
-        },
-        { once: true },
-      );
-    }
-  }
+  // 9. Wire parent abort signal
+  const cleanupAbort = forwardAbortSignal(session, options.signal);
 
-  // 8. Execute prompt
+  // 10. Execute prompt
   try {
     await session.prompt(options.prompt);
   } catch (error) {
-    if (!aborted) throw error;
+    if (!aborted && !(options.signal?.aborted)) throw error;
+    aborted = true;
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
+    unsubscribe();
+    cleanupAbort();
   }
 
-  // 9. Return
+  // 11. Fallback: get text from session messages if streaming didn't capture it
+  if (!responseText.trim()) {
+    responseText = getLastAssistantText(session);
+  }
+
   return { responseText, session: session as unknown, aborted };
 }
 
-function buildReplacePrompt(
-  agentDef: AgentDefinition,
-  cwd: string,
-  skillBlocks: string,
-): string {
+function buildReplacePrompt(agentDef: AgentDefinition, cwd: string): string {
   const parts: string[] = [
     `<active_agent name="${agentDef.name}"/>`,
-    "You are a pi coding agent sub-agent.",
+    "",
     `Environment: cwd=${cwd}, platform=${process.platform}`,
   ];
 
@@ -442,22 +565,64 @@ function buildReplacePrompt(
     parts.push("", agentDef.systemPrompt.trim());
   }
 
-  if (skillBlocks) {
-    parts.push("", skillBlocks);
+  // Preload skills into prompt if configured
+  if (Array.isArray(agentDef.skills) && agentDef.skills.length > 0) {
+    const preloaded = preloadSkills(agentDef.skills, cwd);
+    for (const skill of preloaded) {
+      parts.push("", `<skill name="${skill.name}">\n${skill.content}\n</skill>`);
+    }
   }
 
   return parts.join("\n");
 }
-```
 
-Note: The exact `createAgentSession` API (parameter names, event names, event payload shapes) must be verified by the implementer against the actual `@earendil-works/pi-coding-agent` package. The code above follows the spec's description and the tintinweb reference implementation's patterns. Adjust parameter names, event names, and types as needed.
+/** Wire an AbortSignal to abort a session. Returns cleanup function. */
+function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => void {
+  if (!signal) return () => {};
+  if (signal.aborted) {
+    session.abort();
+    return () => {};
+  }
+  const onAbort = () => session.abort();
+  signal.addEventListener("abort", onAbort, { once: true });
+  return () => signal.removeEventListener("abort", onAbort);
+}
+
+/** Get last assistant text from session transcript (fallback when streaming missed it). */
+function getLastAssistantText(session: AgentSession): string {
+  const messages = session.messages;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant") continue;
+    const content = (msg as { content?: Array<{ type: string; text?: string }> }).content;
+    if (!content) continue;
+    const text = content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text ?? "")
+      .join("");
+    if (text.trim()) return text.trim();
+  }
+  return "";
+}
+```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pnpm vitest run tests/agent-runner.test.ts`
-Expected: PASS (or adjust mocks to match actual API)
+Expected: PASS (adjust mocks if needed for exact `DefaultResourceLoader` constructor shape)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Run typecheck**
+
+Run: `pnpm typecheck`
+Fix any type errors. The key risk areas:
+- `AgentSessionEvent` type discrimination (verify `event.assistantMessageEvent` exists on `message_update`)
+- `session.messages` getter type
+- `SettingsManager.create()` signature
+- `DefaultResourceLoader` options typing (`appendSystemPromptOverride`)
+
+If `appendSystemPromptOverride` doesn't exist on the installed version, remove it (it was added in 0.80.x; verify against installed types).
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/core/agent-runner.ts tests/agent-runner.test.ts
@@ -479,6 +644,15 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
 import type { AgentDefinition } from "../src/shared/types.js";
 
+// Mock the runner
+vi.mock("../src/core/agent-runner.js", () => ({
+  runAgent: vi.fn().mockResolvedValue({
+    responseText: "done",
+    session: {},
+    aborted: false,
+  }),
+}));
+
 function makeAgentDef(
   overrides: Partial<AgentDefinition> = {},
 ): AgentDefinition {
@@ -497,16 +671,17 @@ describe("AgentManager", () => {
   let manager: AgentManager;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     manager = new AgentManager(3);
   });
 
   it("rejects spawn when depth exceeds maxDepth", async () => {
     const agentDef = makeAgentDef();
     await expect(
-      manager.spawnAndWait({} as never, agentDef, {
+      manager.spawnAndWait({}, agentDef, {
         prompt: "test",
         cwd: "/tmp",
-        currentDepth: 5,
+        currentDepth: 3,
       }),
     ).rejects.toThrow(/nesting limit/i);
   });
@@ -514,7 +689,7 @@ describe("AgentManager", () => {
   it("rejects spawn when agent not in allowlist", async () => {
     const agentDef = makeAgentDef({ name: "worker" });
     await expect(
-      manager.spawnAndWait({} as never, agentDef, {
+      manager.spawnAndWait({}, agentDef, {
         prompt: "test",
         cwd: "/tmp",
         allowedAgents: ["scout", "reviewer"],
@@ -523,33 +698,55 @@ describe("AgentManager", () => {
   });
 
   it("allows spawn when agent is in allowlist (case-insensitive)", async () => {
-    // This will fail because runAgent isn't mocked, but the allowlist check should pass
     const agentDef = makeAgentDef({ name: "scout" });
-    // We just verify it doesn't throw the allowlist error
-    const promise = manager.spawnAndWait({} as never, agentDef, {
+    const { record } = await manager.spawnAndWait({}, agentDef, {
       prompt: "test",
       cwd: "/tmp",
       allowedAgents: ["Scout"],
     });
-    // It will fail on runAgent call, not on allowlist
-    await expect(promise).rejects.not.toThrow(/not allowed/i);
+    expect(record.status).toBe("completed");
+  });
+
+  it("allows spawn when allowedAgents is empty (no restriction)", async () => {
+    const agentDef = makeAgentDef({ name: "anything" });
+    const { record } = await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    expect(record.status).toBe("completed");
   });
 
   it("tracks agent records", () => {
     expect(manager.listAgents()).toEqual([]);
   });
 
-  it("can abort a running agent", () => {
+  it("records are tracked after spawn", async () => {
+    const agentDef = makeAgentDef();
+    await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    expect(manager.listAgents()).toHaveLength(1);
+    expect(manager.listAgents()[0].status).toBe("completed");
+  });
+
+  it("can abort a running agent (returns false for nonexistent)", () => {
     expect(manager.abort("nonexistent")).toBe(false);
   });
 
-  it("setMaxDepth updates the limit", () => {
+  it("setMaxDepth updates the limit", async () => {
     manager.setMaxDepth(5);
-    // Verify by trying a spawn at depth 4 (should not throw depth error)
-    // and depth 5 (should throw)
     const agentDef = makeAgentDef();
-    expect(
-      manager.spawnAndWait({} as never, agentDef, {
+    // Depth 4 should work
+    const { record } = await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 4,
+    });
+    expect(record.status).toBe("completed");
+    // Depth 5 should fail
+    await expect(
+      manager.spawnAndWait({}, agentDef, {
         prompt: "test",
         cwd: "/tmp",
         currentDepth: 5,
@@ -557,9 +754,58 @@ describe("AgentManager", () => {
     ).rejects.toThrow(/nesting limit/i);
   });
 
-  it("clearCompleted removes finished agents", () => {
+  it("clearCompleted removes finished agents", async () => {
+    const agentDef = makeAgentDef();
+    await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    expect(manager.listAgents()).toHaveLength(1);
     manager.clearCompleted();
     expect(manager.listAgents()).toEqual([]);
+  });
+
+  it("computes allowRecursion correctly", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const agentDef = makeAgentDef({ subagentAgents: ["helper"] });
+    await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 0,
+    });
+    // With subagentAgents and depth+1 < maxDepth, allowRecursion should be true
+    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+      agentDef,
+      expect.objectContaining({ allowRecursion: true }),
+      expect.anything(),
+    );
+  });
+
+  it("sets allowRecursion to false when depth would exceed limit", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const agentDef = makeAgentDef({ subagentAgents: ["helper"] });
+    await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 2, // maxDepth is 3, so depth+1=3 is NOT < 3
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+      agentDef,
+      expect.objectContaining({ allowRecursion: false }),
+      expect.anything(),
+    );
+  });
+
+  it("records error status when runAgent throws", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error("session failed"));
+    const agentDef = makeAgentDef();
+    const { record } = await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    expect(record.status).toBe("error");
+    expect(record.error).toBe("session failed");
   });
 });
 ```
@@ -574,8 +820,6 @@ Expected: FAIL with "Cannot find module '../src/core/agent-manager.js'"
 Create `src/core/agent-manager.ts`:
 
 ```typescript
-import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
 import { runAgent } from "./agent-runner.js";
 import type {
   AgentDefinition,
@@ -624,14 +868,6 @@ export class AgentManager {
       }
     }
 
-    // Validate cwd
-    if (!isAbsolute(options.cwd)) {
-      throw new Error(`cwd must be an absolute path, got: ${options.cwd}`);
-    }
-    if (!existsSync(options.cwd)) {
-      throw new Error(`cwd does not exist: ${options.cwd}`);
-    }
-
     // Create record
     const id = generateId();
     const record: AgentRecord = {
@@ -664,7 +900,7 @@ export class AgentManager {
       }
     }
 
-    // Compute allowRecursion
+    // Compute allowRecursion: true if agent has subagentAgents AND depth+1 < maxDepth
     const allowRecursion =
       agentDef.subagentAgents.length > 0 && currentDepth + 1 < this.maxDepth;
 
@@ -697,7 +933,7 @@ export class AgentManager {
           },
           onTextDelta: options.onTextDelta,
         },
-        ctx as { model?: unknown },
+        ctx as { model?: unknown; modelRegistry?: unknown },
       );
 
       record.status = result.aborted ? "aborted" : "completed";
@@ -772,11 +1008,18 @@ git commit -m "feat: add AgentManager for lifecycle and policy enforcement"
 
 - [ ] **Step 1: Update `runtime-deps.ts` to use AgentManager instead of ExecutionStateStore**
 
-Replace the `ExecutionStateStore` import and `stateStore` field with `AgentManager`:
+Replace the entire file:
 
 ```typescript
 import type { AgentManager } from "../core/agent-manager.js";
-// ... keep existing imports for types
+import type {
+  AgentCreationInput,
+  AgentDefinition,
+  AgentDiscoveryResult,
+  LoadedConfig,
+  ResolvedPaths,
+  SubagentsConfig,
+} from "./types.js";
 
 export interface RuntimeDeps {
   resolvePaths: () => ResolvedPaths;
@@ -807,10 +1050,28 @@ export interface RuntimeDeps {
 
 - [ ] **Step 2: Update `index.ts` to create AgentManager and pass to deps**
 
+Replace the entire file:
+
 ```typescript
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentFile,
+  deleteUserAgentOverride,
+  disableAgentInUserScope,
+  discoverAgents,
+  discoverToolNames,
+  exportAgentToUserScope,
+} from "./core/agents.js";
 import { AgentManager } from "./core/agent-manager.js";
-// Remove: import { ExecutionStateStore } from "./core/execution-state.js";
-// Remove: import { registerSlashAgentBridge } from "./core/subagent.js";
+import { loadConfig, saveConfig } from "./core/config.js";
+import { resolvePaths } from "./core/paths.js";
+import {
+  registerAgentCommand,
+  registerSubagentTool,
+} from "./core/subagent.js";
+import type { RuntimeDeps } from "./shared/runtime-deps.js";
+import { showAgentsMenu } from "./tui/agents-menu.js";
+import { renderSubagentMessage } from "./tui/render.js";
 
 export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   const manager = new AgentManager();
@@ -840,9 +1101,8 @@ export function registerSubagentsExtension(
       theme,
     ),
   );
-  // Remove: registerSlashAgentBridge(pi, deps);
   registerSubagentTool(pi, deps);
-  registerAgentCommand(pi, deps, undefined, () => true);
+  registerAgentCommand(pi, deps);
 
   pi.registerCommand("agents", {
     description: "Open the interactive pi-subagents agents menu",
@@ -850,20 +1110,17 @@ export function registerSubagentsExtension(
       await showAgentsMenu(ctx, deps);
     },
   });
+}
 
-  // Wire lifecycle events
-  pi.on("session_shutdown", () => {
-    deps.manager.dispose();
-  });
+export default function subagentsExtension(pi: ExtensionAPI): void {
+  registerSubagentsExtension(pi);
 }
 ```
-
-Note: The `renderSubagentMessage` signature changes (no longer needs `stateStore` parameter) - we'll update it in Task 1.6.
 
 - [ ] **Step 3: Run typecheck to verify compilation**
 
 Run: `pnpm typecheck`
-Expected: May have errors from modules still referencing old types. Fix cascading issues.
+Expected: May have errors from modules still referencing old imports. Fix cascading issues.
 
 - [ ] **Step 4: Commit**
 
@@ -879,7 +1136,7 @@ git commit -m "refactor: wire AgentManager into RuntimeDeps and index"
 
 - [ ] **Step 1: Rewrite `subagent.ts`**
 
-Strip out all child-process spawning, deferred request bridge, and nested context code. Keep: tool registration (same schema), input parsing, `findAgentByName()`, `parseAgentCommandArgs()`, artifact writing. Route execution through `manager.spawnAndWait()`.
+Replace the entire file. Strip all child-process spawning, deferred request bridge, nested context code. Keep: tool registration (same schema), input parsing, `findAgentByName()`, `parseAgentCommandArgs()`, artifact writing. Route execution through `manager.spawnAndWait()`.
 
 ```typescript
 import { resolve } from "node:path";
@@ -895,7 +1152,10 @@ import type {
   AgentDiscoveryResult,
   SubagentToolInput,
 } from "../shared/types.js";
-import { renderSubagentCall, renderSubagentResult } from "../tui/render.js";
+import {
+  renderSubagentCall,
+  renderSubagentResult,
+} from "../tui/render.js";
 import {
   writeExecutionArtifacts,
   withArtifacts,
@@ -1094,8 +1354,6 @@ export function registerSubagentTool(
 export function registerAgentCommand(
   pi: ExtensionAPI,
   deps: RuntimeDeps,
-  _runtime?: unknown,
-  _isBridgeAvailable?: () => boolean,
 ): void {
   pi.registerCommand("agent", {
     description: "Run a discovered pi-subagents agent in the foreground",
@@ -1135,10 +1393,10 @@ export function registerAgentCommand(
             exitCode: null,
             stderr: record.error ?? "",
             usage: {
-              input: 0,
-              output: 0,
+              input: record.lifetimeUsage.inputTokens,
+              output: record.lifetimeUsage.outputTokens,
               cacheRead: 0,
-              cacheWrite: 0,
+              cacheWrite: record.lifetimeUsage.cacheWriteTokens,
               contextTokens: 0,
               cost: 0,
               turns: 0,
@@ -1159,8 +1417,6 @@ export function registerAgentCommand(
 }
 ```
 
-Note: The implementer should carefully review how the existing `SubagentExecutionDetails` type is used by the renderer to ensure the `details` object passed back is compatible. Some fields may need adjustment.
-
 - [ ] **Step 2: Run typecheck**
 
 Run: `pnpm typecheck`
@@ -1180,35 +1436,40 @@ git commit -m "refactor: rewrite subagent.ts as thin orchestration over AgentMan
 
 - [ ] **Step 1: Remove `ExecutionStateStore` dependency from render functions**
 
-The `renderSubagentResult` and `renderSubagentMessage` functions currently take an `ExecutionStateStore` parameter. Since we're removing that module, simplify the renderer:
+The renderer currently depends on `ExecutionStateStore` for:
+- `renderSubagentResult` takes a `store` parameter for live details
+- `renderSubagentMessage` takes a `store` parameter for live rendering
+- `createSlashLiveMessageComponent` uses store for real-time updates
 
-- Remove the `store` parameter from `renderSubagentResult` and `renderSubagentMessage`
-- Remove the `SlashLiveDetails` handling (the deferred request pattern is gone)
-- Remove `createSlashLiveMessageComponent`
-- Keep the core rendering logic for `SubagentExecutionDetails`
-
-The implementer should:
-
-1. Remove the `store: ExecutionStateStore` parameter from `renderSubagentResult`
-2. Remove the `store: ExecutionStateStore` parameter from `renderSubagentMessage`
-3. Remove the `isSlashLiveDetails` check and `buildSlashLiveText` function
-4. Remove the `createSlashLiveMessageComponent` function
-5. Remove the `SlashLiveDetails` import
+Since we're removing the deferred request pattern entirely:
+1. Remove `store: ExecutionStateStore` parameter from `renderSubagentResult`
+2. Remove `store: ExecutionStateStore` parameter from `renderSubagentMessage`
+3. Remove `isSlashLiveDetails` check and `buildSlashLiveText` function
+4. Remove `createSlashLiveMessageComponent` function
+5. Remove `SlashLiveDetails` import
 6. Simplify `renderSubagentMessage` to always render as `SubagentExecutionDetails`
+
+The resulting file should contain:
+- `buildSubagentCallText` (unchanged)
+- `buildSubagentResultText` (simplified: only handles `SubagentExecutionDetails`, no `SlashLiveDetails`)
+- `renderSubagentCall` (unchanged)
+- `renderSubagentResult` (remove store param, remove live details branch)
+- `renderSubagentMessage` (remove store param, remove live component branch)
+- `toSubagentCommandMessage` (unchanged)
 
 - [ ] **Step 2: Update all callers in `index.ts` and `subagent.ts`**
 
-Remove the `stateStore` argument from renderer calls.
+Remove the `deps.stateStore` argument from renderer calls. (Already done in Task 1.4 and 1.5 rewrites.)
 
-- [ ] **Step 3: Run typecheck and tests**
+- [ ] **Step 3: Run typecheck**
 
-Run: `pnpm check`
-Expected: Some tests will fail because they reference deleted modules.
+Run: `pnpm typecheck`
+Expected: Should compile after removing dead references.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/tui/render.ts src/index.ts src/core/subagent.ts
+git add src/tui/render.ts
 git commit -m "refactor: remove ExecutionStateStore dependency from renderer"
 ```
 
@@ -1239,11 +1500,11 @@ rm tests/subagent-spawner.test.ts tests/nested-context.test.ts tests/execution-s
 
 - [ ] **Step 3: Update `tests/subagent.test.ts`**
 
-Rewrite to test the new thin orchestration: tool registration, input validation, manager integration. Mock `AgentManager.spawnAndWait()`. Test `findAgentByName()`, `parseAgentCommandArgs()`, error handling.
+Rewrite to test the new thin orchestration: tool registration, input validation, manager integration. Mock `AgentManager.spawnAndWait()`. Test `findAgentByName()`, `parseAgentCommandArgs()`, error handling paths.
 
 - [ ] **Step 4: Update `tests/index.test.ts`**
 
-Update to reflect the new `RuntimeDeps` shape (uses `manager` instead of `stateStore`). Test that `createRuntimeDeps` returns an object with a `manager` field.
+Update to reflect the new `RuntimeDeps` shape (uses `manager` instead of `stateStore`). Test that `createRuntimeDeps` returns an object with a `manager` field that is an `AgentManager` instance.
 
 - [ ] **Step 5: Update `tests/render.test.ts`**
 
@@ -1251,7 +1512,7 @@ Remove tests for `SlashLiveDetails`, `createSlashLiveMessageComponent`. Update `
 
 - [ ] **Step 6: Remove `SlashLiveDetails` and deferred request types from `types.ts`**
 
-Remove: `SlashLiveDetails`, `SlashSnapshot`, `SlashSubagentRequestPayload`, `PersistedDeferredSlashRequest`, `DeferredSlashRuntimeState`, `DEFERRED_SLASH_REQUEST_ENTRY`, `DEFERRED_SLASH_REQUEST_CONSUMED_ENTRY`, `SubagentCommandMessage`. Keep: `SubagentExecutionDetails`, `SubagentExecutionResult`, `SubagentToolInput`, `SubagentUsage`, `SubagentToolActivity`.
+Remove: `SlashLiveDetails`, `SlashSnapshot`, `SlashSubagentRequestPayload`, `PersistedDeferredSlashRequest`, `DeferredSlashRuntimeState`, `DEFERRED_SLASH_REQUEST_ENTRY`, `DEFERRED_SLASH_REQUEST_CONSUMED_ENTRY`, `SubagentCommandMessage`, `SubagentMessageDetails` (union type). Keep: `SubagentExecutionDetails`, `SubagentExecutionResult`, `SubagentToolInput`, `SubagentUsage`, `SubagentToolActivity`.
 
 - [ ] **Step 7: Run full check**
 
@@ -1265,37 +1526,30 @@ git add -A
 git commit -m "refactor: delete retired modules (spawner, nested-context, execution-state)"
 ```
 
-### Task 1.8: Add pi-ai peer dependency
+### Task 1.8: Final verification
 
-**Files:**
-- Modify: `package.json`
+**Files:** None (verification only)
 
-- [ ] **Step 1: Add `@earendil-works/pi-ai` as peer dependency**
-
-Add to `peerDependencies` in `package.json`:
-
-```json
-"@earendil-works/pi-ai": "*"
-```
-
-And to `devDependencies`:
-
-```json
-"@earendil-works/pi-ai": "^0.79.3"
-```
-
-- [ ] **Step 2: Install**
-
-Run: `pnpm install`
-
-- [ ] **Step 3: Run full check**
+- [ ] **Step 1: Run full check suite**
 
 Run: `pnpm check`
-Expected: PASS
+Expected: All linting, type checking, and tests pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 2: Verify no stale references**
 
 ```bash
-git add package.json pnpm-lock.yaml
-git commit -m "chore: add @earendil-works/pi-ai peer dependency"
+grep -r "ExecutionStateStore\|stateStore\|nested-context\|subagent-spawner\|SlashLiveDetails\|SlashSnapshot\|registerSlashAgentBridge" src/ tests/
+```
+
+Expected: No matches (all old references removed).
+
+- [ ] **Step 3: Verify pi-ai peer dependency**
+
+Confirm `@earendil-works/pi-ai` is already in `peerDependencies` (it already is in current `package.json`). No action needed.
+
+- [ ] **Step 4: Final commit (if any fixups)**
+
+```bash
+git add -A
+git commit -m "chore: final Phase 1 cleanup"
 ```
