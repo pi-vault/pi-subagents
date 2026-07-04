@@ -9,6 +9,7 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
+  SubagentExecutionDetails,
   SubagentToolInput,
 } from "../shared/types.js";
 import {
@@ -116,6 +117,38 @@ export function registerSubagentTool(
           allowedAgents: agentDef.subagentAgents,
         });
 
+        // Build execution details (shared between artifacts and return value)
+        const details: SubagentExecutionDetails = {
+          status:
+            record.status === "completed"
+              ? "success"
+              : record.status === "aborted"
+                ? "aborted"
+                : "error",
+          agent: agentDef.name,
+          task: params.task,
+          sourcePath: agentDef.sourcePath,
+          cwd: effectiveCwd,
+          timeoutMs,
+          durationMs: record.durationMs ?? 0,
+          childSessionDir: "",
+          childSessionPath: "",
+          model: agentDef.model,
+          stopReason: record.status,
+          exitCode: null,
+          stderr: record.error ?? "",
+          usage: {
+            input: record.lifetimeUsage.inputTokens,
+            output: record.lifetimeUsage.outputTokens,
+            cacheRead: 0,
+            cacheWrite: record.lifetimeUsage.cacheWriteTokens,
+            contextTokens: 0,
+            cost: 0,
+            turns: 0,
+          },
+          recentToolActivity: [],
+        };
+
         // Write artifacts
         const artifactPaths = writeExecutionArtifacts(
           paths,
@@ -130,73 +163,14 @@ export function registerSubagentTool(
           {
             content: record.result ?? "(no output)",
             isError: record.status === "error",
-            details: {
-              status:
-                record.status === "completed"
-                  ? "success"
-                  : record.status === "aborted"
-                    ? "aborted"
-                    : "error",
-              agent: agentDef.name,
-              task: params.task,
-              sourcePath: agentDef.sourcePath,
-              cwd: effectiveCwd,
-              timeoutMs,
-              durationMs: record.durationMs ?? 0,
-              childSessionDir: "",
-              childSessionPath: "",
-              model: agentDef.model,
-              stopReason: record.status,
-              exitCode: null,
-              stderr: record.error ?? "",
-              usage: {
-                input: record.lifetimeUsage.inputTokens,
-                output: record.lifetimeUsage.outputTokens,
-                cacheRead: 0,
-                cacheWrite: record.lifetimeUsage.cacheWriteTokens,
-                contextTokens: 0,
-                cost: 0,
-                turns: 0,
-              },
-              recentToolActivity: [],
-            },
+            details,
           },
         );
 
         return {
           content: [{ type: "text", text: record.result ?? "(no output)" }],
           isError: record.status === "error",
-          details: {
-            status:
-              record.status === "completed"
-                ? "success"
-                : record.status === "aborted"
-                  ? "aborted"
-                  : "error",
-            agent: agentDef.name,
-            task: params.task,
-            sourcePath: agentDef.sourcePath,
-            cwd: effectiveCwd,
-            timeoutMs,
-            durationMs: record.durationMs ?? 0,
-            childSessionDir: "",
-            childSessionPath: "",
-            artifactPaths,
-            model: agentDef.model,
-            stopReason: record.status,
-            exitCode: null,
-            stderr: record.error ?? "",
-            usage: {
-              input: record.lifetimeUsage.inputTokens,
-              output: record.lifetimeUsage.outputTokens,
-              cacheRead: 0,
-              cacheWrite: record.lifetimeUsage.cacheWriteTokens,
-              contextTokens: 0,
-              cost: 0,
-              turns: 0,
-            },
-            recentToolActivity: [],
-          },
+          details: { ...details, artifactPaths },
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

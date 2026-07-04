@@ -52,9 +52,7 @@ export async function runAgent(
   await loader.reload();
 
   // 4. Resolve model
-  const model = (options.model ?? ctx.model) as Parameters<
-    typeof createAgentSession
-  >[0] extends { model?: infer M } ? M : never;
+  const model = (options.model ?? ctx.model) as never;
 
   // 5. Create session
   const settingsManager = SettingsManager.create(options.cwd, agentDir);
