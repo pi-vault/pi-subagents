@@ -17,22 +17,14 @@ const MAX_TASK_PREVIEW = 80;
 const MAX_ACTIVITY_PREVIEW = 72;
 const MAX_COLLAPSED_ACTIVITY = 5;
 
-function compactWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
 function previewText(value: string | undefined, maxLength: number): string {
-  const compact = compactWhitespace(value ?? "");
+  const compact = (value ?? "").replace(/\s+/g, " ").trim();
   if (!compact) {
     return "-";
   }
   return compact.length > maxLength
     ? `${compact.slice(0, maxLength - 3)}...`
     : compact;
-}
-
-function formatNumber(value: number | null | undefined): string {
-  return value === undefined || value === null ? "-" : String(value);
 }
 
 function formatPath(value: string | undefined): string {
@@ -56,16 +48,6 @@ function normalizeMessageContent(
       .map((entry) => entry.text ?? "")
       .join("") || "(no output)"
   );
-}
-
-function getStatusColor(status: SubagentExecutionDetails["status"]):
-  | "success"
-  | "error"
-  | "warning" {
-  if (status === "success") {
-    return "success";
-  }
-  return status === "error" ? "error" : "warning";
 }
 
 type RenderTheme = {
@@ -103,7 +85,7 @@ export function buildSubagentResultText(
     return theme.fg("dim", `Running in background${agentId}`);
   }
 
-  const statusColor = getStatusColor(details.status);
+  const statusColor = details.status === "success" ? "success" : details.status === "error" ? "error" : "warning";
   const status = theme.fg(statusColor, details.status.toUpperCase());
   const headerParts = [
     status,
@@ -146,7 +128,7 @@ export function buildSubagentResultText(
   lines.push(theme.fg("muted", `duration: ${details.durationMs}ms`));
   lines.push(theme.fg("muted", `usage: ${formatUsage(details)}`));
   lines.push(theme.fg("muted", `stop reason: ${details.stopReason || "-"}`));
-  lines.push(theme.fg("muted", `exit code: ${formatNumber(details.exitCode)}`));
+  lines.push(theme.fg("muted", `exit code: ${details.exitCode ?? "-"}`));
   lines.push(
     theme.fg("muted", `child session dir: ${formatPath(details.childSessionDir)}`),
   );

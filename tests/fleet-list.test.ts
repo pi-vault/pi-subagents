@@ -160,12 +160,12 @@ describe("FleetList handleKey", () => {
     fleet.dispose();
   });
 
-  it("onAgentFinished() calls update without throwing", () => {
+  it("update() calls without throwing after agent finishes", () => {
     const record = makeRecord();
     const fleet = new FleetList(makeMockManager([record]), new Map());
     const ui = makeUICtx();
     fleet.setUICtx(ui);
-    expect(() => fleet.onAgentFinished("a1")).not.toThrow();
+    expect(() => fleet.update()).not.toThrow();
     fleet.dispose();
   });
 

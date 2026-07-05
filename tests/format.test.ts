@@ -4,7 +4,6 @@ import {
   formatTokens,
   formatTurns,
   describeActivity,
-  statusIcon,
 } from "../src/tui/format.js";
 
 describe("formatMs", () => {
@@ -74,37 +73,5 @@ describe("describeActivity", () => {
   it("unknown tool name falls back to raw name", () => {
     const tools = new Map([["custom_1", "my_custom_tool"]]);
     expect(describeActivity(tools)).toBe("my_custom_tool…");
-  });
-});
-
-describe("statusIcon", () => {
-  it("returns spinner frame for running", () => {
-    const result = statusIcon("running");
-    expect(result.icon).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
-    expect(result.colorKey).toBe("accent");
-  });
-  it("returns checkmark for completed", () => {
-    expect(statusIcon("completed").icon).toBe("✓");
-    expect(statusIcon("completed").colorKey).toBe("success");
-  });
-  it("returns x for error", () => {
-    expect(statusIcon("error").icon).toBe("✗");
-    expect(statusIcon("error").colorKey).toBe("error");
-  });
-  it("returns x for aborted", () => {
-    expect(statusIcon("aborted").icon).toBe("✗");
-  });
-  it("returns warning check for steered", () => {
-    expect(statusIcon("steered").icon).toBe("✓");
-    expect(statusIcon("steered").colorKey).toBe("warning");
-  });
-  it("returns dim stop for stopped", () => {
-    expect(statusIcon("stopped").icon).toBe("■");
-    expect(statusIcon("stopped").colorKey).toBe("dim");
-  });
-  it("cycles spinner frame with explicit frame arg", () => {
-    const frame0 = statusIcon("running", 0);
-    const frame1 = statusIcon("running", 1);
-    expect(frame0.icon).not.toBe(frame1.icon);
   });
 });

@@ -61,9 +61,6 @@ export function discoverToolNames(
   );
 }
 
-/** @deprecated Use parseAgentContent from agent-format.ts directly */
-export const parseAgentFile = parseAgentContent;
-
 function discoverAgentsFromDirectory(directory: string): AgentDiscoveryResult {
   if (!existsSync(directory)) {
     return { agents: [], diagnostics: [] };
@@ -77,7 +74,7 @@ function discoverAgentsFromDirectory(directory: string): AgentDiscoveryResult {
 
   for (const fileName of fileNames) {
     const filePath = resolve(directory, fileName);
-    const parsed = parseAgentFile(filePath, readFileSync(filePath, "utf8"));
+    const parsed = parseAgentContent(filePath, readFileSync(filePath, "utf8"));
     if (parsed.ok) {
       agents.push(parsed.agent);
     } else {
@@ -132,9 +129,6 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
   };
 }
 
-/** @deprecated Use serializeAgent from agent-format.ts directly */
-export const createAgentMarkdown = serializeAgent;
-
 export function exportAgentToUserScope(
   paths: ResolvedPaths,
   discovery: AgentDiscoveryResult,
@@ -160,7 +154,7 @@ export function exportAgentToUserScope(
   });
   writeFileSync(filePath, markdown, "utf8");
 
-  const parsed = parseAgentFile(filePath, markdown);
+  const parsed = parseAgentContent(filePath, markdown);
   if (!parsed.ok) {
     throw new Error(parsed.diagnostic.reason);
   }
@@ -191,7 +185,7 @@ export function disableAgentInUserScope(
   ].join("\n");
   writeFileSync(filePath, markdown, "utf8");
 
-  const parsed = parseAgentFile(filePath, markdown);
+  const parsed = parseAgentContent(filePath, markdown);
   if (!parsed.ok) {
     throw new Error(parsed.diagnostic.reason);
   }
@@ -291,7 +285,7 @@ export function createAgentFile(
   });
   writeFileSync(filePath, markdown, { encoding: "utf8", flag: "wx" });
 
-  const parsed = parseAgentFile(filePath, markdown);
+  const parsed = parseAgentContent(filePath, markdown);
   if (!parsed.ok) {
     throw new Error(
       `created invalid agent file: ${basename(filePath)}: ${parsed.diagnostic.reason}`,

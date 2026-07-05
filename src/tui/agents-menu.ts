@@ -142,15 +142,6 @@ type AgentMenuEntry = {
   diagnostic?: AgentDiscoveryDiagnostic;
 };
 
-function parseCommaSeparatedList(value: string | undefined): string[] {
-  return value
-    ? value
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-    : [];
-}
-
 export function renderRow(theme: Theme, label: string, selected: boolean): string {
   if (selected) {
     const arrow = theme.fg("accent", "▸");
@@ -176,10 +167,6 @@ export function buildAlignedRows<T>(rows: Array<MenuRow<T>>): string[] {
   });
 }
 
-function buildSelectLabels<T>(rows: Array<MenuRow<T>>): string[] {
-  return buildAlignedRows(rows);
-}
-
 async function showRowsMenu<T>(
   ctx: ExtensionCommandContext,
   title: string,
@@ -190,7 +177,7 @@ async function showRowsMenu<T>(
 
   if (!ctx.ui.custom) {
     if (ctx.ui.select) {
-      const selectLabels = buildSelectLabels(rows);
+      const selectLabels = buildAlignedRows(rows);
       const selectedLabel = await ctx.ui.select(title, selectLabels);
       if (selectedLabel === undefined) {
         return undefined;
@@ -324,22 +311,12 @@ function buildAgentMenuEntries(paths: ResolvedPaths): AgentMenuEntry[] {
     });
 }
 
-function statusLabelForEntry(entry: AgentMenuEntry): string {
-  if (entry.state === "bundled") {
-    return "[bundled]";
-  }
-  if (entry.state === "override") {
-    return "[global override]";
-  }
-  return "[disabled override]";
-}
-
 export function describeAgentEntry(
   entry: AgentMenuEntry,
 ): Pick<MenuRow<AgentMenuEntry>, "label" | "detail"> {
   return {
     label: entry.name,
-    detail: statusLabelForEntry(entry),
+    detail: entry.state === "bundled" ? "[bundled]" : entry.state === "override" ? "[global override]" : "[disabled override]",
   };
 }
 
@@ -447,10 +424,10 @@ async function runCreateAgentFlow(
     name,
     filenameSlug,
     description,
-    tools: parseCommaSeparatedList(tools),
+    tools: tools ? tools.split(",").map((e) => e.trim()).filter(Boolean) : [],
     model,
     thinking,
-    subagentAgents: parseCommaSeparatedList(subagentAgents),
+    subagentAgents: subagentAgents ? subagentAgents.split(",").map((e) => e.trim()).filter(Boolean) : [],
     timeoutMs: timeoutInput.trim() ? Number(timeoutInput) : undefined,
     systemPrompt,
   };

@@ -9,11 +9,6 @@ export interface PreloadedSkill {
   content: string;
 }
 
-export interface ResolvedSkill {
-  name: string;
-  path: string;
-}
-
 /** @internal Exported for testing. */
 export type SkillEntry =
   | { kind: "flat"; name: string; filePath: string }
@@ -27,37 +22,6 @@ export function preloadSkills(
     name,
     content: loadSkillContent(name, cwd),
   }));
-}
-
-export function discoverAvailableSkills(cwd: string): string[] {
-  const seen = new Set<string>();
-  for (const root of getSearchRoots(cwd)) {
-    collectSkillNames(root, seen);
-  }
-  return [...seen].sort();
-}
-
-export function resolveSkillPaths(
-  names: string[],
-  cwd: string,
-): ResolvedSkill[] {
-  const results: ResolvedSkill[] = [];
-  for (const name of names) {
-    if (isUnsafeName(name)) continue;
-    const path = findPathForSkill(name, cwd);
-    if (path !== undefined) results.push({ name, path });
-  }
-  return results;
-}
-
-export function discoverAvailableSkillPaths(cwd: string): ResolvedSkill[] {
-  const seen = new Map<string, string>();
-  for (const root of getSearchRoots(cwd)) {
-    collectSkillPaths(root, seen);
-  }
-  return [...seen.entries()]
-    .map(([name, path]) => ({ name, path }))
-    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function getSearchRoots(cwd: string): string[] {
@@ -202,39 +166,4 @@ function findInRoot(root: string, name: string): string | undefined {
     return result !== undefined; // stop if we found content
   });
   return result;
-}
-
-function collectSkillNames(root: string, seen: Set<string>): void {
-  walkSkillTree(root, (entry) => {
-    seen.add(entry.name);
-    return false;
-  });
-}
-
-function findPathForSkill(name: string, cwd: string): string | undefined {
-  for (const root of getSearchRoots(cwd)) {
-    const path = findPathInRoot(root, name);
-    if (path !== undefined) return path;
-  }
-  return undefined;
-}
-
-function findPathInRoot(root: string, name: string): string | undefined {
-  let result: string | undefined;
-  walkSkillTree(root, (entry) => {
-    if (entry.name !== name) return false;
-    result = entry.kind === "flat" ? entry.filePath : entry.dirPath;
-    return true;
-  });
-  return result;
-}
-
-function collectSkillPaths(root: string, seen: Map<string, string>): void {
-  walkSkillTree(root, (entry) => {
-    if (!seen.has(entry.name)) {
-      const path = entry.kind === "flat" ? entry.filePath : entry.dirPath;
-      seen.set(entry.name, path);
-    }
-    return false;
-  });
 }

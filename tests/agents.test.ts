@@ -11,14 +11,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
   createAgentFile,
-  createAgentMarkdown,
   deleteUserAgentOverride,
   disableAgentInUserScope,
   discoverAgents,
   discoverToolNames,
   exportAgentToUserScope,
-  parseAgentFile,
 } from "../src/core/agents.js";
+import { parseAgentContent, serializeAgent } from "../src/core/agent-format.js";
 import type { AgentCreationInput, ResolvedPaths } from "../src/shared/types.js";
 
 function createPaths(rootDir: string): ResolvedPaths {
@@ -62,13 +61,13 @@ describe("agent discovery", () => {
     for (const fileName of expectedFiles) {
       const filePath = join(bundledAgentsDir, fileName);
       expect(existsSync(filePath)).toBe(true);
-      const parsed = parseAgentFile(filePath, readFileSync(filePath, "utf8"));
+      const parsed = parseAgentContent(filePath, readFileSync(filePath, "utf8"));
       expect(parsed.ok).toBe(true);
     }
   });
 
   test("parses the markdown body as systemPrompt", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/scout.md",
       [
         "---",
@@ -93,7 +92,7 @@ describe("agent discovery", () => {
   });
 
   test("inherits the agent name from the lowercase filename stem when frontmatter name is missing", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/Planner.md",
       [
         "---",
@@ -362,7 +361,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("serializes created agents deterministically", () => {
-    expect(createAgentMarkdown(createValidInput())).toBe(
+    expect(serializeAgent(createValidInput())).toBe(
       [
         "---",
         "name: Scout",
@@ -408,7 +407,7 @@ describe("tool discovery and agent creation", () => {
       sourcePath: join(paths.userAgentsDir, "scout.md"),
     });
     expect(readFileSync(join(paths.userAgentsDir, "scout.md"), "utf8")).toBe(
-      createAgentMarkdown(createValidInput()),
+      serializeAgent(createValidInput()),
     );
   });
 
@@ -628,7 +627,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("parses enabled: true", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/worker.md",
       [
         "---",
@@ -648,7 +647,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("parses enabled: false", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/worker.md",
       [
         "---",
@@ -668,7 +667,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("supports legacy disabled: true (backward compat)", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/worker.md",
       [
         "---",
@@ -688,7 +687,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("omitting both enabled and disabled leaves enabled undefined", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/worker.md",
       [
         "---",
@@ -707,7 +706,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("parses skills as comma-separated list", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/worker.md",
       [
         "---",
@@ -727,7 +726,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("parses skills: none as false", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/worker.md",
       [
         "---",
@@ -747,7 +746,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("parses skills: all as true", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/worker.md",
       [
         "---",
@@ -767,7 +766,7 @@ describe("tool discovery and agent creation", () => {
   });
 
   test("parses empty skills as undefined (inherit all)", () => {
-    const parsed = parseAgentFile(
+    const parsed = parseAgentContent(
       "/tmp/worker.md",
       [
         "---",
@@ -786,8 +785,8 @@ describe("tool discovery and agent creation", () => {
     });
   });
 
-  test("createAgentMarkdown serializes skills as comma-separated list", () => {
-    const markdown = createAgentMarkdown({
+  test("serializeAgent serializes skills as comma-separated list", () => {
+    const markdown = serializeAgent({
       description: "Does work",
       tools: ["read"],
       subagentAgents: [],
@@ -798,8 +797,8 @@ describe("tool discovery and agent creation", () => {
     expect(markdown).toContain("skills: tdd, writing-go");
   });
 
-  test("createAgentMarkdown serializes skills: none for false", () => {
-    const markdown = createAgentMarkdown({
+  test("serializeAgent serializes skills: none for false", () => {
+    const markdown = serializeAgent({
       description: "Does work",
       tools: ["read"],
       subagentAgents: [],
@@ -810,8 +809,8 @@ describe("tool discovery and agent creation", () => {
     expect(markdown).toContain("skills: none");
   });
 
-  test("createAgentMarkdown omits skills when undefined", () => {
-    const markdown = createAgentMarkdown({
+  test("serializeAgent omits skills when undefined", () => {
+    const markdown = serializeAgent({
       description: "Does work",
       tools: ["read"],
       subagentAgents: [],

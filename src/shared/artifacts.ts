@@ -3,7 +3,6 @@ import { dirname, join, resolve } from "node:path";
 import type {
   ArtifactPaths,
   ResolvedPaths,
-  RuntimeArtifactsPaths,
 } from "./types.js";
 
 const ARTIFACTS_DIR_NAME = "subagent-artifacts";
@@ -34,20 +33,6 @@ export function getArtifactsDir(
   return join(sessionRoot, ARTIFACTS_DIR_NAME);
 }
 
-export function resolveRuntimeArtifactsPaths(
-  paths: ResolvedPaths,
-  cwd: string,
-  parentSessionFile?: string,
-  parentSessionDir?: string,
-): RuntimeArtifactsPaths {
-  const rootDir = getArtifactsDir(paths, cwd, parentSessionFile, parentSessionDir);
-  return {
-    rootDir,
-    nestedEventsDir: join(rootDir, "nested-subagent-events"),
-    nestedRunsDir: join(rootDir, "nested-subagent-runs"),
-  };
-}
-
 function toSafeAgentName(agent: string): string {
   const safe = agent.trim().replace(/[^A-Za-z0-9_-]+/g, "_");
   return safe || "agent";
@@ -74,10 +59,6 @@ export function getArtifactPaths(
     output: join(artifactsDir, `${baseName}_output.md`),
     meta: join(artifactsDir, `${baseName}_meta.json`),
   };
-}
-
-export function ensureArtifactsDir(artifactPaths: ArtifactPaths): void {
-  mkdirSync(dirname(artifactPaths.input), { recursive: true });
 }
 
 export function writeArtifact(path: string, content: string): void {

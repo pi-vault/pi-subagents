@@ -18,9 +18,8 @@ import type { AgentManager } from "../core/agent-manager.js";
 import type { AgentRecord } from "../shared/types.js";
 import type { AgentActivity } from "./activity.js";
 import { getLifetimeTotal } from "./activity.js";
-import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
+import { ConversationViewer, VIEWPORT_HEIGHT_PCT, type ViewerKeybindings } from "./conversation-viewer.js";
 import type { Theme } from "./agent-widget.js";
-import type { ViewerKeybindings } from "./viewer-keys.js";
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -133,14 +132,6 @@ export class FleetList {
   /** Ensure the re-render timer is running (called when an agent spawns). */
   ensureTimer(): void {
     if (!this.timer) this.timer = setInterval(() => this.update(), TICK_MS);
-  }
-
-  /**
-   * Called when an agent finishes. The viewer (if open on it) stays open so the
-   * final output remains readable, and the row lingers in the list — just refresh.
-   */
-  onAgentFinished(_id: string): void {
-    this.update();
   }
 
   dispose(): void {

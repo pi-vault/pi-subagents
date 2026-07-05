@@ -9,6 +9,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
   Input,
+  type KeyId,
   matchesKey,
   type TUI,
   truncateToWidth,
@@ -19,13 +20,7 @@ import type { AgentRecord } from "../shared/types.js";
 import type { AgentActivity } from "./activity.js";
 import { getLifetimeTotal } from "./activity.js";
 import type { Theme } from "./agent-widget.js";
-import { describeActivity, formatDuration, formatTokens } from "./format.js";
-import {
-  createViewerKeys,
-  type ViewerKeybindings,
-  type ViewerKeys,
-} from "./viewer-keys.js";
-
+import { describeActivity, formatMs, formatTokens } from "./format.js";
 /** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
 const CHROME_LINES_BASE = 6;
 const MIN_VIEWPORT = 3;
@@ -38,6 +33,29 @@ function extractText(content: string | Array<{ type: string; text?: string }>): 
     .filter((c) => c.type === "text")
     .map((c) => c.text ?? "")
     .join("");
+}
+
+/** Structural subset of pi-tui's KeybindingsManager. */
+export interface ViewerKeybindings {
+  matches(data: string, keybinding: string): boolean;
+}
+
+interface ViewerKeys {
+  scrollUp(data: string): boolean;
+  scrollDown(data: string): boolean;
+  pageUp(data: string): boolean;
+  pageDown(data: string): boolean;
+}
+
+function createViewerKeys(keybindings?: ViewerKeybindings): ViewerKeys {
+  const m = (data: string, id: string, fallback: KeyId): boolean =>
+    keybindings ? keybindings.matches(data, id) : matchesKey(data, fallback);
+  return {
+    scrollUp: (data) => m(data, "tui.select.up", "up") || matchesKey(data, "k"),
+    scrollDown: (data) => m(data, "tui.select.down", "down") || matchesKey(data, "j"),
+    pageUp: (data) => m(data, "tui.select.pageUp", "pageUp") || matchesKey(data, "shift+up"),
+    pageDown: (data) => m(data, "tui.select.pageDown", "pageDown") || matchesKey(data, "shift+down"),
+  };
 }
 
 export class ConversationViewer implements Component {
@@ -169,7 +187,7 @@ export class ConversationViewer implements Component {
           : this.record.status === "error"
             ? th.fg("error", "✗")
             : th.fg("dim", "○");
-    const duration = formatDuration(this.record.startedAt, this.record.completedAt);
+    const duration = this.record.completedAt ? formatMs(this.record.completedAt - this.record.startedAt) : `${formatMs(Date.now() - this.record.startedAt)} (running)`;
 
     const headerParts: string[] = [duration];
     const toolUses = this.activity?.toolUses ?? this.record.toolUses;

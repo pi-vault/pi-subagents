@@ -6,7 +6,6 @@ import {
   buildArtifactInputMarkdown,
   buildArtifactOutputMarkdown,
   writeExecutionArtifacts,
-  withArtifacts,
   type ArtifactWriteInput,
 } from "../src/core/subagent-artifacts.js";
 import type {
@@ -212,20 +211,4 @@ describe("writeExecutionArtifacts", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// withArtifacts
-// ---------------------------------------------------------------------------
 
-describe("withArtifacts", () => {
-  test("merges artifact paths into result without mutating original", () => {
-    const result = createResult();
-    const artifactPaths = { input: "/a/input.md", output: "/a/output.md", meta: "/a/meta.json" };
-
-    const merged = withArtifacts(result, artifactPaths);
-
-    expect(merged.details.artifactPaths).toEqual(artifactPaths);
-    expect(merged.content).toBe(result.content);
-    // original should not have artifactPaths
-    expect(result.details.artifactPaths).toBeUndefined();
-  });
-});

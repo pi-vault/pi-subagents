@@ -17,12 +17,6 @@ export function formatMs(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** Format duration from start/completed timestamps. */
-export function formatDuration(startedAt: number, completedAt?: number): string {
-  if (completedAt) return formatMs(completedAt - startedAt);
-  return `${formatMs(Date.now() - startedAt)} (running)`;
-}
-
 /** Format a token count compactly: "500 token", "12.3k token", "1.2M token". */
 export function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M token`;
@@ -73,27 +67,4 @@ export function describeActivity(
   }
 
   return "thinking…";
-}
-
-/** Map status string to a display icon and color key. */
-export function statusIcon(
-  status: string,
-  frame?: number,
-): { icon: string; colorKey: string } {
-  switch (status) {
-    case "running":
-      return { icon: SPINNER[(frame ?? 0) % SPINNER.length], colorKey: "accent" };
-    case "completed":
-      return { icon: "✓", colorKey: "success" };
-    case "steered":
-      return { icon: "✓", colorKey: "warning" };
-    case "stopped":
-      return { icon: "■", colorKey: "dim" };
-    case "error":
-      return { icon: "✗", colorKey: "error" };
-    case "aborted":
-      return { icon: "✗", colorKey: "error" };
-    default:
-      return { icon: "○", colorKey: "dim" };
-  }
 }

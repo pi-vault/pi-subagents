@@ -533,7 +533,7 @@ describe("TUI wiring", () => {
     expect(inputHandlerRegistered).toBe(true);
   });
 
-  test("widget.markFinished and fleet.onAgentFinished are called when agent completes", async () => {
+  test("widget.markFinished and fleet.update are called when agent completes", async () => {
     const { pi } = createPiWithEventCapture();
     const deps = createRuntimeDeps(pi);
 
@@ -542,7 +542,7 @@ describe("TUI wiring", () => {
     if (!widget || !fleet) throw new Error("widget/fleet not initialized");
 
     const markFinishedIds: string[] = [];
-    const onAgentFinishedIds: string[] = [];
+    let fleetUpdateCalled = false;
 
     const origMarkFinished = widget.markFinished.bind(widget);
     widget.markFinished = (id: string) => {
@@ -550,10 +550,10 @@ describe("TUI wiring", () => {
       origMarkFinished(id);
     };
 
-    const origOnAgentFinished = fleet.onAgentFinished.bind(fleet);
-    fleet.onAgentFinished = (id: string) => {
-      onAgentFinishedIds.push(id);
-      origOnAgentFinished(id);
+    const origUpdate = fleet.update.bind(fleet);
+    fleet.update = () => {
+      fleetUpdateCalled = true;
+      origUpdate();
     };
 
     const { id } = await deps.manager.spawnAndWait({}, makeAgentDef(), {
@@ -562,7 +562,7 @@ describe("TUI wiring", () => {
     });
 
     expect(markFinishedIds).toContain(id);
-    expect(onAgentFinishedIds).toContain(id);
+    expect(fleetUpdateCalled).toBe(true);
   });
 
   test("widget setWidget is called after agent completes when UICtx is set", async () => {

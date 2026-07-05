@@ -109,20 +109,3 @@ export function writeExecutionArtifacts(
 
   return artifactPaths;
 }
-
-// ---------------------------------------------------------------------------
-// Result enrichment
-// ---------------------------------------------------------------------------
-
-export function withArtifacts(
-  result: SubagentExecutionResult,
-  artifactPaths: ArtifactPaths,
-): SubagentExecutionResult {
-  return {
-    ...result,
-    details: {
-      ...result.details,
-      artifactPaths,
-    },
-  };
-}

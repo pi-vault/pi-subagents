@@ -137,7 +137,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     // TUI: mark agent finished immediately regardless of notification path
     agentActivity.delete(record.id);
     widget.markFinished(record.id);
-    fleet.onAgentFinished(record.id);
+    fleet.update();
 
     if (record.resultConsumed) {
       widget.update();

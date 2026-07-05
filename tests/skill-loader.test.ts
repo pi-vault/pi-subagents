@@ -9,10 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
-  discoverAvailableSkillPaths,
-  discoverAvailableSkills,
   preloadSkills,
-  resolveSkillPaths,
   walkSkillTree,
 } from "../src/core/skill-loader.js";
 import type { SkillEntry } from "../src/core/skill-loader.js";
@@ -201,104 +198,6 @@ describe("skill-loader", () => {
       symlinkSync(realRoot, piSkillsDir());
       const result = preloadSkills(["leaked"], tmpDir);
       expect(result[0].content).toContain("not found");
-    });
-  });
-
-  describe("discoverAvailableSkills", () => {
-    test("returns empty array when no skills exist", () => {
-      expect(discoverAvailableSkills(tmpDir)).toEqual([]);
-    });
-
-    test("discovers flat and directory skills", () => {
-      writeFlat(piSkillsDir(), "alpha", "A");
-      writeSkillDir(piSkillsDir(), "beta", "B");
-      const skills = discoverAvailableSkills(tmpDir);
-      expect(skills).toContain("alpha");
-      expect(skills).toContain("beta");
-    });
-
-    test("deduplicates skills across scopes", () => {
-      writeFlat(piSkillsDir(), "shared", "project");
-      writeFlat(userSkillsDir(), "shared", "user");
-      const skills = discoverAvailableSkills(tmpDir);
-      expect(skills.filter((s) => s === "shared")).toHaveLength(1);
-    });
-  });
-
-  describe("resolveSkillPaths", () => {
-    test("returns empty array for empty skill list", () => {
-      expect(resolveSkillPaths([], tmpDir)).toEqual([]);
-    });
-
-    test("resolves flat .md skill to file path", () => {
-      writeFlat(piSkillsDir(), "tdd", "# TDD");
-      const result = resolveSkillPaths(["tdd"], tmpDir);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe("tdd");
-      expect(result[0].path).toBe(join(piSkillsDir(), "tdd.md"));
-    });
-
-    test("resolves directory skill to directory path", () => {
-      writeSkillDir(piSkillsDir(), "debugging", "# Debug");
-      const result = resolveSkillPaths(["debugging"], tmpDir);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe("debugging");
-      expect(result[0].path).toBe(join(piSkillsDir(), "debugging"));
-    });
-
-    test("omits skills that cannot be found", () => {
-      writeFlat(piSkillsDir(), "exists", "yes");
-      const result = resolveSkillPaths(["exists", "missing"], tmpDir);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe("exists");
-    });
-
-    test("omits unsafe skill names", () => {
-      const result = resolveSkillPaths(["../../etc/passwd", ".hidden"], tmpDir);
-      expect(result).toEqual([]);
-    });
-
-    test("resolves nested directory skills via BFS", () => {
-      writeSkillDir(join(piSkillsDir(), "category"), "nested", "# Nested");
-      const result = resolveSkillPaths(["nested"], tmpDir);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe("nested");
-      expect(result[0].path).toBe(join(piSkillsDir(), "category", "nested"));
-    });
-
-    test("prefers .pi/skills over .agents/skills", () => {
-      writeFlat(piSkillsDir(), "shared", "from-pi");
-      writeFlat(agentsSkillsDir(), "shared", "from-agents");
-      const result = resolveSkillPaths(["shared"], tmpDir);
-      expect(result[0].path).toBe(join(piSkillsDir(), "shared.md"));
-    });
-  });
-
-  describe("discoverAvailableSkillPaths", () => {
-    test("returns empty array when no skills exist", () => {
-      expect(discoverAvailableSkillPaths(tmpDir)).toEqual([]);
-    });
-
-    test("discovers flat and directory skills with paths", () => {
-      writeFlat(piSkillsDir(), "alpha", "A");
-      writeSkillDir(piSkillsDir(), "beta", "B");
-      const result = discoverAvailableSkillPaths(tmpDir);
-      const names = result.map((r) => r.name);
-      expect(names).toContain("alpha");
-      expect(names).toContain("beta");
-      const alpha = result.find((r) => r.name === "alpha");
-      const beta = result.find((r) => r.name === "beta");
-      expect(alpha?.path).toBe(join(piSkillsDir(), "alpha.md"));
-      expect(beta?.path).toBe(join(piSkillsDir(), "beta"));
-    });
-
-    test("deduplicates skills across scopes returning first-found path", () => {
-      writeFlat(piSkillsDir(), "shared", "project");
-      writeFlat(userSkillsDir(), "shared", "user");
-      const result = discoverAvailableSkillPaths(tmpDir);
-      const shared = result.filter((r) => r.name === "shared");
-      expect(shared).toHaveLength(1);
-      expect(shared[0].path).toBe(join(piSkillsDir(), "shared.md"));
     });
   });
 

@@ -33,12 +33,6 @@ export interface ResolvedPaths {
   sessionsDir: string;
 }
 
-export interface RuntimeArtifactsPaths {
-  rootDir: string;
-  nestedEventsDir: string;
-  nestedRunsDir: string;
-}
-
 export interface ArtifactPaths {
   input: string;
   output: string;
