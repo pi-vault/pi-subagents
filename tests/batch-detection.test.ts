@@ -125,6 +125,29 @@ describe("SmartBatchTracker", () => {
     expect(sendNudge).not.toHaveBeenCalled();
   });
 
+  it("groups agents when joinMode is 'group'", () => {
+    const { groupJoin, registerGroup } = makeGroupJoin();
+    const records = new Map<string, AgentRecord>();
+    const sendNudge = vi.fn();
+
+    const tracker = new SmartBatchTracker(
+      groupJoin,
+      (id) => records.get(id),
+      sendNudge,
+      () => "group" as JoinMode,
+    );
+
+    tracker.register("a1");
+    tracker.register("a2");
+    vi.advanceTimersByTime(100);
+
+    expect(registerGroup).toHaveBeenCalledOnce();
+    const ids = registerGroup.mock.calls[0][1] as string[];
+    expect(ids).toContain("a1");
+    expect(ids).toContain("a2");
+    expect(sendNudge).not.toHaveBeenCalled();
+  });
+
   it("bypasses batching when joinMode is async", () => {
     const { groupJoin, registerGroup } = makeGroupJoin();
     const records = new Map<string, AgentRecord>();
