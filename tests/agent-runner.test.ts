@@ -3,6 +3,8 @@ import {
   runAgent,
   buildAgentPrompt,
   buildParentContext,
+  resumeAgent,
+  getAgentConversation,
 } from "../src/core/agent-runner.js";
 import type {
   AgentDefinition,
@@ -502,5 +504,87 @@ describe("runAgent", () => {
     expect(systemPrompt).toContain("I am the parent agent.");
     expect(systemPrompt).toContain("Focus on security.");
     expect(systemPrompt).toContain("<sub_agent_context>");
+  });
+});
+
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+
+describe("resumeAgent", () => {
+  it("calls session.prompt with the prompt text", async () => {
+    const mockSession = {
+      subscribe: vi.fn(() => () => {}),
+      prompt: vi.fn().mockResolvedValue(undefined),
+      steer: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn(),
+      messages: [
+        { role: "user", content: [{ type: "text", text: "task" }] },
+        { role: "assistant", content: [{ type: "text", text: "response text" }] },
+      ],
+    };
+    const result = await resumeAgent(mockSession as unknown as AgentSession, "continue this task");
+    expect(mockSession.prompt).toHaveBeenCalledWith("continue this task");
+    expect(typeof result).toBe("string");
+  });
+
+  it("tracks tool activity via subscribe", async () => {
+    let toolStartCount = 0;
+    const mockSession = {
+      subscribe: vi.fn((handler) => {
+        // Simulate tool events
+        handler({ type: "tool_execution_start", toolName: "bash" });
+        handler({ type: "tool_execution_end", toolName: "bash" });
+        return () => {};
+      }),
+      prompt: vi.fn().mockResolvedValue(undefined),
+      steer: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn(),
+      messages: [],
+    };
+    await resumeAgent(mockSession as unknown as AgentSession, "do task", {
+      onToolActivity: (activity) => {
+        if (activity.type === "start") toolStartCount++;
+      },
+    });
+    expect(toolStartCount).toBe(1);
+  });
+});
+
+describe("getAgentConversation", () => {
+  it("extracts text from assistant and user messages", () => {
+    const session = {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "my prompt" }] },
+        { role: "assistant", content: [{ type: "text", text: "my response" }] },
+      ],
+    };
+    const result = getAgentConversation(session);
+    expect(result).toContain("[user] my prompt");
+    expect(result).toContain("[assistant] my response");
+  });
+
+  it("skips empty messages and non-text blocks", () => {
+    const session = {
+      messages: [
+        { role: "user", content: [{ type: "tool_result" }] },
+        { role: "assistant", content: [{ type: "text", text: "" }] },
+      ],
+    };
+    const result = getAgentConversation(session);
+    expect(result).toBe("");
+  });
+
+  it("returns empty string for session with no messages", () => {
+    const result = getAgentConversation({});
+    expect(result).toBe("");
+  });
+
+  it("handles user message as plain string content", () => {
+    const session = {
+      messages: [
+        { role: "user", content: "plain string task" },
+      ],
+    };
+    const result = getAgentConversation(session);
+    expect(result).toContain("[user] plain string task");
   });
 });

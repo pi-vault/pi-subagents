@@ -65,6 +65,7 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     maxRecursiveLevel: 3,
     defaultMaxTurns: 0,
     graceTurns: 5,
+    defaultJoinMode: "smart",
   };
   const discovery: AgentDiscoveryResult = {
     agents: [
@@ -135,6 +136,29 @@ describe("subagents extension", () => {
 
   test("registerSubagentsExtension no longer exports slash-live controller helpers", () => {
     expect("createSlashLiveControllerFromContext" in subagentsIndex).toBe(false);
+  });
+
+  test("registers get_subagent_result and steer_subagent tools", () => {
+    const registeredTools: string[] = [];
+    const pi = {
+      on() {},
+      registerTool(def: { name: string }) {
+        registeredTools.push(def.name);
+      },
+      registerCommand() {},
+      registerMessageRenderer() {},
+      sendMessage() {},
+      sendUserMessage() {},
+      getAllTools() {
+        return [];
+      },
+    } as unknown as ExtensionAPI;
+
+    registerSubagentsExtension(pi, createMenuDeps());
+
+    expect(registeredTools).toContain("subagent");
+    expect(registeredTools).toContain("get_subagent_result");
+    expect(registeredTools).toContain("steer_subagent");
   });
 
   test("/agents opens a custom menu instead of sending a notify dump", async () => {
@@ -261,12 +285,14 @@ describe("subagents extension", () => {
       "Max Recursive Level",
       "Default Max Turns",
       "Grace Turns",
+      "Default Join Mode",
     ]);
     expect(SETTINGS_MENU_ITEMS.map((item) => item.promptTitle)).toEqual([
       "Max Concurrency",
       "Max Recursive Level",
       "Default Max Turns (0 = unlimited)",
       "Grace Turns (extra turns after soft limit)",
+      "Default Join Mode (async, group, smart)",
     ]);
   });
 
@@ -301,6 +327,7 @@ describe("subagents extension", () => {
         maxRecursiveLevel: 3,
         defaultMaxTurns: 0,
         graceTurns: 5,
+        defaultJoinMode: "smart",
       },
     ]);
   });

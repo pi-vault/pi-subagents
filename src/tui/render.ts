@@ -95,6 +95,12 @@ export function buildSubagentResultText(
     return content || "(no output)";
   }
 
+  // Background spawn — render minimal status line
+  if (details.status === "background") {
+    const agentId = details.agentId ? ` (id: ${details.agentId})` : "";
+    return theme.fg("dim", `Running in background${agentId}`);
+  }
+
   const statusColor = getStatusColor(details.status);
   const status = theme.fg(statusColor, details.status.toUpperCase());
   const headerParts = [

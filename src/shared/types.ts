@@ -1,8 +1,26 @@
+export type JoinMode = "async" | "group" | "smart";
+
+export interface NotificationDetails {
+  id: string;
+  description: string;
+  status: string;
+  toolUses: number;
+  turnCount: number;
+  maxTurns?: number;
+  totalTokens: number;
+  durationMs: number;
+  outputFile?: string;
+  error?: string;
+  resultPreview: string;
+  others?: NotificationDetails[];
+}
+
 export interface SubagentsConfig {
   maxConcurrency: number;
   maxRecursiveLevel: number;
   defaultMaxTurns: number;
   graceTurns: number;
+  defaultJoinMode: JoinMode;
 }
 
 export interface ResolvedPaths {
@@ -106,7 +124,8 @@ export interface SubagentToolActivity {
 }
 
 export interface SubagentExecutionDetails {
-  status: "success" | "error" | "timeout" | "aborted" | "steered";
+  status: "success" | "error" | "timeout" | "aborted" | "steered" | "background";
+  agentId?: string;
   agent: string;
   task: string;
   sourcePath: string;
@@ -167,10 +186,11 @@ export interface AgentInvocation {
 export interface AgentRecord {
   id: string;
   type: string;
-  status: "running" | "completed" | "steered" | "aborted" | "error";
+  status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
   result?: string;
   error?: string;
   toolUses: number;
+  turnCount: number;
   startedAt: number;
   completedAt?: number;
   durationMs?: number;
@@ -178,6 +198,19 @@ export interface AgentRecord {
   abortController?: AbortController;
   lifetimeUsage: LifetimeUsage;
   invocation?: AgentInvocation;
+  // Phase 3: background execution fields
+  isBackground?: boolean;
+  promise?: Promise<string>;
+  groupId?: string;
+  joinMode?: JoinMode;
+  resultConsumed?: boolean;
+  pendingSteers?: string[];
+  worktree?: { path: string; branch: string; baseSha: string; workPath: string };
+  worktreeResult?: { hasChanges: boolean; branch?: string };
+  toolCallId?: string;
+  outputFile?: string;
+  outputCleanup?: () => void;
+  compactionCount?: number;
 }
 
 export interface RunOptions {
@@ -222,6 +255,7 @@ export interface SpawnOptions {
   parentSignal?: AbortSignal;
   currentDepth?: number;
   allowedAgents?: string[];
+  isolation?: string;
   onToolActivity?: (activity: ToolActivity) => void;
   onTextDelta?: (delta: string, fullText: string) => void;
   onTurnEnd?: (turnCount: number) => void;

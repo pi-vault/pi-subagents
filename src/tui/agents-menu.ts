@@ -25,14 +25,16 @@ type SettingsKey =
   | "maxConcurrency"
   | "maxRecursiveLevel"
   | "defaultMaxTurns"
-  | "graceTurns";
+  | "graceTurns"
+  | "defaultJoinMode";
 
 type SettingsMenuItem = {
   key: SettingsKey;
   label: string;
   promptTitle: string;
   formatValue: (config: SubagentsConfig) => string;
-  parse: (raw: string) => number | undefined;
+  parse: (raw: string) => number | string | undefined;
+  apply?: (value: number | string, deps: RuntimeDeps) => void;
 };
 
 export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
@@ -44,6 +46,9 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
     parse: (raw) => {
       const value = Number(raw);
       return Number.isInteger(value) && value > 0 ? value : undefined;
+    },
+    apply: (value, deps) => {
+      deps.manager.setMaxConcurrent(value as number);
     },
   },
   {
@@ -77,6 +82,23 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
     parse: (raw) => {
       const value = Number(raw);
       return Number.isInteger(value) && value >= 0 ? value : undefined;
+    },
+  },
+  {
+    key: "defaultJoinMode",
+    label: "Default Join Mode",
+    promptTitle: "Default Join Mode (async, group, smart)",
+    formatValue: (config) => config.defaultJoinMode,
+    parse: (raw) => {
+      const trimmed = raw.trim();
+      return trimmed === "async" || trimmed === "group" || trimmed === "smart"
+        ? trimmed
+        : undefined;
+    },
+    apply: (value, deps) => {
+      if (deps.defaultJoinMode !== undefined) {
+        deps.defaultJoinMode = value as "async" | "group" | "smart";
+      }
     },
   },
 ];
@@ -477,7 +499,8 @@ export async function runAgentsMenuSettingsFlow(
     deps.saveConfig(paths, {
       ...config,
       [item.key]: parsed,
-    });
+    } as SubagentsConfig);
+    item.apply?.(parsed, deps);
     ctx.ui.notify("Updated subagents settings", "info");
   }
 }

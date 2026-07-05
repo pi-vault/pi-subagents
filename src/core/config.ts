@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type {
+  JoinMode,
   LoadedConfig,
   ResolvedPaths,
   SubagentsConfig,
@@ -11,6 +12,7 @@ export const DEFAULT_CONFIG: SubagentsConfig = {
   maxRecursiveLevel: 3,
   defaultMaxTurns: 0,
   graceTurns: 5,
+  defaultJoinMode: "smart",
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -30,6 +32,7 @@ export function saveConfig(
         maxRecursiveLevel: config.maxRecursiveLevel,
         defaultMaxTurns: config.defaultMaxTurns,
         graceTurns: config.graceTurns,
+        defaultJoinMode: config.defaultJoinMode,
       },
       null,
       2,
@@ -65,6 +68,7 @@ export function loadConfig(paths: ResolvedPaths): LoadedConfig {
     };
   }
 
+  const validJoinModes: JoinMode[] = ["async", "group", "smart"];
   return {
     config: {
       maxConcurrency: isFiniteNumber(raw.maxConcurrency)
@@ -79,6 +83,9 @@ export function loadConfig(paths: ResolvedPaths): LoadedConfig {
       graceTurns: isFiniteNumber(raw.graceTurns)
         ? raw.graceTurns
         : DEFAULT_CONFIG.graceTurns,
+      defaultJoinMode: validJoinModes.includes(raw.defaultJoinMode as JoinMode)
+        ? (raw.defaultJoinMode as JoinMode)
+        : DEFAULT_CONFIG.defaultJoinMode,
     },
     exists: true,
   };

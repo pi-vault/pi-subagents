@@ -11,6 +11,7 @@ describe("new execution model types", () => {
       type: "scout",
       status: "running",
       toolUses: 0,
+      turnCount: 0,
       startedAt: Date.now(),
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
     };
