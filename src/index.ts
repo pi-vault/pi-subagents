@@ -85,11 +85,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
   const groupJoin = new GroupJoinManager((records, partial) => {
     for (const record of records) {
-      // TUI: mark each finished agent in widget + fleet
-      agentActivity.delete(record.id);
-      widget.markFinished(record.id);
-      fleet.onAgentFinished(record.id);
-
+      // TUI cleanup already handled by manager onComplete callback (lines below).
       const notification = formatTaskNotification(record);
       const details = buildNotificationDetails(record);
       if (partial) {
@@ -192,6 +188,14 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   widget = new AgentWidget(manager, agentActivity, () => widgetMode);
   fleet = new FleetList(manager, agentActivity);
 
+  function applyWidgetMode(mode: WidgetMode): void {
+    widgetMode = mode;
+    widget.update();
+  }
+  function applyFleetView(enabled: boolean): void {
+    fleet.setEnabled(enabled);
+  }
+
   const deps: RuntimeDeps = {
     resolvePaths,
     loadConfig,
@@ -215,13 +219,8 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
       widget.ensureTimer();
       fleet.ensureTimer();
     },
-    setWidgetMode: (mode) => {
-      widgetMode = mode;
-      widget.update();
-    },
-    setFleetView: (enabled) => {
-      fleet.setEnabled(enabled);
-    },
+    setWidgetMode: applyWidgetMode,
+    setFleetView: applyFleetView,
   };
 
   // Apply persisted settings to live state
@@ -231,13 +230,8 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     setDefaultJoinMode: (mode) => {
       deps.defaultJoinMode = mode;
     },
-    setWidgetMode: (mode) => {
-      widgetMode = mode;
-      widget.update();
-    },
-    setFleetView: (enabled) => {
-      fleet.setEnabled(enabled);
-    },
+    setWidgetMode: applyWidgetMode,
+    setFleetView: applyFleetView,
   });
 
   return deps;
@@ -396,6 +390,7 @@ export function registerSubagentsExtension(
   pi.on("session_shutdown", () => {
     deps.widget?.dispose();
     deps.fleet?.dispose();
+    deps.agentActivity?.clear();
     deps.manager.abortAll();
     deps.manager.dispose();
     deps.groupJoin?.dispose();

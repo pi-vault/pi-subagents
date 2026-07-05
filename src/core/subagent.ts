@@ -363,8 +363,6 @@ export function registerSubagentTool(
           ...fgCallbacks,
         });
 
-        deps.agentActivity?.set(id, fgState);  // retroactive (handles linger window)
-        deps.ensureTimers?.();
         ctx.ui?.setWorkingMessage?.();
 
         // Build execution details (shared between artifacts and return value)

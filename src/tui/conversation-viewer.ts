@@ -18,14 +18,13 @@ import {
 import type { AgentRecord } from "../shared/types.js";
 import type { AgentActivity } from "./activity.js";
 import { getLifetimeTotal } from "./activity.js";
+import type { Theme } from "./agent-widget.js";
 import { describeActivity, formatDuration, formatTokens } from "./format.js";
 import {
   createViewerKeys,
   type ViewerKeybindings,
   type ViewerKeys,
 } from "./viewer-keys.js";
-
-type Theme = { fg(color: string, text: string): string; bold(text: string): string };
 
 /** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
 const CHROME_LINES_BASE = 6;

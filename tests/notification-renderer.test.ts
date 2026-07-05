@@ -134,4 +134,17 @@ describe("buildNotificationText", () => {
     );
     expect(text).toContain("↻3≤30");
   });
+
+  it("group rendering: others[] produces multi-agent output", () => {
+    const primary = makeDetails({ description: "Agent A" });
+    const secondary = makeDetails({ description: "Agent B", status: "error" });
+    const all = [primary, secondary];
+    const output = all
+      .map((item) => buildNotificationText(item, false, makeTheme()))
+      .join("\n");
+    expect(output).toContain("Agent A");
+    expect(output).toContain("Agent B");
+    expect(output).toContain("✓"); // primary completed
+    expect(output).toContain("✗"); // secondary error
+  });
 });
