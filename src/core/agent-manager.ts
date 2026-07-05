@@ -285,10 +285,12 @@ export class AgentManager {
 
   /**
    * Resume a completed/steered agent with a new prompt.
+   * Only terminal statuses (completed, steered, error, aborted, stopped) can be resumed.
    */
   async resume(id: string, prompt: string, signal?: AbortSignal): Promise<AgentRecord | undefined> {
     const record = this.agents.get(id);
     if (!record?.session) return undefined;
+    if (record.status === "running" || record.status === "queued") return undefined;
 
     record.status = "running";
     record.startedAt = Date.now();
