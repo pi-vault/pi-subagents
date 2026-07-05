@@ -138,6 +138,29 @@ describe("subagents extension", () => {
     expect("createSlashLiveControllerFromContext" in subagentsIndex).toBe(false);
   });
 
+  test("registers get_subagent_result and steer_subagent tools", () => {
+    const registeredTools: string[] = [];
+    const pi = {
+      on() {},
+      registerTool(def: { name: string }) {
+        registeredTools.push(def.name);
+      },
+      registerCommand() {},
+      registerMessageRenderer() {},
+      sendMessage() {},
+      sendUserMessage() {},
+      getAllTools() {
+        return [];
+      },
+    } as unknown as ExtensionAPI;
+
+    registerSubagentsExtension(pi, createMenuDeps());
+
+    expect(registeredTools).toContain("subagent");
+    expect(registeredTools).toContain("get_subagent_result");
+    expect(registeredTools).toContain("steer_subagent");
+  });
+
   test("/agents opens a custom menu instead of sending a notify dump", async () => {
     let handler: RegisteredCommand["handler"] | undefined;
     const notifications: Array<{ message: string; level: string }> = [];

@@ -265,29 +265,40 @@ describe("registerSubagentTool", () => {
 });
 
 // ---------------------------------------------------------------------------
-// stub parameters
+// background / resume / isolation paths
 // ---------------------------------------------------------------------------
 
-describe("stub parameters", () => {
-  test("returns error for run_in_background stub", async () => {
+describe("background spawn", () => {
+  test("run_in_background returns isError=false with agent id", async () => {
     const { pi, registeredTool } = createPi();
-    registerSubagentTool(pi, createDeps());
+    const manager = new AgentManager();
+    const spawnSpy = vi.spyOn(manager, "spawn").mockReturnValue("agent-bg-1");
+    vi.spyOn(manager, "getRecord").mockReturnValue({
+      id: "agent-bg-1",
+      type: "Scout",
+      status: "running",
+      toolUses: 0,
+      turnCount: 0,
+      startedAt: Date.now(),
+      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+      compactionCount: 0,
+    });
+
+    registerSubagentTool(
+      pi,
+      createDeps({ manager, discoverAgents: () => createDiscovery([createAgent()]) }),
+    );
 
     const tool = registeredTool();
-    const result = await (
-      tool as unknown as {
-        execute: (
-          id: string,
-          params: { agent: string; task: string; run_in_background?: boolean },
-          signal: AbortSignal | undefined,
-          onUpdate: undefined,
-          ctx: ExtensionContext,
-        ) => Promise<{
-          isError: boolean;
-          content: Array<{ type: string; text: string }>;
-        }>;
-      }
-    ).execute(
+    const result = await (tool as unknown as {
+      execute: (
+        id: string,
+        params: { agent: string; task: string; run_in_background?: boolean },
+        signal: undefined,
+        onUpdate: undefined,
+        ctx: ExtensionContext,
+      ) => Promise<{ isError: boolean; content: Array<{ type: string; text: string }>; details: unknown }>;
+    }).execute(
       "tool-call-bg",
       { agent: "Scout", task: "explore", run_in_background: true },
       undefined,
@@ -295,61 +306,65 @@ describe("stub parameters", () => {
       { cwd: "/repo" } as unknown as ExtensionContext,
     );
 
-    expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain(
-      "run_in_background is not yet implemented",
-    );
+    expect(result.isError).toBe(false);
+    expect(spawnSpy).toHaveBeenCalledOnce();
+    expect(result.content[0]?.text).toContain("Agent ID: agent-bg-1");
   });
 
-  test("returns error for resume stub", async () => {
+  test("resume with unknown agent returns isError=true", async () => {
     const { pi, registeredTool } = createPi();
-    registerSubagentTool(pi, createDeps());
+    const manager = new AgentManager();
+    vi.spyOn(manager, "resume").mockResolvedValue(undefined);
+
+    registerSubagentTool(
+      pi,
+      createDeps({ manager, discoverAgents: () => createDiscovery([createAgent()]) }),
+    );
 
     const tool = registeredTool();
-    const result = await (
-      tool as unknown as {
-        execute: (
-          id: string,
-          params: { agent: string; task: string; resume?: string },
-          signal: AbortSignal | undefined,
-          onUpdate: undefined,
-          ctx: ExtensionContext,
-        ) => Promise<{
-          isError: boolean;
-          content: Array<{ type: string; text: string }>;
-        }>;
-      }
-    ).execute(
+    const result = await (tool as unknown as {
+      execute: (
+        id: string,
+        params: { agent: string; task: string; resume?: string },
+        signal: undefined,
+        onUpdate: undefined,
+        ctx: ExtensionContext,
+      ) => Promise<{ isError: boolean; content: Array<{ type: string; text: string }> }>;
+    }).execute(
       "tool-call-resume",
-      { agent: "Scout", task: "explore", resume: "agent-123" },
+      { agent: "Scout", task: "explore", resume: "agent-unknown" },
       undefined,
       undefined,
       { cwd: "/repo" } as unknown as ExtensionContext,
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain("resume is not yet implemented");
+    expect(result.content[0]?.text).toContain("Agent not found");
   });
 
-  test("returns error for isolation stub", async () => {
+  test("isolation param passes through to spawnAndWait without error", async () => {
     const { pi, registeredTool } = createPi();
-    registerSubagentTool(pi, createDeps());
+    const manager = new AgentManager();
+    const spawnAndWaitSpy = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "run-iso",
+      record: completedRecord("isolated result"),
+    });
+
+    registerSubagentTool(
+      pi,
+      createDeps({ manager, discoverAgents: () => createDiscovery([createAgent()]) }),
+    );
 
     const tool = registeredTool();
-    const result = await (
-      tool as unknown as {
-        execute: (
-          id: string,
-          params: { agent: string; task: string; isolation?: string },
-          signal: AbortSignal | undefined,
-          onUpdate: undefined,
-          ctx: ExtensionContext,
-        ) => Promise<{
-          isError: boolean;
-          content: Array<{ type: string; text: string }>;
-        }>;
-      }
-    ).execute(
+    const result = await (tool as unknown as {
+      execute: (
+        id: string,
+        params: { agent: string; task: string; isolation?: string },
+        signal: undefined,
+        onUpdate: undefined,
+        ctx: ExtensionContext,
+      ) => Promise<{ isError: boolean; content: Array<{ type: string; text: string }> }>;
+    }).execute(
       "tool-call-iso",
       { agent: "Scout", task: "explore", isolation: "worktree" },
       undefined,
@@ -357,10 +372,8 @@ describe("stub parameters", () => {
       { cwd: "/repo" } as unknown as ExtensionContext,
     );
 
-    expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain(
-      "isolation is not yet implemented",
-    );
+    expect(result.isError).toBe(false);
+    expect(spawnAndWaitSpy).toHaveBeenCalledOnce();
   });
 });
 

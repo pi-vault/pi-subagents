@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { Type } from "typebox";
 import type {
+  AgentSession,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
@@ -18,6 +19,11 @@ import {
 } from "../tui/render.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
 import { resolveModel } from "./model-resolver.js";
+import {
+  createOutputFilePath,
+  streamToOutputFile,
+  writeInitialEntry,
+} from "./output-file.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
@@ -139,77 +145,6 @@ export function registerSubagentTool(
     ) {
       const effectiveCwd = resolve(params.cwd ?? ctx.cwd);
 
-      // Stub checks for unimplemented features
-      if (params.run_in_background) {
-        return {
-          content: [{ type: "text", text: "run_in_background is not yet implemented. It will be available in a future update." }],
-          isError: true,
-          details: {
-            status: "error" as const,
-            agent: params.agent,
-            task: params.task,
-            sourcePath: "",
-            cwd: effectiveCwd,
-            maxTurns: 0,
-            durationMs: 0,
-            childSessionDir: "",
-            childSessionPath: "",
-            model: undefined,
-            stopReason: "error",
-            exitCode: null,
-            stderr: "run_in_background is not yet implemented",
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
-            recentToolActivity: [],
-          },
-        };
-      }
-      if (params.resume) {
-        return {
-          content: [{ type: "text", text: "resume is not yet implemented. It will be available in a future update." }],
-          isError: true,
-          details: {
-            status: "error" as const,
-            agent: params.agent,
-            task: params.task,
-            sourcePath: "",
-            cwd: effectiveCwd,
-            maxTurns: 0,
-            durationMs: 0,
-            childSessionDir: "",
-            childSessionPath: "",
-            model: undefined,
-            stopReason: "error",
-            exitCode: null,
-            stderr: "resume is not yet implemented",
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
-            recentToolActivity: [],
-          },
-        };
-      }
-      if (params.isolation) {
-        return {
-          content: [{ type: "text", text: "isolation is not yet implemented. It will be available in a future update." }],
-          isError: true,
-          details: {
-            status: "error" as const,
-            agent: params.agent,
-            task: params.task,
-            sourcePath: "",
-            cwd: effectiveCwd,
-            maxTurns: 0,
-            durationMs: 0,
-            childSessionDir: "",
-            childSessionPath: "",
-            model: undefined,
-            stopReason: "error",
-            exitCode: null,
-            stderr: "isolation is not yet implemented",
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
-            recentToolActivity: [],
-          },
-        };
-      }
-
       const paths = deps.resolvePaths();
       const loadedConfig = deps.loadConfig(paths);
       const discovery = deps.discoverAgents(paths);
@@ -294,7 +229,7 @@ export function registerSubagentTool(
             ctx as { resourceLoader?: { getSystemPrompt?: () => string } }
           ).resourceLoader?.getSystemPrompt?.() ?? undefined;
 
-        const { id, record } = await deps.manager.spawnAndWait(ctx, agentDef, {
+        const spawnOptions = {
           prompt: params.task.trim(),
           cwd: effectiveCwd,
           maxTurns: resolved.maxTurns,
@@ -304,6 +239,101 @@ export function registerSubagentTool(
           parentSignal: signal,
           currentDepth: 0,
           allowedAgents: agentDef.subagentAgents,
+        };
+
+        const detailBase = {
+          agent: agentDef.name,
+          task: params.task,
+          sourcePath: agentDef.sourcePath,
+          cwd: effectiveCwd,
+          maxTurns: resolved.maxTurns,
+          durationMs: 0,
+          childSessionDir: "",
+          childSessionPath: "",
+          model: agentDef.model,
+          stopReason: "background",
+          exitCode: null as null,
+          stderr: "",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+          recentToolActivity: [] as SubagentExecutionDetails["recentToolActivity"],
+        };
+
+        // Resume path
+        if (params.resume) {
+          const resumed = await deps.manager.resume(params.resume, params.task.trim(), signal);
+          if (!resumed) {
+            return {
+              content: [{ type: "text", text: `Agent not found: "${params.resume}".` }],
+              isError: true,
+              details: {
+                ...detailBase,
+                status: "error" as const,
+                stopReason: "error",
+                stderr: `Agent not found: "${params.resume}"`,
+              },
+            };
+          }
+          return {
+            content: [{ type: "text", text: resumed.result ?? "(no output)" }],
+            isError: resumed.status === "error",
+            details: {
+              ...detailBase,
+              status: resumed.status === "completed"
+                ? "success" as const
+                : resumed.status === "error"
+                  ? "error" as const
+                  : "aborted" as const,
+              durationMs: resumed.durationMs ?? 0,
+              stopReason: resumed.status,
+              stderr: resumed.error ?? "",
+            },
+          };
+        }
+
+        // Background spawn path
+        if (params.run_in_background) {
+          const id = deps.manager.spawn(ctx, agentDef, {
+            ...spawnOptions,
+            isBackground: true,
+            isolation: params.isolation as "worktree" | undefined,
+            onSessionCreated: (session) => {
+              try {
+                const sessionPath = createOutputFilePath(effectiveCwd, id, `bg-${Date.now()}`);
+                writeInitialEntry(sessionPath, id, params.task.trim(), effectiveCwd);
+                const cleanup = streamToOutputFile(session as AgentSession, sessionPath, id, effectiveCwd);
+                const bgRecord = deps.manager.getRecord(id);
+                if (bgRecord) {
+                  bgRecord.outputFile = sessionPath;
+                  bgRecord.outputCleanup = cleanup;
+                }
+              } catch {
+                // ignore output file errors
+              }
+            },
+          });
+
+          const bgRecord = deps.manager.getRecord(id);
+          const queued = bgRecord?.status === "queued";
+          return {
+            content: [{ type: "text", text:
+              `Agent ${queued ? "queued" : "started"} in background.\n` +
+              `Agent ID: ${id}\n` +
+              `You will be notified when this agent completes.\n` +
+              `Use get_subagent_result to retrieve full results, or steer_subagent to send messages.`,
+            }],
+            isError: false,
+            details: {
+              ...detailBase,
+              status: "background" as const,
+              agentId: id,
+            },
+          };
+        }
+
+        // Synchronous foreground path (with optional isolation)
+        const { id, record } = await deps.manager.spawnAndWait(ctx, agentDef, {
+          ...spawnOptions,
+          isolation: params.isolation as "worktree" | undefined,
         });
 
         // Build execution details (shared between artifacts and return value)

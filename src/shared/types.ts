@@ -124,7 +124,8 @@ export interface SubagentToolActivity {
 }
 
 export interface SubagentExecutionDetails {
-  status: "success" | "error" | "timeout" | "aborted" | "steered";
+  status: "success" | "error" | "timeout" | "aborted" | "steered" | "background";
+  agentId?: string;
   agent: string;
   task: string;
   sourcePath: string;
@@ -254,6 +255,7 @@ export interface SpawnOptions {
   parentSignal?: AbortSignal;
   currentDepth?: number;
   allowedAgents?: string[];
+  isolation?: string;
   onToolActivity?: (activity: ToolActivity) => void;
   onTextDelta?: (delta: string, fullText: string) => void;
   onTurnEnd?: (turnCount: number) => void;
