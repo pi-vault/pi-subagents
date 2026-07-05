@@ -396,6 +396,10 @@ export function parseAgentContent(
         .map((e: string) => e.trim())
         .filter(Boolean);
     }
+  } else if (Array.isArray(frontmatter.extensions)) {
+    extensions = (frontmatter.extensions as string[])
+      .map((e: string) => String(e).trim())
+      .filter(Boolean);
   }
 
   // disallowed_tools

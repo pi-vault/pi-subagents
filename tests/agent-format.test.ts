@@ -681,6 +681,30 @@ describe("new frontmatter fields", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.agent.disallowedTools).toBeUndefined();
   });
+
+  test("parses inherit_context: false", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\ninherit_context: false\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.inheritContext).toBe(false);
+  });
+
+  test("parses run_in_background: false", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nrun_in_background: false\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.runInBackground).toBe(false);
+  });
+
+  test("parses extensions as YAML array", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nextensions:\n  - ext-a\n  - ext-b\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.extensions).toEqual(["ext-a", "ext-b"]);
+  });
 });
 
 describe("round-trip", () => {
