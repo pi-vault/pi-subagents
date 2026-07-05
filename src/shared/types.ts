@@ -111,7 +111,7 @@ export interface SubagentExecutionDetails {
   task: string;
   sourcePath: string;
   cwd: string;
-  timeoutMs: number;
+  maxTurns: number;
   durationMs: number;
   childSessionDir: string;
   childSessionPath: string;
@@ -185,7 +185,6 @@ export interface RunOptions {
   agentId: string;
   model?: unknown; // Model from pi-ai
   thinking?: string;
-  timeoutMs?: number;
   maxTurns?: number;
   graceTurns?: number;
   isolated?: boolean;
@@ -214,7 +213,6 @@ export interface RunResult {
 export interface SpawnOptions {
   prompt: string;
   cwd: string;
-  timeoutMs?: number;
   maxTurns?: number;
   graceTurns?: number;
   isolated?: boolean;

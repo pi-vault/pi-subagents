@@ -21,7 +21,7 @@ function createDetails(
     task: "Inspect repo structure and summarize findings",
     sourcePath: "/repo/agents/scout.md",
     cwd: "/repo",
-    timeoutMs: 180000,
+    maxTurns: 30,
     durationMs: 321,
     childSessionDir: "/sessions/child/run-0",
     childSessionPath: "/sessions/child/run-0/session.jsonl",
@@ -95,7 +95,7 @@ describe("subagent render helpers", () => {
     expect(text).toContain("task: Inspect repo structure and summarize findings");
     expect(text).toContain("cwd: /repo");
     expect(text).toContain("source: /repo/agents/scout.md");
-    expect(text).toContain("timeout: 180000ms");
+    expect(text).toContain("turns: 30");
     expect(text).toContain("stop reason: error");
     expect(text).toContain("exit code: 2");
     expect(text).toContain("stderr:");

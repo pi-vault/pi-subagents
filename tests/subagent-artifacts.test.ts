@@ -42,7 +42,7 @@ function createResult(overrides: Partial<SubagentExecutionResult> = {}): Subagen
       task: "Find the bug",
       sourcePath: "/agents/scout.md",
       cwd: "/repo",
-      timeoutMs: 5000,
+      maxTurns: 30,
       durationMs: 1200,
       childSessionDir: "/sessions/child",
       childSessionPath: "/sessions/child/session.jsonl",

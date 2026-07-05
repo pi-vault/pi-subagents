@@ -323,31 +323,21 @@ export async function runAgent(
     }
   });
 
-  // 8. Set up timeout
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  if (options.timeoutMs) {
-    timeoutHandle = setTimeout(() => {
-      aborted = true;
-      session.abort();
-    }, options.timeoutMs);
-  }
-
-  // 9. Wire parent abort signal
+  // 8. Wire parent abort signal
   const cleanupAbort = forwardAbortSignal(session, options.signal);
 
-  // 10. Execute prompt (use fullPrompt which may include parent context)
+  // 9. Execute prompt (use fullPrompt which may include parent context)
   try {
     await session.prompt(fullPrompt);
   } catch (error) {
     if (!aborted && !options.signal?.aborted) throw error;
     aborted = true;
   } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
     unsubscribe();
     cleanupAbort();
   }
 
-  // 11. Fallback: get text from session messages if streaming didn't capture it
+  // 10. Fallback: get text from session messages if streaming didn't capture it
   if (!responseText.trim()) {
     responseText = getLastAssistantText(session);
   }

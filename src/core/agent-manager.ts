@@ -98,7 +98,6 @@ export class AgentManager {
           prompt: options.prompt,
           cwd: options.cwd,
           agentId: id,
-          timeoutMs: options.timeoutMs,
           maxTurns: options.maxTurns,
           graceTurns: options.graceTurns,
           inheritContext: options.inheritContext,
