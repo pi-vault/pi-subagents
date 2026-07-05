@@ -325,6 +325,89 @@ export function parseAgentContent(
     }
   }
 
+  // prompt_mode
+  let promptMode: "replace" | "append" | undefined;
+  if (typeof frontmatter.prompt_mode === "string") {
+    const pm = frontmatter.prompt_mode.trim().toLowerCase();
+    promptMode = pm === "append" ? "append" : "replace";
+  }
+
+  // max_turns
+  let maxTurns: number | undefined;
+  if (frontmatter.max_turns !== undefined) {
+    const parsed = Number(frontmatter.max_turns);
+    if (Number.isFinite(parsed) && parsed >= 0 && Number.isInteger(parsed)) {
+      maxTurns = parsed;
+    }
+  }
+
+  // inherit_context
+  let inheritContext: boolean | undefined;
+  if (frontmatter.inherit_context !== undefined) {
+    if (typeof frontmatter.inherit_context === "boolean") {
+      inheritContext = frontmatter.inherit_context;
+    } else if (typeof frontmatter.inherit_context === "string") {
+      inheritContext =
+        frontmatter.inherit_context.trim().toLowerCase() === "true";
+    }
+  }
+
+  // isolated
+  let isolated: boolean | undefined;
+  if (frontmatter.isolated !== undefined) {
+    if (typeof frontmatter.isolated === "boolean") {
+      isolated = frontmatter.isolated;
+    } else if (typeof frontmatter.isolated === "string") {
+      isolated = frontmatter.isolated.trim().toLowerCase() === "true";
+    }
+  }
+
+  // run_in_background
+  let runInBackground: boolean | undefined;
+  if (frontmatter.run_in_background !== undefined) {
+    if (typeof frontmatter.run_in_background === "boolean") {
+      runInBackground = frontmatter.run_in_background;
+    } else if (typeof frontmatter.run_in_background === "string") {
+      runInBackground =
+        frontmatter.run_in_background.trim().toLowerCase() === "true";
+    }
+  }
+
+  // isolation
+  let isolation: "worktree" | undefined;
+  if (
+    typeof frontmatter.isolation === "string" &&
+    frontmatter.isolation.trim().toLowerCase() === "worktree"
+  ) {
+    isolation = "worktree";
+  }
+
+  // extensions
+  let extensions: true | string[] | false | undefined;
+  if (typeof frontmatter.extensions === "string") {
+    const ext = frontmatter.extensions.trim().toLowerCase();
+    if (ext === "false" || ext === "none") {
+      extensions = false;
+    } else if (ext === "true") {
+      extensions = true;
+    } else if (ext) {
+      extensions = frontmatter.extensions
+        .split(",")
+        .map((e: string) => e.trim())
+        .filter(Boolean);
+    }
+  }
+
+  // disallowed_tools
+  const disallowedToolsResult = parseStringArray(
+    frontmatter.disallowed_tools,
+    "disallowed_tools",
+  );
+  const disallowedTools =
+    disallowedToolsResult.ok && disallowedToolsResult.value.length > 0
+      ? disallowedToolsResult.value
+      : undefined;
+
   return {
     ok: true,
     agent: {
@@ -337,6 +420,14 @@ export function parseAgentContent(
       timeoutMs,
       enabled,
       skills,
+      promptMode,
+      maxTurns,
+      inheritContext,
+      runInBackground,
+      isolated,
+      isolation,
+      extensions,
+      disallowedTools,
       systemPrompt,
       sourcePath: filePath,
     },
