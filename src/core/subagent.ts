@@ -17,6 +17,8 @@ import {
   renderSubagentCall,
   renderSubagentResult,
 } from "../tui/render.js";
+import { createActivityTracker } from "../tui/activity.js";
+import { describeActivity } from "../tui/format.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
 import { resolveModel } from "./model-resolver.js";
 import {
@@ -334,10 +336,24 @@ export function registerSubagentTool(
         }
 
         // Synchronous foreground path (with optional isolation)
+        const { state: fgState, callbacks: fgCallbacks } = createActivityTracker(
+          resolved.maxTurns,
+          () => {
+            ctx.ui?.setWorkingMessage?.(
+              `${agentDef.name}: ${describeActivity(fgState.activeTools, fgState.responseText)}`,
+            );
+          },
+        );
+
         const { id, record } = await deps.manager.spawnAndWait(ctx, agentDef, {
           ...spawnOptions,
           isolation: params.isolation as "worktree" | undefined,
+          ...fgCallbacks,
         });
+
+        deps.agentActivity?.set(id, fgState);  // retroactive (handles linger window)
+        deps.ensureTimers?.();
+        ctx.ui?.setWorkingMessage?.();
 
         // Build execution details (shared between artifacts and return value)
         const details: SubagentExecutionDetails = {

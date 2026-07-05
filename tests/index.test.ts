@@ -593,4 +593,74 @@ describe("TUI wiring", () => {
     expect(setWidgetKeys).toContain("agents");
   });
 
-});  // close TUI wiring describe
+  test("sets working message during foreground agent execution", async () => {
+    // Capture the subagent tool execute function.
+    let subagentExecute:
+      | ((
+          toolCallId: string,
+          params: { agent: string; task: string },
+          signal: AbortSignal | undefined,
+          onUpdate: unknown,
+          ctx: ExtensionContext,
+        ) => Promise<unknown>)
+      | undefined;
+
+    const pi = {
+      on() {},
+      registerTool(def: { name: string; execute: typeof subagentExecute }) {
+        if (def.name === "subagent") subagentExecute = def.execute;
+      },
+      registerCommand() {},
+      registerMessageRenderer() {},
+      sendMessage() {},
+      sendUserMessage() {},
+      getAllTools() {
+        return [];
+      },
+    } as unknown as ExtensionAPI;
+
+    registerSubagentsExtension(pi, createMenuDeps());
+
+    if (!subagentExecute) throw new Error("subagent tool not registered");
+
+    // Override runAgent for this one call to simulate a live tool activity event.
+    vi.mocked(runAgent).mockImplementationOnce(async (_def, opts) => {
+      opts.onToolActivity?.({ type: "start", toolName: "read" });
+      return {
+        responseText: "done",
+        session: { messages: [], subscribe: vi.fn().mockReturnValue(() => {}) },
+        aborted: false,
+        steered: false,
+      };
+    });
+
+    const setWorkingMessageCalls: Array<string | undefined> = [];
+    const mockCtx = {
+      ui: {
+        setWorkingMessage(msg?: string) {
+          setWorkingMessageCalls.push(msg);
+        },
+        notify() {},
+      },
+      cwd: "/tmp",
+      mode: "tui",
+    } as unknown as ExtensionContext;
+
+    await subagentExecute(
+      "call-1",
+      { agent: "Scout", task: "do something" },
+      undefined,
+      undefined,
+      mockCtx,
+    );
+
+    // During execution: setWorkingMessage called with "Scout: reading…"
+    expect(
+      setWorkingMessageCalls.some(
+        (msg) => typeof msg === "string" && msg.startsWith("Scout:"),
+      ),
+    ).toBe(true);
+    // After completion: setWorkingMessage called with no args to reset
+    expect(setWorkingMessageCalls.at(-1)).toBeUndefined();
+  });
+});
