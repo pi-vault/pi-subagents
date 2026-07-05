@@ -378,6 +378,67 @@ describe("background spawn", () => {
 });
 
 // ---------------------------------------------------------------------------
+// background spawn activity wiring
+// ---------------------------------------------------------------------------
+
+describe("background spawn activity wiring", () => {
+  function makeSpawnDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
+    const manager = new AgentManager();
+    vi.spyOn(manager, "spawn").mockReturnValue("agent-bg-act");
+    vi.spyOn(manager, "getRecord").mockReturnValue({
+      id: "agent-bg-act",
+      type: "Scout",
+      description: "background task",
+      status: "running",
+      toolUses: 0,
+      turnCount: 0,
+      startedAt: Date.now(),
+      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+    });
+    return createDeps({
+      manager,
+      discoverAgents: () => createDiscovery([createAgent()]),
+      ...overrides,
+    });
+  }
+
+  async function spawnBackground(deps: RuntimeDeps): Promise<unknown> {
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, deps);
+    const tool = registeredTool();
+    return (tool as unknown as {
+      execute: (
+        id: string,
+        params: { agent: string; task: string; run_in_background?: boolean },
+        signal: undefined,
+        onUpdate: undefined,
+        ctx: ExtensionContext,
+      ) => Promise<unknown>;
+    }).execute(
+      "tool-call-act",
+      { agent: "Scout", task: "explore", run_in_background: true },
+      undefined,
+      undefined,
+      { cwd: "/repo" } as unknown as ExtensionContext,
+    );
+  }
+
+  test("stores activity state in agentActivity when spawning background agent", async () => {
+    const agentActivity = new Map();
+    const deps = makeSpawnDeps({ agentActivity });
+    await spawnBackground(deps);
+    expect(agentActivity.size).toBe(1);
+  });
+
+  test("calls ensureTimers when spawning background agent", async () => {
+    const ensureTimers = vi.fn();
+    const deps = makeSpawnDeps({ ensureTimers });
+    await spawnBackground(deps);
+    expect(ensureTimers).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // registerAgentCommand
 // ---------------------------------------------------------------------------
 

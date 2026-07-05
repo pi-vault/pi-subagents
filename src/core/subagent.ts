@@ -294,11 +294,19 @@ export function registerSubagentTool(
 
         // Background spawn path
         if (params.run_in_background) {
+          // Create activity tracker for live widget/fleet updates
+          const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(
+            resolved.maxTurns,
+            () => deps.widget?.update(),
+          );
+
           const id = deps.manager.spawn(ctx, agentDef, {
             ...spawnOptions,
             isBackground: true,
             isolation: params.isolation as "worktree" | undefined,
+            ...bgCallbacks,
             onSessionCreated: (session) => {
+              bgCallbacks.onSessionCreated?.(session);
               try {
                 const sessionPath = createOutputFilePath(effectiveCwd, id, `bg-${Date.now()}`);
                 writeInitialEntry(sessionPath, id, params.task.trim(), effectiveCwd);
@@ -313,6 +321,10 @@ export function registerSubagentTool(
               }
             },
           });
+
+          // Store in shared activity map and start timers
+          deps.agentActivity?.set(id, bgState);
+          deps.ensureTimers?.();
 
           // Register in batch tracker for smart group detection
           deps.registerBatchAgent?.(id);
