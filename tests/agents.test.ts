@@ -40,7 +40,6 @@ function createValidInput(
     model: "default",
     thinking: "medium",
     subagentAgents: ["worker"],
-    timeoutMs: 180000,
     systemPrompt: "# System prompt\nInspect the repo.",
     ...overrides,
   };
@@ -126,7 +125,6 @@ describe("agent discovery", () => {
         'tools: ["read", "bash"]',
         "subagent_agents:",
         "  - worker",
-        "timeout_ms: 180000",
         "---",
         "Plan the work.",
       ].join("\n"),
@@ -141,7 +139,6 @@ describe("agent discovery", () => {
         description: "Plans work",
         tools: ["read", "bash"],
         subagentAgents: ["worker"],
-        timeoutMs: 180000,
         sourcePath: join(paths.bundledAgentsDir, "planner.md"),
       }),
     ]);
@@ -311,11 +308,7 @@ describe("agent discovery", () => {
       "---\nname: bad-tools\ndescription: Invalid tools\ntools: [1, 2]\n---\nBody\n",
     );
     writeFileSync(
-      join(paths.bundledAgentsDir, "03-invalid-timeout.md"),
-      "---\nname: bad-timeout\ndescription: Invalid timeout\ntimeout_ms: 0\n---\nBody\n",
-    );
-    writeFileSync(
-      join(paths.bundledAgentsDir, "04-malformed-frontmatter.md"),
+      join(paths.bundledAgentsDir, "03-malformed-frontmatter.md"),
       "---\nname bad\ndescription: Missing colon\n---\nBody\n",
     );
 
@@ -332,11 +325,7 @@ describe("agent discovery", () => {
         reason: "tools must be a comma-separated string or string array",
       },
       {
-        path: join(paths.bundledAgentsDir, "03-invalid-timeout.md"),
-        reason: "timeout_ms must be a positive finite number",
-      },
-      {
-        path: join(paths.bundledAgentsDir, "04-malformed-frontmatter.md"),
+        path: join(paths.bundledAgentsDir, "03-malformed-frontmatter.md"),
         reason: "malformed frontmatter line: name bad",
       },
     ]);
@@ -369,7 +358,6 @@ describe("tool discovery and agent creation", () => {
         "tools: bash, read",
         "thinking: medium",
         "subagent_agents: worker",
-        "timeout_ms: 180000",
         "---",
         "# System prompt",
         "Inspect the repo.",
@@ -424,7 +412,6 @@ describe("tool discovery and agent creation", () => {
         subagentAgents: [],
         model: undefined,
         thinking: undefined,
-        timeoutMs: undefined,
       }),
       discovery,
       discoverToolNames([]),
@@ -510,14 +497,6 @@ describe("tool discovery and agent creation", () => {
         toolNames,
       ),
     ).toThrow("unknown subagent_agents: unknown-agent");
-    expect(() =>
-      createAgentFile(
-        paths,
-        createValidInput({ timeoutMs: 0 }),
-        discovery,
-        toolNames,
-      ),
-    ).toThrow("timeout_ms must be a positive finite number");
   });
 
   test("rejects duplicate names cleanly", () => {

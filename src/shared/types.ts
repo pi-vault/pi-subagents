@@ -55,7 +55,6 @@ export interface AgentDefinition {
   skills?: string[] | boolean;
   systemPrompt: string;
   sourcePath: string;
-  timeoutMs?: number;
   // Phase 2: new frontmatter fields
   promptMode?: "replace" | "append";
   maxTurns?: number;
@@ -87,7 +86,6 @@ export interface AgentCreationInput {
   subagentAgents: string[];
   skills?: string[] | boolean;
   systemPrompt: string;
-  timeoutMs?: number;
 }
 
 export interface SubagentToolInput {

@@ -148,7 +148,6 @@ export function exportAgentToUserScope(
     model: agent.model,
     thinking: agent.thinking,
     subagentAgents: agent.subagentAgents,
-    timeoutMs: agent.timeoutMs,
     skills: agent.skills,
     systemPrompt: agent.systemPrompt,
   });
@@ -255,12 +254,6 @@ export function createAgentFile(
     throw new Error(`unknown subagent_agents: ${unknownAgents.join(", ")}`);
   }
 
-  if (input.timeoutMs !== undefined) {
-    if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
-      throw new Error("timeout_ms must be a positive finite number");
-    }
-  }
-
   const targetName = name ?? filenameSlug;
   const targetNameKey = normalizeNameForComparison(targetName);
   const existingNameKeys = new Set(
@@ -279,7 +272,6 @@ export function createAgentFile(
     model: normalizeOptionalString(input.model),
     thinking: normalizeOptionalString(input.thinking),
     subagentAgents,
-    timeoutMs: input.timeoutMs,
     skills: input.skills,
     systemPrompt,
   });

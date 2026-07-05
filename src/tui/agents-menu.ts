@@ -408,12 +408,6 @@ async function runCreateAgentFlow(
     return;
   }
 
-  const timeoutInput = await ctx.ui.input("Timeout ms (optional)", "180000");
-  if (timeoutInput === undefined) {
-    ctx.ui.notify("Agent creation cancelled", "info");
-    return;
-  }
-
   const systemPrompt = await ctx.ui.editor("Agent markdown body", "");
   if (systemPrompt === undefined) {
     ctx.ui.notify("Agent creation cancelled", "info");
@@ -428,7 +422,6 @@ async function runCreateAgentFlow(
     model,
     thinking,
     subagentAgents: subagentAgents ? subagentAgents.split(",").map((e) => e.trim()).filter(Boolean) : [],
-    timeoutMs: timeoutInput.trim() ? Number(timeoutInput) : undefined,
     systemPrompt,
   };
 

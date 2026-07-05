@@ -256,21 +256,6 @@ export function parseAgentContent(
     };
   }
 
-  let timeoutMs: number | undefined;
-  if (frontmatter.timeout_ms !== undefined) {
-    const parsedTimeout = Number(frontmatter.timeout_ms);
-    if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {
-      return {
-        ok: false,
-        diagnostic: {
-          path: filePath,
-          reason: "timeout_ms must be a positive finite number",
-        },
-      };
-    }
-    timeoutMs = parsedTimeout;
-  }
-
   const model = normalizeAgentModel(frontmatter.model);
   const thinking =
     typeof frontmatter.thinking === "string" && frontmatter.thinking.trim()
@@ -421,7 +406,6 @@ export function parseAgentContent(
       model,
       thinking,
       subagentAgents: subagentAgents.value,
-      timeoutMs,
       enabled,
       skills,
       promptMode,
@@ -465,9 +449,6 @@ export function serializeAgent(input: AgentCreationInput): string {
   }
   if (subagentAgents.length > 0) {
     frontmatter.push(`subagent_agents: ${subagentAgents.join(", ")}`);
-  }
-  if (input.timeoutMs !== undefined) {
-    frontmatter.push(`timeout_ms: ${input.timeoutMs}`);
   }
   if (input.skills === false) {
     frontmatter.push("skills: none");
