@@ -1,6 +1,8 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { AgentManager } from "./core/agent-manager.js";
+import { getAgentConversation } from "./core/agent-runner.js";
 import {
   createAgentFile,
   deleteUserAgentOverride,
@@ -9,21 +11,19 @@ import {
   discoverToolNames,
   exportAgentToUserScope,
 } from "./core/agents.js";
-import { AgentManager } from "./core/agent-manager.js";
-import { GroupJoinManager } from "./core/group-join-manager.js";
-import { getAgentConversation } from "./core/agent-runner.js";
 import { loadConfig, saveConfig } from "./core/config.js";
+import { GroupJoinManager } from "./core/group-join-manager.js";
 import { resolvePaths } from "./core/paths.js";
-import { loadSettings, applySettings } from "./core/settings.js";
-import {
-  registerAgentCommand,
-  registerSubagentTool,
-} from "./core/subagent.js";
+import { applySettings, loadSettings } from "./core/settings.js";
 import { SmartBatchTracker } from "./core/smart-batch-tracker.js";
-import type { JoinMode, NotificationDetails } from "./shared/types.js";
+import { registerAgentCommand, registerSubagentTool } from "./core/subagent.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
+import type { JoinMode, NotificationDetails, WidgetMode } from "./shared/types.js";
+import type { AgentActivity } from "./tui/activity.js";
+import { AgentWidget, type UICtx } from "./tui/agent-widget.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
-import { renderSubagentMessage } from "./tui/render.js";
+import { FleetList, type FleetUICtx } from "./tui/fleet-list.js";
+import { buildNotificationText, renderSubagentMessage } from "./tui/render.js";
 
 const NUDGE_HOLD_MS = 200;
 
@@ -76,8 +76,20 @@ function buildNotificationDetails(record: AgentRecordSnapshot): NotificationDeta
 export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   const pendingNudges = new Map<string, ReturnType<typeof setTimeout>>();
 
+  // ---- TUI: per-agent activity tracking + widget/fleet (forward-declared) ----
+  // widget and fleet are created after the manager (they need it), but the manager's
+  // callbacks close over them. Safe because callbacks only fire after full init.
+  const agentActivity = new Map<string, AgentActivity>();
+  let widget!: AgentWidget;
+  let fleet!: FleetList;
+
   const groupJoin = new GroupJoinManager((records, partial) => {
     for (const record of records) {
+      // TUI: mark each finished agent in widget + fleet
+      agentActivity.delete(record.id);
+      widget.markFinished(record.id);
+      fleet.onAgentFinished(record.id);
+
       const notification = formatTaskNotification(record);
       const details = buildNotificationDetails(record);
       if (partial) {
@@ -95,23 +107,23 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
         { deliverAs: "followUp", triggerTurn: true },
       );
     }
+    widget.update();
   });
 
   const manager = new AgentManager(3, (record) => {
     // Fire lifecycle events
     const isError =
-      record.status === "error" ||
-      record.status === "stopped" ||
-      record.status === "aborted";
-    (
-      pi as unknown as { events?: { emit: (ch: string, data: unknown) => void } }
-    ).events?.emit(isError ? "subagents:failed" : "subagents:completed", {
-      id: record.id,
-      type: record.type,
-      status: record.status,
-      result: record.result,
-      error: record.error,
-    });
+      record.status === "error" || record.status === "stopped" || record.status === "aborted";
+    (pi as unknown as { events?: { emit: (ch: string, data: unknown) => void } }).events?.emit(
+      isError ? "subagents:failed" : "subagents:completed",
+      {
+        id: record.id,
+        type: record.type,
+        status: record.status,
+        result: record.result,
+        error: record.error,
+      },
+    );
 
     // Persist record
     (pi as unknown as { appendEntry?: (t: string, d: unknown) => void }).appendEntry?.(
@@ -126,10 +138,19 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
       },
     );
 
-    if (record.resultConsumed) return;
+    // TUI: mark agent finished immediately regardless of notification path
+    agentActivity.delete(record.id);
+    widget.markFinished(record.id);
+    fleet.onAgentFinished(record.id);
+
+    if (record.resultConsumed) {
+      widget.update();
+      return;
+    }
 
     // If agent is in the current batch, defer notification to finalizeBatch
     if (tracker.isInCurrentBatch(record.id)) {
+      widget.update();
       return;
     }
 
@@ -143,6 +164,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
       }, NUDGE_HOLD_MS);
       pendingNudges.set(record.id, timerId);
     }
+    widget.update();
   });
 
   function sendNudge(record: Parameters<typeof formatTaskNotification>[0]): void {
@@ -165,12 +187,16 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     () => deps.defaultJoinMode ?? "smart",
   );
 
+  // ---- TUI: create widget and fleet (after manager) ----
+  let widgetMode: WidgetMode = "background";
+  widget = new AgentWidget(manager, agentActivity, () => widgetMode);
+  fleet = new FleetList(manager, agentActivity);
+
   const deps: RuntimeDeps = {
     resolvePaths,
     loadConfig,
     discoverAgents,
-    discoverToolNames: () =>
-      discoverToolNames(pi.getAllTools().map((tool) => tool.name)),
+    discoverToolNames: () => discoverToolNames(pi.getAllTools().map((tool) => tool.name)),
     createAgentFile,
     exportAgentToUserScope,
     disableAgentInUserScope,
@@ -182,6 +208,20 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     defaultJoinMode: "smart" as JoinMode,
     registerBatchAgent: (id) => tracker.register(id),
     disposeBatchTracker: () => tracker.dispose(),
+    widget,
+    fleet,
+    agentActivity,
+    ensureTimers: () => {
+      widget.ensureTimer();
+      fleet.ensureTimer();
+    },
+    setWidgetMode: (mode) => {
+      widgetMode = mode;
+      widget.update();
+    },
+    setFleetView: (enabled) => {
+      fleet.setEnabled(enabled);
+    },
   };
 
   // Apply persisted settings to live state
@@ -190,6 +230,13 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
     setDefaultJoinMode: (mode) => {
       deps.defaultJoinMode = mode;
+    },
+    setWidgetMode: (mode) => {
+      widgetMode = mode;
+      widget.update();
+    },
+    setFleetView: (enabled) => {
+      fleet.setEnabled(enabled);
     },
   });
 
@@ -201,34 +248,23 @@ export function registerSubagentsExtension(
   deps: RuntimeDeps = createRuntimeDeps(pi),
 ): void {
   pi.registerMessageRenderer("pi-subagent-result", (msg, opts, theme) =>
-    renderSubagentMessage(
-      msg as Parameters<typeof renderSubagentMessage>[0],
-      opts,
-      theme,
-    ),
+    renderSubagentMessage(msg as Parameters<typeof renderSubagentMessage>[0], opts, theme),
   );
 
   // Background notification renderer
-  pi.registerMessageRenderer("subagent-notification", (msg, _opts, theme) => {
+  pi.registerMessageRenderer("subagent-notification", (msg, opts, theme) => {
     const d = (msg as { details?: NotificationDetails }).details;
     if (!d) return new Text("", 0, 0);
-    const t = theme as { fg: (color: string, text: string) => string };
-    const isError =
-      d.status === "error" || d.status === "stopped" || d.status === "aborted";
-    const lines = [
-      t.fg(
-        isError ? "error" : "success",
-        `${isError ? "Agent failed" : "Agent completed"}: ${d.description}`,
-      ),
-      t.fg(
-        "dim",
-        `${d.toolUses} tools, ${d.turnCount} turns, ${d.totalTokens} tokens, ${d.durationMs}ms`,
-      ),
-    ];
-    if (d.resultPreview) {
-      lines.push(t.fg("muted", d.resultPreview.slice(0, 120)));
-    }
-    return new Text(lines.join("\n"), 0, 0);
+    const t = theme as {
+      fg: (color: string, text: string) => string;
+      bold: (text: string) => string;
+    };
+    const all = [d, ...(d.others ?? [])];
+    return new Text(
+      all.map((item) => buildNotificationText(item, opts.expanded ?? false, t)).join("\n"),
+      0,
+      0,
+    );
   });
 
   registerSubagentTool(pi, deps);
@@ -334,12 +370,13 @@ export function registerSubagentsExtension(
         };
       }
 
-      (
-        pi as unknown as { events?: { emit: (ch: string, data: unknown) => void } }
-      ).events?.emit("subagents:steered", {
-        id: record.id,
-        message: params.message,
-      });
+      (pi as unknown as { events?: { emit: (ch: string, data: unknown) => void } }).events?.emit(
+        "subagents:steered",
+        {
+          id: record.id,
+          message: params.message,
+        },
+      );
       return {
         content: [{ type: "text", text: `Steering message sent to agent ${record.id}.` }],
         details: undefined,
@@ -347,8 +384,18 @@ export function registerSubagentsExtension(
     },
   });
 
+  // Acquire TUI context on each tool execution: set UI context on widget and fleet,
+  // and age finished agents so they clear from the widget after one turn.
+  pi.on("tool_execution_start", (_event, ctx) => {
+    deps.widget?.setUICtx(ctx.ui as UICtx);
+    deps.fleet?.setUICtx(ctx.ui as unknown as FleetUICtx);
+    deps.widget?.onTurnStart();
+  });
+
   // Cleanup on session shutdown
   pi.on("session_shutdown", () => {
+    deps.widget?.dispose();
+    deps.fleet?.dispose();
     deps.manager.abortAll();
     deps.manager.dispose();
     deps.groupJoin?.dispose();

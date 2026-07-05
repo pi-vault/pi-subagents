@@ -89,13 +89,14 @@ export class AgentManager {
     const record: AgentRecord = {
       id,
       type: agentDef.name,
+      description: options.description ?? options.prompt.slice(0, 80),
       status:
         isBackground && this.runningBackground >= this.maxConcurrent ? "queued" : "running",
       toolUses: 0,
       turnCount: 0,
       startedAt: Date.now(),
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
-      invocation: { agent: agentDef.name, task: options.prompt, cwd: options.cwd },
+      invocation: { agent: agentDef.name, task: options.prompt, cwd: options.cwd, description: options.description },
       isBackground,
       compactionCount: 0,
     };

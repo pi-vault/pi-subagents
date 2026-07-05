@@ -1,28 +1,46 @@
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  RegisteredCommand,
-} from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+  RegisteredCommand,
+} from "@earendil-works/pi-coding-agent";
+import { describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { runAgent } from "../src/core/agent-runner.js";
 import * as subagentsIndex from "../src/index.js";
-import extension, { registerSubagentsExtension } from "../src/index.js";
+import extension, { createRuntimeDeps, registerSubagentsExtension } from "../src/index.js";
+import type { UICtx } from "../src/tui/agent-widget.js";
+
+// Mock the agent runner and worktree so TUI-wiring tests can spawn agents synchronously.
+vi.mock("../src/core/agent-runner.js", () => ({
+  runAgent: vi.fn().mockResolvedValue({
+    responseText: "done",
+    session: { messages: [], subscribe: vi.fn().mockReturnValue(() => {}) },
+    aborted: false,
+    steered: false,
+  }),
+  resumeAgent: vi.fn().mockResolvedValue(""),
+  getAgentConversation: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock("../src/core/worktree.js", () => ({
+  createWorktree: vi.fn().mockReturnValue(undefined),
+  cleanupWorktree: vi.fn().mockReturnValue(undefined),
+  pruneWorktrees: vi.fn(),
+}));
+
+import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
+import type { AgentDiscoveryResult, ResolvedPaths, SubagentsConfig } from "../src/shared/types.js";
 import {
+  buildAlignedRows,
+  describeAgentEntry,
   runAgentsMenuAction,
   runAgentsMenuSettingsFlow,
   SETTINGS_MENU_ITEMS,
-  buildAlignedRows,
-  describeAgentEntry,
 } from "../src/tui/agents-menu.js";
-import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
-import type {
-  AgentDiscoveryResult,
-  ResolvedPaths,
-  SubagentsConfig,
-} from "../src/shared/types.js";
 
 function createPaths(): ResolvedPaths {
   return {
@@ -129,9 +147,7 @@ describe("subagents extension", () => {
       name: "agents",
       description: "Open the interactive pi-subagents agents menu",
     });
-    expect(commands).not.toContainEqual(
-      expect.objectContaining({ name: "agents:add" }),
-    );
+    expect(commands).not.toContainEqual(expect.objectContaining({ name: "agents:add" }));
   });
 
   test("registerSubagentsExtension no longer exports slash-live controller helpers", () => {
@@ -418,11 +434,7 @@ describe("subagents extension", () => {
       createMenuDeps(),
     );
 
-    expect(
-      seenOptions.some((options) =>
-        options.includes("Max Concurrency      3"),
-      ),
-    ).toBe(true);
+    expect(seenOptions.some((options) => options.includes("Max Concurrency      3"))).toBe(true);
   });
 
   test("menu action reports export errors instead of throwing", async () => {
@@ -450,3 +462,135 @@ describe("subagents extension", () => {
     });
   });
 });
+
+// ---- TUI wiring tests ----
+
+function makeAgentDef() {
+  return {
+    name: "test-agent",
+    description: "A test agent",
+    tools: ["read", "bash"],
+    subagentAgents: [],
+    systemPrompt: "You are a test agent.",
+    sourcePath: "/fake/path/test-agent.md",
+  };
+}
+
+function createPiWithEventCapture() {
+  const registeredEvents: string[] = [];
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const pi = {
+    on(event: string, handler: (...args: unknown[]) => unknown) {
+      registeredEvents.push(event);
+      handlers.set(event, handler);
+    },
+    registerTool() {},
+    registerCommand() {},
+    registerMessageRenderer() {},
+    sendMessage() {},
+    sendUserMessage() {},
+    getAllTools() {
+      return [];
+    },
+  } as unknown as ExtensionAPI;
+  return { pi, registeredEvents, handlers };
+}
+
+describe("TUI wiring", () => {
+  test("registerSubagentsExtension registers a tool_execution_start handler", () => {
+    const { pi, registeredEvents } = createPiWithEventCapture();
+    registerSubagentsExtension(pi, createMenuDeps());
+    expect(registeredEvents).toContain("tool_execution_start");
+  });
+
+  test("fleet registers onTerminalInput when tool_execution_start fires", async () => {
+    const { pi, handlers } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+    registerSubagentsExtension(pi, deps);
+
+    let inputHandlerRegistered = false;
+    const mockCtx = {
+      ui: {
+        setWidget() {},
+        setStatus() {},
+        onTerminalInput(_handler: unknown) {
+          inputHandlerRegistered = true;
+          return () => {};
+        },
+        getEditorText() {
+          return "";
+        },
+        notify() {},
+        custom() {
+          return Promise.resolve(undefined);
+        },
+      },
+    };
+
+    const handler = handlers.get("tool_execution_start");
+    await handler?.({}, mockCtx);
+
+    expect(inputHandlerRegistered).toBe(true);
+  });
+
+  test("widget.markFinished and fleet.onAgentFinished are called when agent completes", async () => {
+    const { pi } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+
+    const widget = deps.widget;
+    const fleet = deps.fleet;
+    if (!widget || !fleet) throw new Error("widget/fleet not initialized");
+
+    const markFinishedIds: string[] = [];
+    const onAgentFinishedIds: string[] = [];
+
+    const origMarkFinished = widget.markFinished.bind(widget);
+    widget.markFinished = (id: string) => {
+      markFinishedIds.push(id);
+      origMarkFinished(id);
+    };
+
+    const origOnAgentFinished = fleet.onAgentFinished.bind(fleet);
+    fleet.onAgentFinished = (id: string) => {
+      onAgentFinishedIds.push(id);
+      origOnAgentFinished(id);
+    };
+
+    const { id } = await deps.manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+
+    expect(markFinishedIds).toContain(id);
+    expect(onAgentFinishedIds).toContain(id);
+  });
+
+  test("widget setWidget is called after agent completes when UICtx is set", async () => {
+    const { pi } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+
+    const widget = deps.widget;
+    if (!widget) throw new Error("widget not initialized");
+
+    // Use "all" mode so both foreground and background agents appear in the widget.
+    deps.setWidgetMode?.("all");
+
+    const setWidgetKeys: string[] = [];
+    const mockUiCtx = {
+      setWidget(key: string) {
+        setWidgetKeys.push(key);
+      },
+      setStatus() {},
+    };
+    widget.setUICtx(mockUiCtx as UICtx);
+
+    await deps.manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+
+    // After completion, markFinished is called then widget.update() triggers setWidget
+    expect(setWidgetKeys).toContain("agents");
+  });
+
+});  // close TUI wiring describe
