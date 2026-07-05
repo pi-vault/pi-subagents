@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
 import type { AgentDefinition } from "../src/shared/types.js";
 
@@ -248,5 +248,159 @@ describe("steered status", () => {
     });
 
     expect(record.status).toBe("steered");
+  });
+});
+
+describe("spawn (background)", () => {
+  let manager: AgentManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new AgentManager(3);
+  });
+
+  afterEach(() => {
+    manager.dispose();
+  });
+
+  it("spawn returns agent id immediately", () => {
+    const agentDef = makeAgentDef();
+    const id = manager.spawn({}, agentDef, {
+      prompt: "task",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    expect(typeof id).toBe("string");
+    expect(id).toMatch(/^agent-/);
+  });
+
+  it("spawn queues agent when at concurrency limit", () => {
+    const m = new AgentManager(3, undefined, 1); // maxConcurrent = 1
+    const id1 = m.spawn({}, makeAgentDef(), { prompt: "task 1", cwd: "/tmp", isBackground: true });
+    const id2 = m.spawn({}, makeAgentDef(), { prompt: "task 2", cwd: "/tmp", isBackground: true });
+    const r1 = m.getRecord(id1);
+    const r2 = m.getRecord(id2);
+    // First should be running, second should be queued
+    expect(r1?.status).toBe("running");
+    expect(r2?.status).toBe("queued");
+    m.dispose();
+  });
+
+  it("abort removes queued agent and sets stopped status", () => {
+    const m = new AgentManager(3, undefined, 1); // maxConcurrent = 1
+    m.spawn({}, makeAgentDef(), { prompt: "task 1", cwd: "/tmp", isBackground: true });
+    const id2 = m.spawn({}, makeAgentDef(), { prompt: "task 2", cwd: "/tmp", isBackground: true });
+    expect(m.getRecord(id2)?.status).toBe("queued");
+    m.abort(id2);
+    expect(m.getRecord(id2)?.status).toBe("stopped");
+    m.dispose();
+  });
+
+  it("steer queues message for unstarted agent", () => {
+    const m = new AgentManager(3, undefined, 1);
+    m.spawn({}, makeAgentDef(), { prompt: "task 1", cwd: "/tmp", isBackground: true });
+    const id2 = m.spawn({}, makeAgentDef(), { prompt: "task 2", cwd: "/tmp", isBackground: true });
+    const result = m.steer(id2, "redirect this");
+    expect(result).toBe(true);
+    expect(m.getRecord(id2)?.pendingSteers).toEqual(["redirect this"]);
+    m.dispose();
+  });
+
+  it("steer returns false for nonexistent agent", () => {
+    expect(manager.steer("nonexistent", "msg")).toBe(false);
+  });
+
+  it("steer returns false for completed agent", async () => {
+    const { id } = await manager.spawnAndWait({}, makeAgentDef(), { prompt: "test", cwd: "/tmp" });
+    expect(manager.steer(id, "msg")).toBe(false);
+  });
+});
+
+describe("AgentManager onComplete callback", () => {
+  beforeEach(async () => {
+    // Restore any spies left over from preceding describe blocks (e.g. "steered status")
+    vi.restoreAllMocks();
+    // Explicitly reset runAgent to the non-steered default
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "done",
+      session: {},
+      aborted: false,
+      steered: false,
+    });
+  });
+
+  it("calls onComplete when agent finishes", async () => {
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete);
+    await manager.spawnAndWait({}, makeAgentDef(), { prompt: "test", cwd: "/tmp" });
+    expect(onComplete).toHaveBeenCalledOnce();
+    const record = onComplete.mock.calls[0][0];
+    expect(record.status).toBe("completed");
+    manager.dispose();
+  });
+
+  it("calls onComplete with error status when agent throws", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    vi.mocked(runAgent).mockRejectedValueOnce(new Error("agent failed"));
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete);
+    await manager.spawnAndWait({}, makeAgentDef(), { prompt: "test", cwd: "/tmp" });
+    expect(onComplete).toHaveBeenCalledOnce();
+    const record = onComplete.mock.calls[0][0];
+    expect(record.status).toBe("error");
+    manager.dispose();
+  });
+});
+
+describe("setMaxConcurrent / getMaxConcurrent", () => {
+  it("getMaxConcurrent returns default", () => {
+    const manager = new AgentManager();
+    expect(manager.getMaxConcurrent()).toBe(4); // DEFAULT_MAX_CONCURRENT
+    manager.dispose();
+  });
+
+  it("setMaxConcurrent updates the limit", () => {
+    const manager = new AgentManager();
+    manager.setMaxConcurrent(8);
+    expect(manager.getMaxConcurrent()).toBe(8);
+    manager.dispose();
+  });
+});
+
+describe("waitForAll", () => {
+  it("resolves immediately when no agents are running", async () => {
+    const manager = new AgentManager();
+    await expect(manager.waitForAll()).resolves.toBeUndefined();
+    manager.dispose();
+  });
+
+  it("waits for background agents to complete", async () => {
+    const manager = new AgentManager();
+    manager.spawn({}, makeAgentDef(), { prompt: "task", cwd: "/tmp", isBackground: true });
+    await manager.waitForAll();
+    const agents = manager.listAgents();
+    expect(agents.every(r => r.status !== "running" && r.status !== "queued")).toBe(true);
+    manager.dispose();
+  });
+});
+
+describe("resume", () => {
+  it("returns undefined for unknown agent id", async () => {
+    const manager = new AgentManager();
+    const result = await manager.resume("nonexistent", "prompt");
+    expect(result).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("returns undefined for agent with no session", async () => {
+    const manager = new AgentManager();
+    const { id } = await manager.spawnAndWait({}, makeAgentDef(), { prompt: "test", cwd: "/tmp" });
+    // Clear session to simulate no session
+    const record = manager.getRecord(id);
+    if (record) record.session = undefined;
+    const result = await manager.resume(id, "continue");
+    expect(result).toBeUndefined();
+    manager.dispose();
   });
 });
