@@ -126,7 +126,15 @@ export function buildSubagentResultText(
   lines.push(theme.fg("muted", `task: ${details.task || "-"}`));
   lines.push(theme.fg("muted", `cwd: ${formatPath(details.cwd)}`));
   lines.push(theme.fg("muted", `source: ${formatPath(details.sourcePath)}`));
-  lines.push(theme.fg("muted", `timeout: ${details.timeoutMs}ms`));
+  lines.push(
+    theme.fg(
+      "muted",
+      `turns: ${details.maxTurns === 0 ? "unlimited" : details.maxTurns}`,
+    ),
+  );
+  if (details.thinking) {
+    lines.push(theme.fg("muted", `thinking: ${details.thinking}`));
+  }
   lines.push(theme.fg("muted", `duration: ${details.durationMs}ms`));
   lines.push(theme.fg("muted", `usage: ${formatUsage(details)}`));
   lines.push(theme.fg("muted", `stop reason: ${details.stopReason || "-"}`));

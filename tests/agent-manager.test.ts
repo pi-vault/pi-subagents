@@ -2,12 +2,15 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
 import type { AgentDefinition } from "../src/shared/types.js";
 
+const tmpDir = "/tmp";
+
 // Mock the runner
 vi.mock("../src/core/agent-runner.js", () => ({
   runAgent: vi.fn().mockResolvedValue({
     responseText: "done",
     session: {},
     aborted: false,
+    steered: false,
   }),
 }));
 
@@ -196,5 +199,54 @@ describe("AgentManager", () => {
         cwd: "/nonexistent/path/xyz123",
       }),
     ).rejects.toThrow(/does not exist/i);
+  });
+});
+
+describe("maxTurns and graceTurns passthrough", () => {
+  it("passes maxTurns and graceTurns to runAgent", async () => {
+    const manager = new AgentManager(3);
+    const spy = vi
+      .spyOn(await import("../src/core/agent-runner.js"), "runAgent")
+      .mockResolvedValue({
+        responseText: "done",
+        session: {},
+        aborted: false,
+        steered: false,
+      });
+
+    await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: tmpDir,
+      maxTurns: 10,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ maxTurns: 10 }),
+      expect.anything(),
+    );
+    spy.mockRestore();
+  });
+});
+
+describe("steered status", () => {
+  it("maps steered result to 'steered' record status", async () => {
+    const manager = new AgentManager(3);
+    vi.spyOn(
+      await import("../src/core/agent-runner.js"),
+      "runAgent",
+    ).mockResolvedValue({
+      responseText: "wrapped up",
+      session: {},
+      aborted: false,
+      steered: true,
+    });
+
+    const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: tmpDir,
+    });
+
+    expect(record.status).toBe("steered");
   });
 });

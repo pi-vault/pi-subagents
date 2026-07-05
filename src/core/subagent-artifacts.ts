@@ -95,7 +95,7 @@ export function writeExecutionArtifacts(
     error: result.isError ? result.content : undefined,
     model: result.details.model,
     durationMs: result.details.durationMs,
-    timeoutMs: result.details.timeoutMs,
+    maxTurns: result.details.maxTurns,
     usage: result.details.usage,
     exitCode: result.details.exitCode,
     stopReason: result.details.stopReason,

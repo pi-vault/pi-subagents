@@ -6,7 +6,7 @@ import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/core/config.js";
 import { resolvePaths } from "../src/core/paths.js";
 
 describe("loadConfig", () => {
-  test("uses defaults when subagents.json is missing, including maxRecursiveLevel=3", () => {
+  test("uses defaults when subagents.json is missing", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
     const paths = resolvePaths(agentDir);
 
@@ -14,6 +14,8 @@ describe("loadConfig", () => {
 
     expect(result.exists).toBe(false);
     expect(result.config).toEqual(DEFAULT_CONFIG);
+    expect(result.config.defaultMaxTurns).toBe(0);
+    expect(result.config.graceTurns).toBe(5);
   });
 
   test("merges configured values with defaults", () => {
@@ -22,7 +24,7 @@ describe("loadConfig", () => {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(
       join(configDir, "subagents.json"),
-      JSON.stringify({ maxConcurrency: 7, defaultTimeoutMs: 1234 }),
+      JSON.stringify({ maxConcurrency: 7, defaultMaxTurns: 20 }),
     );
 
     const result = loadConfig(resolvePaths(agentDir));
@@ -31,7 +33,8 @@ describe("loadConfig", () => {
     expect(result.config).toEqual({
       maxConcurrency: 7,
       maxRecursiveLevel: DEFAULT_CONFIG.maxRecursiveLevel,
-      defaultTimeoutMs: 1234,
+      defaultMaxTurns: 20,
+      graceTurns: DEFAULT_CONFIG.graceTurns,
     });
   });
 
@@ -54,13 +57,15 @@ describe("loadConfig", () => {
     saveConfig(paths, {
       maxConcurrency: 7,
       maxRecursiveLevel: 5,
-      defaultTimeoutMs: 120000,
+      defaultMaxTurns: 15,
+      graceTurns: 3,
     });
 
     expect(JSON.parse(readFileSync(paths.configPath, "utf8"))).toEqual({
       maxConcurrency: 7,
       maxRecursiveLevel: 5,
-      defaultTimeoutMs: 120000,
+      defaultMaxTurns: 15,
+      graceTurns: 3,
     });
   });
 });

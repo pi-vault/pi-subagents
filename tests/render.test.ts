@@ -21,7 +21,7 @@ function createDetails(
     task: "Inspect repo structure and summarize findings",
     sourcePath: "/repo/agents/scout.md",
     cwd: "/repo",
-    timeoutMs: 180000,
+    maxTurns: 30,
     durationMs: 321,
     childSessionDir: "/sessions/child/run-0",
     childSessionPath: "/sessions/child/run-0/session.jsonl",
@@ -31,6 +31,7 @@ function createDetails(
       meta: "/sessions/subagent-artifacts/run-123_Scout_0_meta.json",
     },
     model: "openai/gpt-5",
+    thinking: undefined,
     stopReason: "end",
     exitCode: 0,
     stderr: "",
@@ -95,7 +96,7 @@ describe("subagent render helpers", () => {
     expect(text).toContain("task: Inspect repo structure and summarize findings");
     expect(text).toContain("cwd: /repo");
     expect(text).toContain("source: /repo/agents/scout.md");
-    expect(text).toContain("timeout: 180000ms");
+    expect(text).toContain("turns: 30");
     expect(text).toContain("stop reason: error");
     expect(text).toContain("exit code: 2");
     expect(text).toContain("stderr:");
@@ -146,5 +147,35 @@ describe("subagent render helpers", () => {
     expect(message.customType).toBe("pi-subagent-result");
     expect(message.display).toBe(true);
     expect(message.details?.agent).toBe("Scout");
+  });
+
+  test("renders steered status with warning color", () => {
+    const text = buildSubagentResultText(
+      "wrapped up",
+      createDetails({ status: "steered", stopReason: "steered" }),
+      false,
+      theme,
+    );
+    expect(text).toContain("STEERED");
+  });
+
+  test("renders thinking level in expanded details", () => {
+    const text = buildSubagentResultText(
+      "done",
+      createDetails({ thinking: "high" }),
+      true,
+      theme,
+    );
+    expect(text).toContain("thinking: high");
+  });
+
+  test("renders unlimited turns", () => {
+    const text = buildSubagentResultText(
+      "done",
+      createDetails({ maxTurns: 0 }),
+      true,
+      theme,
+    );
+    expect(text).toContain("turns: unlimited");
   });
 });

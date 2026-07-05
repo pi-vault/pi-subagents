@@ -1,7 +1,8 @@
 export interface SubagentsConfig {
   maxConcurrency: number;
   maxRecursiveLevel: number;
-  defaultTimeoutMs: number;
+  defaultMaxTurns: number;
+  graceTurns: number;
 }
 
 export interface ResolvedPaths {
@@ -41,6 +42,15 @@ export interface AgentDefinition {
   systemPrompt: string;
   sourcePath: string;
   timeoutMs?: number;
+  // Phase 2: new frontmatter fields
+  promptMode?: "replace" | "append";
+  maxTurns?: number;
+  inheritContext?: boolean;
+  runInBackground?: boolean;
+  isolated?: boolean;
+  isolation?: "worktree";
+  extensions?: true | string[] | false;
+  disallowedTools?: string[];
 }
 
 export interface AgentDiscoveryDiagnostic {
@@ -70,6 +80,14 @@ export interface SubagentToolInput {
   agent: string;
   task: string;
   cwd?: string;
+  model?: string;
+  thinking?: string;
+  max_turns?: number;
+  isolated?: boolean;
+  inherit_context?: boolean;
+  run_in_background?: boolean;
+  resume?: string;
+  isolation?: string;
 }
 
 export interface SubagentUsage {
@@ -88,17 +106,18 @@ export interface SubagentToolActivity {
 }
 
 export interface SubagentExecutionDetails {
-  status: "success" | "error" | "timeout" | "aborted";
+  status: "success" | "error" | "timeout" | "aborted" | "steered";
   agent: string;
   task: string;
   sourcePath: string;
   cwd: string;
-  timeoutMs: number;
+  maxTurns: number;
   durationMs: number;
   childSessionDir: string;
   childSessionPath: string;
   artifactPaths?: ArtifactPaths;
   model?: string;
+  thinking?: string;
   stopReason: string;
   exitCode: number | null;
   stderr: string;
@@ -138,12 +157,17 @@ export interface AgentInvocation {
   agent: string;
   task: string;
   cwd?: string;
+  model?: string;
+  thinking?: string;
+  maxTurns?: number;
+  isolated?: boolean;
+  inheritContext?: boolean;
 }
 
 export interface AgentRecord {
   id: string;
   type: string;
-  status: "running" | "completed" | "aborted" | "error";
+  status: "running" | "completed" | "steered" | "aborted" | "error";
   result?: string;
   error?: string;
   toolUses: number;
@@ -162,7 +186,11 @@ export interface RunOptions {
   agentId: string;
   model?: unknown; // Model from pi-ai
   thinking?: string;
-  timeoutMs?: number;
+  maxTurns?: number;
+  graceTurns?: number;
+  isolated?: boolean;
+  inheritContext?: boolean;
+  parentSystemPrompt?: string;
   allowRecursion?: boolean;
   signal?: AbortSignal;
   onToolActivity?: (activity: ToolActivity) => void;
@@ -180,12 +208,17 @@ export interface RunResult {
   responseText: string;
   session: unknown; // AgentSession
   aborted: boolean;
+  steered: boolean;
 }
 
 export interface SpawnOptions {
   prompt: string;
   cwd: string;
-  timeoutMs?: number;
+  maxTurns?: number;
+  graceTurns?: number;
+  isolated?: boolean;
+  inheritContext?: boolean;
+  parentSystemPrompt?: string;
   parentSignal?: AbortSignal;
   currentDepth?: number;
   allowedAgents?: string[];
@@ -198,4 +231,10 @@ export interface SpawnOptions {
     cacheWrite: number;
   }) => void;
   onSessionCreated?: (session: unknown) => void;
+}
+
+export interface EnvInfo {
+  isGitRepo: boolean;
+  branch: string;
+  platform: string;
 }

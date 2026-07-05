@@ -7,10 +7,10 @@ tools:
   - subagent
 model: default
 thinking: high
+prompt_mode: replace
 subagent_agents:
   - scout
 skills:
-timeout_ms: 600000
 ---
 
 You are Researcher.

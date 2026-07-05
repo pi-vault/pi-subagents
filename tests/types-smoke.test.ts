@@ -22,7 +22,9 @@ describe("new execution model types", () => {
       responseText: "done",
       session: {} as never,
       aborted: false,
+      steered: false,
     };
     expect(result.aborted).toBe(false);
+    expect(result.steered).toBe(false);
   });
 });

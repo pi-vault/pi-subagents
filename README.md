@@ -39,7 +39,7 @@ Use `/agents` when you want to:
 - export a bundled agent into your global Pi agent directory
 - disable an agent with a global override
 - delete an existing global override
-- change subagent settings such as `maxConcurrency`, `maxRecursiveLevel`, and `defaultTimeoutMs`
+- change subagent settings such as `maxConcurrency`, `maxRecursiveLevel`, `defaultMaxTurns`, and `graceTurns`
 
 ## Bundled Agents
 
@@ -88,7 +88,15 @@ Supported frontmatter fields:
 - `thinking` optional thinking level
 - `subagent_agents` optional allowlist of child agents this agent may invoke
 - `skills` optional skill policy: comma-separated names, `all`, or `none`
-- `timeout_ms` optional per-agent timeout in milliseconds
+- `timeout_ms` optional per-agent timeout in milliseconds (deprecated; prefer `max_turns`)
+- `prompt_mode` `replace` (default) or `append`; append layers on top of the parent prompt
+- `max_turns` maximum agentic turns before the agent is steered to wrap up (0 = unlimited)
+- `inherit_context` if `true`, fork the parent conversation into the agent
+- `run_in_background` if `true`, return immediately and run in background (not yet implemented)
+- `isolated` if `true`, agent gets no extension/MCP tools
+- `isolation` `worktree` to run in a temporary git worktree (not yet implemented)
+- `extensions` `true`, `false`/`none`, or comma-separated list of allowed extensions
+- `disallowed_tools` comma-separated list of tools to remove from the agent's allowlist
 
 If you create an agent from `/agents`, you can edit the generated markdown later to refine its prompt or `skills`.
 

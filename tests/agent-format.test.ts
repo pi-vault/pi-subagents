@@ -528,6 +528,185 @@ describe("serializeAgent", () => {
   });
 });
 
+describe("new frontmatter fields", () => {
+  test("parses prompt_mode: replace", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nprompt_mode: replace\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.promptMode).toBe("replace");
+  });
+
+  test("parses prompt_mode: append", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nprompt_mode: append\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.promptMode).toBe("append");
+  });
+
+  test("defaults prompt_mode to replace for invalid value", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nprompt_mode: invalid\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.promptMode).toBe("replace");
+  });
+
+  test("prompt_mode is undefined when omitted", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.promptMode).toBeUndefined();
+  });
+
+  test("parses max_turns as non-negative integer", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nmax_turns: 30\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.maxTurns).toBe(30);
+  });
+
+  test("parses max_turns: 0 as unlimited", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nmax_turns: 0\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.maxTurns).toBe(0);
+  });
+
+  test("ignores invalid max_turns", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nmax_turns: abc\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.maxTurns).toBeUndefined();
+  });
+
+  test("parses isolated: true", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nisolated: true\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.isolated).toBe(true);
+  });
+
+  test("parses isolated: false", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nisolated: false\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.isolated).toBe(false);
+  });
+
+  test("parses inherit_context: true", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\ninherit_context: true\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.inheritContext).toBe(true);
+  });
+
+  test("parses run_in_background: true", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nrun_in_background: true\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.runInBackground).toBe(true);
+  });
+
+  test("parses isolation: worktree", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nisolation: worktree\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.isolation).toBe("worktree");
+  });
+
+  test("ignores invalid isolation value", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nisolation: docker\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.isolation).toBeUndefined();
+  });
+
+  test("parses extensions: false", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nextensions: false\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.extensions).toBe(false);
+  });
+
+  test("parses extensions: none as false", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nextensions: none\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.extensions).toBe(false);
+  });
+
+  test("parses extensions: true", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nextensions: true\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.extensions).toBe(true);
+  });
+
+  test("parses extensions as CSV list", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nextensions: ext-a, ext-b\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.extensions).toEqual(["ext-a", "ext-b"]);
+  });
+
+  test("parses disallowed_tools as CSV", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\ndisallowed_tools: bash, write\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok)
+      expect(result.agent.disallowedTools).toEqual(["bash", "write"]);
+  });
+
+  test("disallowed_tools defaults to empty array when omitted", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.disallowedTools).toBeUndefined();
+  });
+
+  test("parses inherit_context: false", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\ninherit_context: false\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.inheritContext).toBe(false);
+  });
+
+  test("parses run_in_background: false", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nrun_in_background: false\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.runInBackground).toBe(false);
+  });
+
+  test("parses extensions as YAML array", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nextensions:\n  - ext-a\n  - ext-b\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.extensions).toEqual(["ext-a", "ext-b"]);
+  });
+});
+
 describe("round-trip", () => {
   test("parseAgentContent(path, serializeAgent(input)) yields same semantic definition", () => {
     const input: AgentCreationInput = {

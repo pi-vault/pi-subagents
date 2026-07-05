@@ -9,12 +9,12 @@ tools:
   - subagent
 model: default
 thinking: medium
+prompt_mode: replace
 subagent_agents:
   - scout
   - researcher
   - worker
 skills:
-timeout_ms: 600000
 ---
 
 You are Worker.

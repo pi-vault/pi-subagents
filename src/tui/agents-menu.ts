@@ -24,7 +24,8 @@ type MenuRow<T> = {
 type SettingsKey =
   | "maxConcurrency"
   | "maxRecursiveLevel"
-  | "defaultTimeoutMs";
+  | "defaultMaxTurns"
+  | "graceTurns";
 
 type SettingsMenuItem = {
   key: SettingsKey;
@@ -56,13 +57,26 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
     },
   },
   {
-    key: "defaultTimeoutMs",
-    label: "Default Timeout MS",
-    promptTitle: "Default Timeout MS",
-    formatValue: (config) => String(config.defaultTimeoutMs),
+    key: "defaultMaxTurns",
+    label: "Default Max Turns",
+    promptTitle: "Default Max Turns (0 = unlimited)",
+    formatValue: (config) =>
+      config.defaultMaxTurns === 0
+        ? "0 (unlimited)"
+        : String(config.defaultMaxTurns),
     parse: (raw) => {
       const value = Number(raw);
-      return Number.isInteger(value) && value > 0 ? value : undefined;
+      return Number.isInteger(value) && value >= 0 ? value : undefined;
+    },
+  },
+  {
+    key: "graceTurns",
+    label: "Grace Turns",
+    promptTitle: "Grace Turns (extra turns after soft limit)",
+    formatValue: (config) => String(config.graceTurns),
+    parse: (raw) => {
+      const value = Number(raw);
+      return Number.isInteger(value) && value >= 0 ? value : undefined;
     },
   },
 ];
