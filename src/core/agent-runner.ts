@@ -222,10 +222,10 @@ export async function runAgent(
   }
 
   // 3. Create ResourceLoader with policy-driven extension loading.
-  //    Extensions are disabled by default (noExtensions: true) unless
-  //    the agent explicitly sets extensions: true AND is not isolated.
+  //    Extensions disabled when agent is isolated, or explicitly disables them.
+  //    A string[] list (selective) or true (all) means extensions are enabled.
   const agentDir = getAgentDir();
-  const noExtensions = agentDef.isolated === true || agentDef.extensions !== true;
+  const noExtensions = agentDef.isolated === true || agentDef.extensions === false;
   const loader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir,

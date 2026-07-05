@@ -248,7 +248,6 @@ describe("runAgent", () => {
     expect(DefaultResourceLoader).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: "/tmp/test",
-        noExtensions: true,
         noSkills: true,
         noPromptTemplates: true,
         noThemes: true,
@@ -367,6 +366,20 @@ describe("runAgent", () => {
       await import("@earendil-works/pi-coding-agent");
 
     const agentDef = makeAgentDef({ isolated: false, extensions: true });
+    await runAgent(agentDef, makeRunOptions(), {});
+
+    expect(DefaultResourceLoader).toHaveBeenCalledWith(
+      expect.objectContaining({
+        noExtensions: false,
+      }),
+    );
+  });
+
+  it("sets noExtensions: false when extensions is a string array (selective)", async () => {
+    const { DefaultResourceLoader } =
+      await import("@earendil-works/pi-coding-agent");
+
+    const agentDef = makeAgentDef({ isolated: false, extensions: ["ext-a", "ext-b"] });
     await runAgent(agentDef, makeRunOptions(), {});
 
     expect(DefaultResourceLoader).toHaveBeenCalledWith(
