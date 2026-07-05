@@ -99,6 +99,10 @@ export class AgentManager {
           cwd: options.cwd,
           agentId: id,
           timeoutMs: options.timeoutMs,
+          maxTurns: options.maxTurns,
+          graceTurns: options.graceTurns,
+          inheritContext: options.inheritContext,
+          parentSystemPrompt: options.parentSystemPrompt,
           allowRecursion,
           signal: abortController.signal,
           onToolActivity: (activity: ToolActivity) => {
@@ -123,7 +127,11 @@ export class AgentManager {
         ctx as { model?: unknown; modelRegistry?: unknown },
       );
 
-      record.status = result.aborted ? "aborted" : "completed";
+      record.status = result.steered
+        ? "steered"
+        : result.aborted
+          ? "aborted"
+          : "completed";
       record.result = result.responseText;
       record.session = result.session;
     } catch (error) {
