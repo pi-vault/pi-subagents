@@ -7,6 +7,7 @@ tools:
   - subagent
 model: default
 thinking: medium
+prompt_mode: replace
 subagent_agents:
   - scout
   - researcher
