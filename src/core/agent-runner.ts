@@ -12,6 +12,7 @@ import type {
   EnvInfo,
   RunOptions,
   RunResult,
+  ToolActivity,
 } from "../shared/types.js";
 import { preloadSkills } from "./skill-loader.js";
 
@@ -343,6 +344,84 @@ export async function runAgent(
   }
 
   return { responseText, session: session as unknown, aborted, steered };
+}
+
+/**
+ * Resume an existing session with a new prompt.
+ * Reuses forwardAbortSignal and getLastAssistantText helpers.
+ */
+export async function resumeAgent(
+  session: AgentSession,
+  prompt: string,
+  options: {
+    onToolActivity?: (activity: ToolActivity) => void;
+    onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
+    signal?: AbortSignal;
+  } = {},
+): Promise<string> {
+  let responseText = "";
+  const cleanupAbort = forwardAbortSignal(session, options.signal);
+
+  const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+    if (event.type === "message_start") responseText = "";
+    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+      responseText += event.assistantMessageEvent.delta;
+    }
+    if (event.type === "tool_execution_start") {
+      options.onToolActivity?.({ type: "start", toolName: event.toolName });
+    }
+    if (event.type === "tool_execution_end") {
+      options.onToolActivity?.({ type: "end", toolName: event.toolName });
+    }
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      const usage = (event.message as { usage?: { input?: number; output?: number; cacheWrite?: number } }).usage;
+      if (usage) {
+        options.onAssistantUsage?.({
+          input: usage.input ?? 0,
+          output: usage.output ?? 0,
+          cacheWrite: usage.cacheWrite ?? 0,
+        });
+      }
+    }
+  });
+
+  try {
+    await session.prompt(prompt);
+  } finally {
+    unsubscribe();
+    cleanupAbort();
+  }
+
+  return responseText.trim() || getLastAssistantText(session);
+}
+
+/** Send a steering message to an active session. */
+export async function steerAgent(session: AgentSession, message: string): Promise<void> {
+  await session.steer(message);
+}
+
+/** Extract readable conversation text from a session for verbose output. */
+export function getAgentConversation(session: unknown): string {
+  const s = session as { messages?: Array<{ role: string; content?: unknown }> };
+  if (!s.messages) return "";
+
+  const lines: string[] = [];
+  for (const msg of s.messages) {
+    if (msg.role === "assistant") {
+      const content = msg.content as Array<{ type: string; text?: string }> | undefined;
+      if (content) {
+        const text = content.filter(b => b.type === "text").map(b => b.text ?? "").join("");
+        if (text.trim()) lines.push(`[assistant] ${text.trim()}`);
+      }
+    } else if (msg.role === "user") {
+      const content = msg.content;
+      const text = typeof content === "string" ? content : Array.isArray(content)
+        ? (content as Array<{ type: string; text?: string }>).filter(b => b.type === "text").map(b => b.text ?? "").join("")
+        : "";
+      if (text.trim()) lines.push(`[user] ${text.trim()}`);
+    }
+  }
+  return lines.join("\n\n");
 }
 
 /** Wire an AbortSignal to abort a session. Returns cleanup function. */
