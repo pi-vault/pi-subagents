@@ -63,7 +63,8 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
   const config: SubagentsConfig = {
     maxConcurrency: 3,
     maxRecursiveLevel: 3,
-    defaultTimeoutMs: 600_000,
+    defaultMaxTurns: 0,
+    graceTurns: 5,
   };
   const discovery: AgentDiscoveryResult = {
     agents: [
@@ -258,12 +259,14 @@ describe("subagents extension", () => {
     expect(SETTINGS_MENU_ITEMS.map((item) => item.label)).toEqual([
       "Max Concurrency",
       "Max Recursive Level",
-      "Default Timeout MS",
+      "Default Max Turns",
+      "Grace Turns",
     ]);
     expect(SETTINGS_MENU_ITEMS.map((item) => item.promptTitle)).toEqual([
       "Max Concurrency",
       "Max Recursive Level",
-      "Default Timeout MS",
+      "Default Max Turns (0 = unlimited)",
+      "Grace Turns (extra turns after soft limit)",
     ]);
   });
 
@@ -296,7 +299,8 @@ describe("subagents extension", () => {
       {
         maxConcurrency: 7,
         maxRecursiveLevel: 3,
-        defaultTimeoutMs: 600_000,
+        defaultMaxTurns: 0,
+        graceTurns: 5,
       },
     ]);
   });

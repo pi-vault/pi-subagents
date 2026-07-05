@@ -68,7 +68,7 @@ function createDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     }),
     loadConfig: () => ({
       exists: false,
-      config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultTimeoutMs: 600_000 },
+      config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultMaxTurns: 0, graceTurns: 5 },
     }),
     discoverAgents: () => createDiscovery([createAgent()]),
     discoverToolNames: () => ["bash", "read"],

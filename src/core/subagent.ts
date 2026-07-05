@@ -105,13 +105,13 @@ export function registerSubagentTool(
 
       try {
         const agentDef = parseAndResolveAgent(discovery, params);
-        const timeoutMs =
-          agentDef.timeoutMs ?? loadedConfig.config.defaultTimeoutMs;
+        const maxTurns =
+          agentDef.maxTurns ?? loadedConfig.config.defaultMaxTurns;
 
         const { id, record } = await deps.manager.spawnAndWait(ctx, agentDef, {
           prompt: params.task.trim(),
           cwd: effectiveCwd,
-          timeoutMs,
+          maxTurns,
           parentSignal: signal,
           currentDepth: 0,
           allowedAgents: agentDef.subagentAgents,
@@ -129,7 +129,7 @@ export function registerSubagentTool(
           task: params.task,
           sourcePath: agentDef.sourcePath,
           cwd: effectiveCwd,
-          timeoutMs,
+          timeoutMs: 0,
           durationMs: record.durationMs ?? 0,
           childSessionDir: "",
           childSessionPath: "",
@@ -214,13 +214,13 @@ export function registerAgentCommand(
 
       try {
         const agentDef = parseAndResolveAgent(discovery, input);
-        const timeoutMs =
-          agentDef.timeoutMs ?? loadedConfig.config.defaultTimeoutMs;
+        const maxTurns =
+          agentDef.maxTurns ?? loadedConfig.config.defaultMaxTurns;
 
         const { record } = await deps.manager.spawnAndWait(ctx, agentDef, {
           prompt: input.task.trim(),
           cwd: ctx.cwd,
-          timeoutMs,
+          maxTurns,
           currentDepth: 0,
           allowedAgents: agentDef.subagentAgents,
         });
@@ -235,7 +235,7 @@ export function registerAgentCommand(
             task: input.task,
             sourcePath: agentDef.sourcePath,
             cwd: ctx.cwd,
-            timeoutMs,
+            timeoutMs: 0,
             durationMs: record.durationMs ?? 0,
             childSessionDir: "",
             childSessionPath: "",

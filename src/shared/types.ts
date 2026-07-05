@@ -1,7 +1,8 @@
 export interface SubagentsConfig {
   maxConcurrency: number;
   maxRecursiveLevel: number;
-  defaultTimeoutMs: number;
+  defaultMaxTurns: number;
+  graceTurns: number;
 }
 
 export interface ResolvedPaths {

@@ -9,7 +9,8 @@ import type {
 export const DEFAULT_CONFIG: SubagentsConfig = {
   maxConcurrency: 3,
   maxRecursiveLevel: 3,
-  defaultTimeoutMs: 600_000,
+  defaultMaxTurns: 0,
+  graceTurns: 5,
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -27,7 +28,8 @@ export function saveConfig(
       {
         maxConcurrency: config.maxConcurrency,
         maxRecursiveLevel: config.maxRecursiveLevel,
-        defaultTimeoutMs: config.defaultTimeoutMs,
+        defaultMaxTurns: config.defaultMaxTurns,
+        graceTurns: config.graceTurns,
       },
       null,
       2,
@@ -71,9 +73,12 @@ export function loadConfig(paths: ResolvedPaths): LoadedConfig {
       maxRecursiveLevel: isFiniteNumber(raw.maxRecursiveLevel)
         ? raw.maxRecursiveLevel
         : DEFAULT_CONFIG.maxRecursiveLevel,
-      defaultTimeoutMs: isFiniteNumber(raw.defaultTimeoutMs)
-        ? raw.defaultTimeoutMs
-        : DEFAULT_CONFIG.defaultTimeoutMs,
+      defaultMaxTurns: isFiniteNumber(raw.defaultMaxTurns)
+        ? raw.defaultMaxTurns
+        : DEFAULT_CONFIG.defaultMaxTurns,
+      graceTurns: isFiniteNumber(raw.graceTurns)
+        ? raw.graceTurns
+        : DEFAULT_CONFIG.graceTurns,
     },
     exists: true,
   };
