@@ -312,6 +312,9 @@ export function registerSubagentTool(
             },
           });
 
+          // Register in batch tracker for smart group detection
+          deps.registerBatchAgent?.(id);
+
           const bgRecord = deps.manager.getRecord(id);
           const queued = bgRecord?.status === "queued";
           return {

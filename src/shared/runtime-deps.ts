@@ -37,4 +37,6 @@ export interface RuntimeDeps {
   groupJoin?: GroupJoinManager;
   pendingNudges?: Map<string, ReturnType<typeof setTimeout>>;
   defaultJoinMode?: JoinMode;
+  registerBatchAgent?: (id: string) => void;
+  disposeBatchTracker?: () => void;
 }

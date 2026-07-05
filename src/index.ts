@@ -19,6 +19,7 @@ import {
   registerAgentCommand,
   registerSubagentTool,
 } from "./core/subagent.js";
+import { SmartBatchTracker } from "./core/smart-batch-tracker.js";
 import type { JoinMode, NotificationDetails } from "./shared/types.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
@@ -127,6 +128,11 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
     if (record.resultConsumed) return;
 
+    // If agent is in the current batch, defer notification to finalizeBatch
+    if (tracker.isInCurrentBatch(record.id)) {
+      return;
+    }
+
     const joinResult = groupJoin.onAgentComplete(record);
     if (joinResult === "pass") {
       // Hold briefly so get_subagent_result can cancel before we send
@@ -148,6 +154,26 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     }
   });
 
+  function sendNudge(record: Parameters<typeof formatTaskNotification>[0]): void {
+    const notification = formatTaskNotification(record);
+    (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+      {
+        customType: "subagent-notification",
+        content: notification,
+        display: true,
+        details: buildNotificationDetails(record),
+      } as unknown as Parameters<typeof pi.sendMessage>[0],
+      { deliverAs: "followUp", triggerTurn: true },
+    );
+  }
+
+  const tracker = new SmartBatchTracker(
+    groupJoin,
+    (id) => manager.getRecord(id),
+    sendNudge,
+    () => deps.defaultJoinMode ?? "smart",
+  );
+
   const deps: RuntimeDeps = {
     resolvePaths,
     loadConfig,
@@ -163,6 +189,8 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     groupJoin,
     pendingNudges,
     defaultJoinMode: "smart" as JoinMode,
+    registerBatchAgent: (id) => tracker.register(id),
+    disposeBatchTracker: () => tracker.dispose(),
   };
 
   // Apply persisted settings to live state
@@ -333,6 +361,7 @@ export function registerSubagentsExtension(
     deps.manager.abortAll();
     deps.manager.dispose();
     deps.groupJoin?.dispose();
+    deps.disposeBatchTracker?.();
   });
 
   // Clear completed on session switch (keep running ones)
