@@ -6,10 +6,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type {
+  NotificationDetails,
   SubagentCommandMessage,
   SubagentExecutionDetails,
   SubagentToolInput,
 } from "../shared/types.js";
+import { formatMs, formatTokens, formatTurns } from "./format.js";
 
 const MAX_TASK_PREVIEW = 80;
 const MAX_ACTIVITY_PREVIEW = 72;
@@ -239,4 +241,47 @@ export function toSubagentCommandMessage(result: {
     display: true,
     details: result.details,
   };
+}
+
+type NotifTheme = { fg(color: string, text: string): string; bold(text: string): string };
+
+export function buildNotificationText(
+  d: NotificationDetails,
+  expanded: boolean,
+  theme: NotifTheme,
+): string {
+  const isError = d.status === "error" || d.status === "stopped" || d.status === "aborted";
+  const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+  const statusText = isError
+    ? d.status
+    : d.status === "steered"
+      ? "completed (steered)"
+      : "completed";
+
+  let line = `${icon} ${theme.bold(d.description)} ${theme.fg("dim", statusText)}`;
+
+  const parts: string[] = [];
+  if (d.turnCount > 0) parts.push(formatTurns(d.turnCount, d.maxTurns));
+  if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
+  if (d.totalTokens > 0) parts.push(formatTokens(d.totalTokens));
+  if (d.durationMs > 0) parts.push(formatMs(d.durationMs));
+  if (parts.length) {
+    line +=
+      "\n  " +
+      parts.map((p) => theme.fg("dim", p)).join(` ${theme.fg("dim", "·")} `);
+  }
+
+  if (expanded) {
+    const lines = d.resultPreview.split("\n").slice(0, 30);
+    for (const l of lines) line += `\n${theme.fg("dim", `  ${l}`)}`;
+  } else {
+    const preview = d.resultPreview.split("\n")[0]?.slice(0, 80) ?? "";
+    line += `\n  ${theme.fg("dim", `⎿  ${preview}`)}`;
+  }
+
+  if (d.outputFile) {
+    line += `\n  ${theme.fg("muted", `transcript: ${d.outputFile}`)}`;
+  }
+
+  return line;
 }
