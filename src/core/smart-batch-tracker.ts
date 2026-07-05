@@ -71,5 +71,6 @@ export class SmartBatchTracker {
       clearTimeout(this.batchFinalizeTimer);
       this.batchFinalizeTimer = undefined;
     }
+    this.currentBatchAgents = [];
   }
 }

@@ -145,6 +145,30 @@ describe("SmartBatchTracker", () => {
     expect(sendNudge).not.toHaveBeenCalled();
   });
 
+  it("dispose() clears the timer and pending batch so registerGroup is never called", () => {
+    const { groupJoin, registerGroup } = makeGroupJoin();
+    const records = new Map<string, AgentRecord>();
+    const sendNudge = vi.fn();
+
+    const tracker = new SmartBatchTracker(
+      groupJoin,
+      (id) => records.get(id),
+      sendNudge,
+      () => "smart" as JoinMode,
+    );
+
+    tracker.register("a1");
+    tracker.register("a2");
+
+    // Timer is running — dispose before it fires
+    tracker.dispose();
+
+    vi.advanceTimersByTime(100);
+
+    expect(registerGroup).not.toHaveBeenCalled();
+    expect(sendNudge).not.toHaveBeenCalled();
+  });
+
   it("debounce timer resets on each new registration", () => {
     const { groupJoin, registerGroup } = makeGroupJoin();
     const records = new Map<string, AgentRecord>();
