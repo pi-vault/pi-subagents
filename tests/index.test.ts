@@ -285,12 +285,14 @@ describe("subagents extension", () => {
       "Max Recursive Level",
       "Default Max Turns",
       "Grace Turns",
+      "Default Join Mode",
     ]);
     expect(SETTINGS_MENU_ITEMS.map((item) => item.promptTitle)).toEqual([
       "Max Concurrency",
       "Max Recursive Level",
       "Default Max Turns (0 = unlimited)",
       "Grace Turns (extra turns after soft limit)",
+      "Default Join Mode (async, group, smart)",
     ]);
   });
 

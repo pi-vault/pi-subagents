@@ -4,6 +4,7 @@ import type {
   AgentCreationInput,
   AgentDefinition,
   AgentDiscoveryResult,
+  JoinMode,
   LoadedConfig,
   ResolvedPaths,
   SubagentsConfig,
@@ -35,4 +36,5 @@ export interface RuntimeDeps {
   manager: AgentManager;
   groupJoin?: GroupJoinManager;
   pendingNudges?: Map<string, ReturnType<typeof setTimeout>>;
+  defaultJoinMode?: JoinMode;
 }

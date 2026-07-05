@@ -14,11 +14,12 @@ import { GroupJoinManager } from "./core/group-join-manager.js";
 import { getAgentConversation } from "./core/agent-runner.js";
 import { loadConfig, saveConfig } from "./core/config.js";
 import { resolvePaths } from "./core/paths.js";
+import { loadSettings, applySettings } from "./core/settings.js";
 import {
   registerAgentCommand,
   registerSubagentTool,
 } from "./core/subagent.js";
-import type { NotificationDetails } from "./shared/types.js";
+import type { JoinMode, NotificationDetails } from "./shared/types.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
 import { renderSubagentMessage } from "./tui/render.js";
@@ -147,7 +148,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     }
   });
 
-  return {
+  const deps: RuntimeDeps = {
     resolvePaths,
     loadConfig,
     discoverAgents,
@@ -161,7 +162,19 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     manager,
     groupJoin,
     pendingNudges,
+    defaultJoinMode: "smart" as JoinMode,
   };
+
+  // Apply persisted settings to live state
+  const settings = loadSettings(process.cwd());
+  applySettings(settings, {
+    setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
+    setDefaultJoinMode: (mode) => {
+      deps.defaultJoinMode = mode;
+    },
+  });
+
+  return deps;
 }
 
 export function registerSubagentsExtension(
