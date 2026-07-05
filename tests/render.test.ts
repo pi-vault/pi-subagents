@@ -31,6 +31,7 @@ function createDetails(
       meta: "/sessions/subagent-artifacts/run-123_Scout_0_meta.json",
     },
     model: "openai/gpt-5",
+    thinking: undefined,
     stopReason: "end",
     exitCode: 0,
     stderr: "",
@@ -146,5 +147,35 @@ describe("subagent render helpers", () => {
     expect(message.customType).toBe("pi-subagent-result");
     expect(message.display).toBe(true);
     expect(message.details?.agent).toBe("Scout");
+  });
+
+  test("renders steered status with warning color", () => {
+    const text = buildSubagentResultText(
+      "wrapped up",
+      createDetails({ status: "steered", stopReason: "steered" }),
+      false,
+      theme,
+    );
+    expect(text).toContain("STEERED");
+  });
+
+  test("renders thinking level in expanded details", () => {
+    const text = buildSubagentResultText(
+      "done",
+      createDetails({ thinking: "high" }),
+      true,
+      theme,
+    );
+    expect(text).toContain("thinking: high");
+  });
+
+  test("renders unlimited turns", () => {
+    const text = buildSubagentResultText(
+      "done",
+      createDetails({ maxTurns: 0 }),
+      true,
+      theme,
+    );
+    expect(text).toContain("turns: unlimited");
   });
 });

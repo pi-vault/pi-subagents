@@ -117,6 +117,7 @@ export interface SubagentExecutionDetails {
   childSessionPath: string;
   artifactPaths?: ArtifactPaths;
   model?: string;
+  thinking?: string;
   stopReason: string;
   exitCode: number | null;
   stderr: string;

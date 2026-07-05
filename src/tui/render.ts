@@ -132,6 +132,9 @@ export function buildSubagentResultText(
       `turns: ${details.maxTurns === 0 ? "unlimited" : details.maxTurns}`,
     ),
   );
+  if (details.thinking) {
+    lines.push(theme.fg("muted", `thinking: ${details.thinking}`));
+  }
   lines.push(theme.fg("muted", `duration: ${details.durationMs}ms`));
   lines.push(theme.fg("muted", `usage: ${formatUsage(details)}`));
   lines.push(theme.fg("muted", `stop reason: ${details.stopReason || "-"}`));
