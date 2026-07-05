@@ -286,6 +286,8 @@ describe("subagents extension", () => {
       "Default Max Turns",
       "Grace Turns",
       "Default Join Mode",
+      "Widget Mode",
+      "Fleet View",
     ]);
     expect(SETTINGS_MENU_ITEMS.map((item) => item.promptTitle)).toEqual([
       "Max Concurrency",
@@ -293,6 +295,8 @@ describe("subagents extension", () => {
       "Default Max Turns (0 = unlimited)",
       "Grace Turns (extra turns after soft limit)",
       "Default Join Mode (async, group, smart)",
+      "Widget Mode (all / background / off)",
+      "Fleet View (true / false)",
     ]);
   });
 

@@ -10,6 +10,7 @@ import type {
   AgentDiscoveryDiagnostic,
   ResolvedPaths,
   SubagentsConfig,
+  WidgetMode,
 } from "../shared/types.js";
 
 type MenuChoice<T> = { label: string; value: T };
@@ -26,15 +27,17 @@ type SettingsKey =
   | "maxRecursiveLevel"
   | "defaultMaxTurns"
   | "graceTurns"
-  | "defaultJoinMode";
+  | "defaultJoinMode"
+  | "widgetMode"
+  | "fleetView";
 
 type SettingsMenuItem = {
   key: SettingsKey;
   label: string;
   promptTitle: string;
-  formatValue: (config: SubagentsConfig) => string;
-  parse: (raw: string) => number | string | undefined;
-  apply?: (value: number | string, deps: RuntimeDeps) => void;
+  formatValue: (config: SubagentsConfig, deps?: Partial<RuntimeDeps>) => string;
+  parse: (raw: string) => number | string | boolean | undefined;
+  apply?: (value: number | string | boolean, deps: RuntimeDeps) => void;
 };
 
 export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
@@ -99,6 +102,34 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
       if (deps.defaultJoinMode !== undefined) {
         deps.defaultJoinMode = value as "async" | "group" | "smart";
       }
+    },
+  },
+  {
+    key: "widgetMode",
+    label: "Widget Mode",
+    promptTitle: "Widget Mode (all / background / off)",
+    formatValue: (_config, deps) => deps?.widgetMode ?? "background",
+    parse: (raw) => {
+      const t = raw.trim();
+      return t === "all" || t === "background" || t === "off" ? t : undefined;
+    },
+    apply: (value, deps) => {
+      deps.widgetMode = value as WidgetMode;
+      deps.setWidgetMode?.(value as WidgetMode);
+    },
+  },
+  {
+    key: "fleetView",
+    label: "Fleet View",
+    promptTitle: "Fleet View (true / false)",
+    formatValue: (_config, deps) => String(deps?.fleetView ?? true),
+    parse: (raw) => {
+      const t = raw.trim().toLowerCase();
+      return t === "true" ? true : t === "false" ? false : undefined;
+    },
+    apply: (value, deps) => {
+      deps.fleetView = value as boolean;
+      deps.setFleetView?.(value as boolean);
     },
   },
 ];
@@ -321,11 +352,12 @@ async function promptForAgentName(
 
 function buildSettingsRows(
   config: SubagentsConfig,
+  deps: RuntimeDeps,
 ): Array<MenuRow<SettingsKey | "back">> {
   return [
     ...SETTINGS_MENU_ITEMS.map((item) => ({
       label: item.label,
-      detail: item.formatValue(config),
+      detail: item.formatValue(config, deps),
       value: item.key,
     })),
     { label: "Back", value: "back", kind: "back" },
@@ -469,7 +501,7 @@ export async function runAgentsMenuSettingsFlow(
     const selected = await showRowsMenu(
       ctx,
       "Settings",
-      buildSettingsRows(config),
+      buildSettingsRows(config, deps),
       "Select a setting to edit",
     );
 
@@ -482,7 +514,7 @@ export async function runAgentsMenuSettingsFlow(
       return;
     }
 
-    const raw = await ctx.ui.input(item.promptTitle, item.formatValue(config));
+    const raw = await ctx.ui.input(item.promptTitle, item.formatValue(config, deps));
     if (raw === undefined) {
       continue;
     }
