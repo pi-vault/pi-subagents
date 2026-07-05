@@ -238,8 +238,7 @@ export function registerSubagentTool(
           },
         );
 
-        // Resolve model string to a Model object via registry (if available)
-        let _resolvedModel: unknown;
+        // Validate model string against registry (if available)
         if (resolved.model) {
           const registry = (
             ctx as {
@@ -286,9 +285,6 @@ export function registerSubagentTool(
                 },
               };
             }
-            _resolvedModel = registry
-              .listModels()
-              .find((m) => m.id === match.id && m.provider === match.provider);
           }
         }
 
