@@ -1,5 +1,7 @@
 export type JoinMode = "async" | "group" | "smart";
 
+export type WidgetMode = "all" | "background" | "off";
+
 export interface NotificationDetails {
   id: string;
   description: string;
@@ -175,6 +177,7 @@ export interface ToolActivity {
 export interface AgentInvocation {
   agent: string;
   task: string;
+  description?: string;
   cwd?: string;
   model?: string;
   thinking?: string;
@@ -186,6 +189,7 @@ export interface AgentInvocation {
 export interface AgentRecord {
   id: string;
   type: string;
+  description: string;
   status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
   result?: string;
   error?: string;
@@ -247,6 +251,7 @@ export interface RunResult {
 export interface SpawnOptions {
   prompt: string;
   cwd: string;
+  description?: string;
   maxTurns?: number;
   graceTurns?: number;
   isolated?: boolean;

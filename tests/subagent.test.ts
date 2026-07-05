@@ -47,6 +47,7 @@ function completedRecord(result = "done"): AgentRecord {
   return {
     id: "test-inv",
     type: "subagent",
+    description: "test task",
     status: "completed",
     startedAt: 1000,
     durationMs: 42,
@@ -275,6 +276,7 @@ describe("background spawn", () => {
     vi.spyOn(manager, "getRecord").mockReturnValue({
       id: "agent-bg-1",
       type: "Scout",
+      description: "background task",
       status: "running",
       toolUses: 0,
       turnCount: 0,

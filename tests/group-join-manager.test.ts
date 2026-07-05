@@ -6,6 +6,7 @@ function makeRecord(id: string, status: AgentRecord["status"] = "completed"): Ag
   return {
     id,
     type: "test",
+    description: "test",
     status,
     toolUses: 0,
     turnCount: 0,
