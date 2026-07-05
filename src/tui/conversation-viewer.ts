@@ -182,8 +182,6 @@ export class ConversationViewer implements Component {
         `${statusIcon} ${th.bold(this.record.type)}  ${th.fg("muted", this.record.description)} ${th.fg("dim", "·")} ${th.fg("dim", headerParts.join(" · "))}`,
       ),
     );
-    const invocationLine = this.invocationLine();
-    if (invocationLine) lines.push(row(invocationLine));
     lines.push(hrMid);
 
     // Content area — rebuild every render (live data, no cache needed)
@@ -307,14 +305,7 @@ export class ConversationViewer implements Component {
 
   private chromeLines(): number {
     // The composer adds one row above the footer hint while it's open.
-    // invocationLine() always returns undefined in this implementation.
     return CHROME_LINES_BASE + (this.composer ? 1 : 0);
-  }
-
-  // Always returns undefined — buildInvocationTags is not available in pi-subagents.
-  // Can be implemented later when that dependency is added.
-  private invocationLine(): undefined {
-    return undefined;
   }
 
   private buildContentLines(width: number): string[] {

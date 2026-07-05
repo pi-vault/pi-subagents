@@ -306,7 +306,6 @@ export function registerSubagentTool(
             isolation: params.isolation as "worktree" | undefined,
             ...bgCallbacks,
             onSessionCreated: (session) => {
-              bgCallbacks.onSessionCreated?.(session);
               try {
                 const sessionPath = createOutputFilePath(effectiveCwd, id, `bg-${Date.now()}`);
                 writeInitialEntry(sessionPath, id, params.task.trim(), effectiveCwd);

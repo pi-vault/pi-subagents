@@ -12,7 +12,6 @@ export interface AgentActivity {
   activeTools: Map<string, string>;
   toolUses: number;
   responseText: string;
-  session?: unknown;
   turnCount: number;
   maxTurns?: number;
   lifetimeUsage: LifetimeUsage;
@@ -35,7 +34,6 @@ export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => 
     turnCount: 1,
     maxTurns,
     responseText: "",
-    session: undefined,
     lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
   };
 
@@ -61,9 +59,6 @@ export function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => 
     onTurnEnd: (turnCount: number) => {
       state.turnCount = turnCount;
       onStreamUpdate?.();
-    },
-    onSessionCreated: (session: unknown) => {
-      state.session = session;
     },
     onUsage: (usage: LifetimeUsage) => {
       state.lifetimeUsage.input += usage.input;

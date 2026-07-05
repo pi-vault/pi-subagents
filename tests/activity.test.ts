@@ -17,7 +17,6 @@ describe("createActivityTracker", () => {
     expect(state.toolUses).toBe(0);
     expect(state.turnCount).toBe(1);
     expect(state.responseText).toBe("");
-    expect(state.session).toBeUndefined();
     expect(state.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0 });
   });
 
@@ -63,13 +62,6 @@ describe("createActivityTracker", () => {
     expect(state.turnCount).toBe(3);
   });
 
-  it("onSessionCreated stores session", () => {
-    const { state, callbacks } = createActivityTracker();
-    const fakeSession = { messages: [] };
-    callbacks.onSessionCreated(fakeSession);
-    expect(state.session).toBe(fakeSession);
-  });
-
   it("onUsage accumulates into lifetimeUsage", () => {
     const { state, callbacks } = createActivityTracker();
     callbacks.onUsage({ input: 100, output: 50, cacheWrite: 25 });
@@ -88,10 +80,4 @@ describe("createActivityTracker", () => {
     expect(onStreamUpdate).toHaveBeenCalledTimes(5);
   });
 
-  it("onSessionCreated does not trigger onStreamUpdate", () => {
-    const onStreamUpdate = vi.fn();
-    const { callbacks } = createActivityTracker(undefined, onStreamUpdate);
-    callbacks.onSessionCreated({ messages: [] });
-    expect(onStreamUpdate).not.toHaveBeenCalled();
-  });
 });
