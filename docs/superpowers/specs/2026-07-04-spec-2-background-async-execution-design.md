@@ -1,5 +1,7 @@
 # Spec 2: Background/Async Execution
 
+> **Implementation Status (2025-07):** Fully implemented. `group-join-manager.ts`, `output-file.ts`, `worktree.ts`, `settings.ts` all exist. Background spawn, resume, steer, get_subagent_result, and steer_subagent tools all functional.
+
 Add non-blocking agent execution. The parent LLM spawns background agents, continues working, and collects results later. Includes concurrency queue, steering, session resume, worktree isolation, completion notifications, and JSONL transcripts.
 
 ## Prerequisites

@@ -457,6 +457,32 @@ export function serializeAgent(input: AgentCreationInput): string {
   } else if (Array.isArray(input.skills) && input.skills.length > 0) {
     frontmatter.push(`skills: ${uniqueStrings(input.skills).join(", ")}`);
   }
+  if (input.promptMode) {
+    frontmatter.push(`prompt_mode: ${input.promptMode}`);
+  }
+  if (input.maxTurns != null && input.maxTurns > 0) {
+    frontmatter.push(`max_turns: ${input.maxTurns}`);
+  }
+  if (input.inheritContext === true) {
+    frontmatter.push("inherit_context: true");
+  }
+  if (input.runInBackground === true) {
+    frontmatter.push("run_in_background: true");
+  }
+  if (input.isolated === true) {
+    frontmatter.push("isolated: true");
+  }
+  if (input.isolation) {
+    frontmatter.push(`isolation: ${input.isolation}`);
+  }
+  if (input.extensions === false) {
+    frontmatter.push("extensions: false");
+  } else if (Array.isArray(input.extensions) && input.extensions.length > 0) {
+    frontmatter.push(`extensions: ${input.extensions.join(", ")}`);
+  }
+  if (input.disallowedTools && input.disallowedTools.length > 0) {
+    frontmatter.push(`disallowed_tools: ${input.disallowedTools.join(", ")}`);
+  }
   frontmatter.push("---", systemPrompt);
 
   return `${frontmatter.join("\n")}\n`;

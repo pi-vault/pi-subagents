@@ -1,5 +1,9 @@
 # Session Model & Superpowers Implementation Plan
 
+> **Implementation Status (2025-07):** Phases 1-3 and 5 COMPLETE. Phase 4 (Parallel Execution) NOT IMPLEMENTED.
+> - All `timeoutMs` references in this document are stale — the field was fully removed from the codebase.
+> - See individual phase plans for detailed status.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace child-process spawning with in-process `AgentSession`, then progressively add tool schema extensions, background/async execution, parallel coordination, and UI components.

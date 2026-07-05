@@ -1,5 +1,9 @@
 # Spec 1b: Tool Schema, Frontmatter, and Execution Features
 
+> **Implementation Status (2025-07):** Fully implemented. Key deviations from original design:
+> - `timeout_ms` is no longer parsed at all (fully removed, not just deprecated).
+> - `timeoutMs` removed from `RunOptions`, `SpawnOptions`, and `SubagentExecutionDetails` (replaced by `maxTurns`).
+
 Extend the `subagent` tool schema, add new frontmatter fields, and wire their behavior: prompt modes, turn-based limits, context forking, and extension loading policies. Builds on Spec 1a (session model).
 
 ## Prerequisites

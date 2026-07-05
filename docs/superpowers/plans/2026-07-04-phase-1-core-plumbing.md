@@ -1,5 +1,10 @@
 # Phase 1: Core Plumbing Implementation Plan
 
+> **Implementation Status (2025-07):** COMPLETE. All tasks implemented.
+> - `agent-runner.ts` and `agent-manager.ts` created.
+> - Old files (`subagent-spawner.ts`, `nested-context.ts`, `execution-state.ts`) deleted.
+> - `timeoutMs` fully removed from codebase (not just deprecated) — references in this plan are stale.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace child-process spawning with in-process `AgentSession` for single-agent foreground execution.

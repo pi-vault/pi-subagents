@@ -1,5 +1,7 @@
 # Phase 4: Smart Batch Detection for Parallel Agent Grouping
 
+> **Implementation Status (2025-07):** NOT IMPLEMENTED. The explicit `parallel` tool and `wait_for_group` tool do not exist. A lightweight `smart-batch-tracker.ts` provides automatic notification grouping but not explicit parallel orchestration. This phase remains future work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Auto-detect when the LLM spawns multiple background agents in the same turn and group their completion notifications into a single consolidated nudge.

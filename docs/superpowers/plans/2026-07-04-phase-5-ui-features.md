@@ -1,5 +1,11 @@
 # Phase 5: UI Features Implementation Plan
 
+> **Implementation Status (2025-07):** COMPLETE with minor deviations:
+> - `statusIcon()` and `formatDuration()` removed from `format.ts` during dead-code cleanup.
+> - `viewer-keys.ts` inlined into `conversation-viewer.ts` (no separate file/test).
+> - `FleetList.onAgentFinished()` consolidated into time-based linger in `agentRecords()`.
+> - All other components (AgentWidget, FleetList, ConversationViewer, activity tracker, notification renderer) fully implemented with tests.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build four TUI components -- Agent Widget, Fleet List, Conversation Viewer, and enhanced notification renderer -- plus a live activity tracking infrastructure and settings extensions, so users see real-time agent status, can interactively browse conversations, and steer/stop agents.

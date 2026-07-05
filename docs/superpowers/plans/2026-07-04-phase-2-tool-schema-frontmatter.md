@@ -1,5 +1,11 @@
 # Phase 2: Tool Schema, Frontmatter, and Execution Features Implementation Plan
 
+> **Implementation Status (2025-07):** COMPLETE. All tasks implemented including Task 9 (timeoutMs removal).
+> - `invocation-config.ts` and `model-resolver.ts` created.
+> - All frontmatter fields parsed and serialized.
+> - `timeoutMs` fully removed from all types and runtime paths — references in this plan are stale.
+> - `timeout_ms` is no longer parsed from frontmatter (complete removal, not backward-compat deprecation).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Extend the `subagent` tool with new parameters, parse new frontmatter fields, implement prompt modes (replace/append), turn-based limits, context forking, and extension loading policies.

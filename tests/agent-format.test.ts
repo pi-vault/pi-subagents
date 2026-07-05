@@ -769,4 +769,68 @@ describe("round-trip", () => {
       },
     });
   });
+
+  test("round-trip preserves Phase 2 frontmatter fields", () => {
+    const input: AgentCreationInput = {
+      description: "Test agent",
+      tools: ["read", "bash"],
+      subagentAgents: [],
+      systemPrompt: "Do work.",
+      promptMode: "append",
+      maxTurns: 10,
+      inheritContext: true,
+      runInBackground: true,
+      isolated: true,
+      isolation: "worktree",
+      extensions: ["ext-a", "ext-b"],
+      disallowedTools: ["write", "edit"],
+    };
+
+    const serialized = serializeAgent(input);
+    const parsed = parseAgentContent("/tmp/phase2.md", serialized);
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: {
+        promptMode: "append",
+        maxTurns: 10,
+        inheritContext: true,
+        runInBackground: true,
+        isolated: true,
+        isolation: "worktree",
+        extensions: ["ext-a", "ext-b"],
+        disallowedTools: ["write", "edit"],
+      },
+    });
+  });
+
+  test("round-trip omits Phase 2 fields when at defaults", () => {
+    const input: AgentCreationInput = {
+      description: "Minimal",
+      tools: ["read"],
+      subagentAgents: [],
+      systemPrompt: "body",
+    };
+
+    const serialized = serializeAgent(input);
+    expect(serialized).not.toContain("prompt_mode:");
+    expect(serialized).not.toContain("max_turns:");
+    expect(serialized).not.toContain("inherit_context:");
+    expect(serialized).not.toContain("run_in_background:");
+    expect(serialized).not.toContain("isolated:");
+    expect(serialized).not.toContain("isolation:");
+    expect(serialized).not.toContain("extensions:");
+    expect(serialized).not.toContain("disallowed_tools:");
+  });
+
+  test("serializeAgent writes extensions: false", () => {
+    const input: AgentCreationInput = {
+      description: "d",
+      tools: ["read"],
+      subagentAgents: [],
+      systemPrompt: "body",
+      extensions: false,
+    };
+    const serialized = serializeAgent(input);
+    expect(serialized).toContain("extensions: false");
+  });
 });

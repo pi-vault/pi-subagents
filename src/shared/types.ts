@@ -86,6 +86,14 @@ export interface AgentCreationInput {
   subagentAgents: string[];
   skills?: string[] | boolean;
   systemPrompt: string;
+  promptMode?: "replace" | "append";
+  maxTurns?: number;
+  inheritContext?: boolean;
+  runInBackground?: boolean;
+  isolated?: boolean;
+  isolation?: "worktree";
+  extensions?: true | string[] | false;
+  disallowedTools?: string[];
 }
 
 export interface SubagentToolInput {
