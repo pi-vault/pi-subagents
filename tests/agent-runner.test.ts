@@ -4,7 +4,6 @@ import {
   buildAgentPrompt,
   buildParentContext,
   resumeAgent,
-  steerAgent,
   getAgentConversation,
 } from "../src/core/agent-runner.js";
 import type {
@@ -547,20 +546,6 @@ describe("resumeAgent", () => {
       },
     });
     expect(toolStartCount).toBe(1);
-  });
-});
-
-describe("steerAgent", () => {
-  it("calls session.steer with the message", async () => {
-    const mockSession = {
-      steer: vi.fn().mockResolvedValue(undefined),
-      subscribe: vi.fn(() => () => {}),
-      prompt: vi.fn().mockResolvedValue(undefined),
-      abort: vi.fn(),
-      messages: [],
-    };
-    await steerAgent(mockSession as unknown as AgentSession, "steer message");
-    expect(mockSession.steer).toHaveBeenCalledWith("steer message");
   });
 });
 

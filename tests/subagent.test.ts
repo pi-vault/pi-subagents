@@ -55,7 +55,6 @@ function completedRecord(result = "done"): AgentRecord {
     toolUses: 0,
     turnCount: 0,
     lifetimeUsage: emptyUsage(),
-    compactionCount: 0,
   };
 }
 
@@ -281,7 +280,6 @@ describe("background spawn", () => {
       turnCount: 0,
       startedAt: Date.now(),
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
-      compactionCount: 0,
     });
 
     registerSubagentTool(

@@ -210,7 +210,7 @@ export interface AgentRecord {
   toolCallId?: string;
   outputFile?: string;
   outputCleanup?: () => void;
-  compactionCount: number;
+  compactionCount?: number;
 }
 
 export interface RunOptions {

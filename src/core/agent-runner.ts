@@ -395,11 +395,6 @@ export async function resumeAgent(
   return responseText.trim() || getLastAssistantText(session);
 }
 
-/** Send a steering message to an active session. */
-export async function steerAgent(session: AgentSession, message: string): Promise<void> {
-  await session.steer(message);
-}
-
 /** Extract readable conversation text from a session for verbose output. */
 export function getAgentConversation(session: unknown): string {
   const s = session as { messages?: Array<{ role: string; content?: unknown }> };
