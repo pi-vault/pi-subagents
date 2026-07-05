@@ -139,16 +139,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
       const timerId = setTimeout(() => {
         pendingNudges.delete(record.id);
         if (record.resultConsumed) return;
-        const notification = formatTaskNotification(record);
-        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
-          {
-            customType: "subagent-notification",
-            content: notification,
-            display: true,
-            details: buildNotificationDetails(record),
-          } as unknown as Parameters<typeof pi.sendMessage>[0],
-          { deliverAs: "followUp", triggerTurn: true },
-        );
+        sendNudge(record);
       }, NUDGE_HOLD_MS);
       pendingNudges.set(record.id, timerId);
     }
