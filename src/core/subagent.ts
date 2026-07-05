@@ -16,6 +16,8 @@ import {
   renderSubagentCall,
   renderSubagentResult,
 } from "../tui/render.js";
+import { resolveInvocationConfig } from "./invocation-config.js";
+import { resolveModel } from "./model-resolver.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
@@ -23,6 +25,43 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   task: Type.String({ description: "Task to delegate to the agent" }),
   cwd: Type.Optional(
     Type.String({ description: "Working directory for the subagent" }),
+  ),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "Model override (provider/modelId or fuzzy name like 'haiku', 'sonnet')",
+    }),
+  ),
+  thinking: Type.Optional(
+    Type.String({ description: "Thinking level: off, low, medium, high" }),
+  ),
+  max_turns: Type.Optional(
+    Type.Number({
+      description: "Maximum agentic turns before stopping",
+      minimum: 1,
+    }),
+  ),
+  isolated: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, agent gets no extension/MCP tools, only built-in tools",
+    }),
+  ),
+  inherit_context: Type.Optional(
+    Type.Boolean({
+      description: "If true, fork parent conversation into the agent",
+    }),
+  ),
+  run_in_background: Type.Optional(
+    Type.Boolean({
+      description: "Run in background and return agent ID immediately",
+    }),
+  ),
+  resume: Type.Optional(
+    Type.String({ description: "Agent ID to resume from previous context" }),
+  ),
+  isolation: Type.Optional(
+    Type.String({ description: "Run agent in a temporary git worktree" }),
   ),
 });
 
@@ -98,20 +137,174 @@ export function registerSubagentTool(
       _onUpdate,
       ctx: ExtensionContext,
     ) {
+      const effectiveCwd = resolve(params.cwd ?? ctx.cwd);
+
+      // Stub checks for unimplemented features
+      if (params.run_in_background) {
+        return {
+          content: [{ type: "text", text: "run_in_background is not yet implemented. It will be available in a future update." }],
+          isError: true,
+          details: {
+            status: "error" as const,
+            agent: params.agent,
+            task: params.task,
+            sourcePath: "",
+            cwd: effectiveCwd,
+            timeoutMs: 0,
+            durationMs: 0,
+            childSessionDir: "",
+            childSessionPath: "",
+            model: undefined,
+            stopReason: "error",
+            exitCode: null,
+            stderr: "run_in_background is not yet implemented",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+            recentToolActivity: [],
+          },
+        };
+      }
+      if (params.resume) {
+        return {
+          content: [{ type: "text", text: "resume is not yet implemented. It will be available in a future update." }],
+          isError: true,
+          details: {
+            status: "error" as const,
+            agent: params.agent,
+            task: params.task,
+            sourcePath: "",
+            cwd: effectiveCwd,
+            timeoutMs: 0,
+            durationMs: 0,
+            childSessionDir: "",
+            childSessionPath: "",
+            model: undefined,
+            stopReason: "error",
+            exitCode: null,
+            stderr: "resume is not yet implemented",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+            recentToolActivity: [],
+          },
+        };
+      }
+      if (params.isolation) {
+        return {
+          content: [{ type: "text", text: "isolation is not yet implemented. It will be available in a future update." }],
+          isError: true,
+          details: {
+            status: "error" as const,
+            agent: params.agent,
+            task: params.task,
+            sourcePath: "",
+            cwd: effectiveCwd,
+            timeoutMs: 0,
+            durationMs: 0,
+            childSessionDir: "",
+            childSessionPath: "",
+            model: undefined,
+            stopReason: "error",
+            exitCode: null,
+            stderr: "isolation is not yet implemented",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+            recentToolActivity: [],
+          },
+        };
+      }
+
       const paths = deps.resolvePaths();
       const loadedConfig = deps.loadConfig(paths);
       const discovery = deps.discoverAgents(paths);
-      const effectiveCwd = resolve(params.cwd ?? ctx.cwd);
 
       try {
         const agentDef = parseAndResolveAgent(discovery, params);
-        const maxTurns =
-          agentDef.maxTurns ?? loadedConfig.config.defaultMaxTurns;
+
+        const resolved = resolveInvocationConfig(
+          {
+            model: agentDef.model,
+            thinking: agentDef.thinking,
+            maxTurns: agentDef.maxTurns,
+            isolated: agentDef.isolated,
+            inheritContext: agentDef.inheritContext,
+          },
+          {
+            model: params.model,
+            thinking: params.thinking,
+            maxTurns: params.max_turns,
+            isolated: params.isolated,
+            inheritContext: params.inherit_context,
+          },
+          {
+            model: undefined,
+            defaultMaxTurns: loadedConfig.config.defaultMaxTurns,
+          },
+        );
+
+        // Resolve model string to a Model object via registry (if available)
+        let _resolvedModel: unknown;
+        if (resolved.model) {
+          const registry = (
+            ctx as {
+              modelRegistry?: {
+                listModels?: () => Array<{
+                  id: string;
+                  provider: string;
+                  name?: string;
+                }>;
+              };
+            }
+          ).modelRegistry;
+          if (registry?.listModels) {
+            const match = resolveModel(resolved.model, registry.listModels());
+            if (!match) {
+              const available = registry
+                .listModels()
+                .map((m) => `${m.provider}/${m.id}`)
+                .join(", ");
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Unknown model: "${resolved.model}". Available models: ${available}`,
+                  },
+                ],
+                isError: true,
+                details: {
+                  status: "error" as const,
+                  agent: params.agent,
+                  task: params.task,
+                  sourcePath: "",
+                  cwd: effectiveCwd,
+                  timeoutMs: 0,
+                  durationMs: 0,
+                  childSessionDir: "",
+                  childSessionPath: "",
+                  model: resolved.model,
+                  stopReason: "error",
+                  exitCode: null,
+                  stderr: `Unknown model: "${resolved.model}". Available models: ${available}`,
+                  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+                  recentToolActivity: [],
+                },
+              };
+            }
+            _resolvedModel = registry
+              .listModels()
+              .find((m) => m.id === match.id && m.provider === match.provider);
+          }
+        }
+
+        // Get parent system prompt for append mode (if available on ctx)
+        const parentSystemPrompt =
+          (
+            ctx as { resourceLoader?: { getSystemPrompt?: () => string } }
+          ).resourceLoader?.getSystemPrompt?.() ?? undefined;
 
         const { id, record } = await deps.manager.spawnAndWait(ctx, agentDef, {
           prompt: params.task.trim(),
           cwd: effectiveCwd,
-          maxTurns,
+          maxTurns: resolved.maxTurns,
+          graceTurns: loadedConfig.config.graceTurns,
+          inheritContext: resolved.inheritContext,
+          parentSystemPrompt,
           parentSignal: signal,
           currentDepth: 0,
           allowedAgents: agentDef.subagentAgents,
@@ -122,9 +315,11 @@ export function registerSubagentTool(
           status:
             record.status === "completed"
               ? "success"
-              : record.status === "aborted"
-                ? "aborted"
-                : "error",
+              : record.status === "steered"
+                ? "steered"
+                : record.status === "aborted"
+                  ? "aborted"
+                  : "error",
           agent: agentDef.name,
           task: params.task,
           sourcePath: agentDef.sourcePath,
@@ -230,7 +425,14 @@ export function registerAgentCommand(
           content: record.result ?? "(no output)",
           display: true,
           details: {
-            status: record.status === "completed" ? "success" : "error",
+            status:
+              record.status === "completed"
+                ? "success"
+                : record.status === "steered"
+                  ? "steered"
+                  : record.status === "aborted"
+                    ? "aborted"
+                    : "error",
             agent: agentDef.name,
             task: input.task,
             sourcePath: agentDef.sourcePath,

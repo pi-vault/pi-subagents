@@ -80,6 +80,14 @@ export interface SubagentToolInput {
   agent: string;
   task: string;
   cwd?: string;
+  model?: string;
+  thinking?: string;
+  max_turns?: number;
+  isolated?: boolean;
+  inherit_context?: boolean;
+  run_in_background?: boolean;
+  resume?: string;
+  isolation?: string;
 }
 
 export interface SubagentUsage {

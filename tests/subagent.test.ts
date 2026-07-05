@@ -263,6 +263,106 @@ describe("registerSubagentTool", () => {
 });
 
 // ---------------------------------------------------------------------------
+// stub parameters
+// ---------------------------------------------------------------------------
+
+describe("stub parameters", () => {
+  test("returns error for run_in_background stub", async () => {
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, createDeps());
+
+    const tool = registeredTool();
+    const result = await (
+      tool as unknown as {
+        execute: (
+          id: string,
+          params: { agent: string; task: string; run_in_background?: boolean },
+          signal: AbortSignal | undefined,
+          onUpdate: undefined,
+          ctx: ExtensionContext,
+        ) => Promise<{
+          isError: boolean;
+          content: Array<{ type: string; text: string }>;
+        }>;
+      }
+    ).execute(
+      "tool-call-bg",
+      { agent: "Scout", task: "explore", run_in_background: true },
+      undefined,
+      undefined,
+      { cwd: "/repo" } as unknown as ExtensionContext,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain(
+      "run_in_background is not yet implemented",
+    );
+  });
+
+  test("returns error for resume stub", async () => {
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, createDeps());
+
+    const tool = registeredTool();
+    const result = await (
+      tool as unknown as {
+        execute: (
+          id: string,
+          params: { agent: string; task: string; resume?: string },
+          signal: AbortSignal | undefined,
+          onUpdate: undefined,
+          ctx: ExtensionContext,
+        ) => Promise<{
+          isError: boolean;
+          content: Array<{ type: string; text: string }>;
+        }>;
+      }
+    ).execute(
+      "tool-call-resume",
+      { agent: "Scout", task: "explore", resume: "agent-123" },
+      undefined,
+      undefined,
+      { cwd: "/repo" } as unknown as ExtensionContext,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("resume is not yet implemented");
+  });
+
+  test("returns error for isolation stub", async () => {
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, createDeps());
+
+    const tool = registeredTool();
+    const result = await (
+      tool as unknown as {
+        execute: (
+          id: string,
+          params: { agent: string; task: string; isolation?: string },
+          signal: AbortSignal | undefined,
+          onUpdate: undefined,
+          ctx: ExtensionContext,
+        ) => Promise<{
+          isError: boolean;
+          content: Array<{ type: string; text: string }>;
+        }>;
+      }
+    ).execute(
+      "tool-call-iso",
+      { agent: "Scout", task: "explore", isolation: "worktree" },
+      undefined,
+      undefined,
+      { cwd: "/repo" } as unknown as ExtensionContext,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain(
+      "isolation is not yet implemented",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // registerAgentCommand
 // ---------------------------------------------------------------------------
 
