@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { ExecutionStateStore } from "../src/core/execution-state.js";
+import { AgentManager } from "../src/core/agent-manager.js";
 import * as subagentsIndex from "../src/index.js";
 import extension, { registerSubagentsExtension } from "../src/index.js";
 import {
@@ -94,47 +94,12 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     disableAgentInUserScope: () => ({ ...primaryAgent, enabled: false }),
     deleteUserAgentOverride: () => {},
     saveConfig: () => {},
-    stateStore: new ExecutionStateStore(),
+    manager: new AgentManager(),
     ...overrides,
   };
 }
 
 describe("subagents extension", () => {
-  test("hydrates deferred slash requests on session_start", async () => {
-    const eventHandlers = new Map<string, (...args: unknown[]) => unknown>();
-    const pi = createPi(undefined, undefined, (event, handler) => {
-      eventHandlers.set(event, handler);
-    });
-
-    const deps = createMenuDeps();
-    registerSubagentsExtension(pi, deps);
-
-    const sessionManager = {
-      getEntries() {
-        return [
-          {
-            type: "custom",
-            customType: "pi-subagents:deferred-request",
-            data: {
-              requestId: "hydrate-1",
-              agent: "Scout",
-              task: "explore",
-              cwd: "/repo",
-              createdAt: 1000,
-            },
-          },
-        ] as never[];
-      },
-    };
-
-    await eventHandlers.get("session_start")?.({}, { sessionManager });
-
-    expect(deps.stateStore.getDeferredRequest("hydrate-1")).toMatchObject({
-      requestId: "hydrate-1",
-      agent: "Scout",
-    });
-  });
-
   test("loads without throwing and registers the subagent result message renderer", () => {
     const commands: Array<{ name: string; description?: string }> = [];
     const renderers: Array<{ customType: string; renderer: unknown }> = [];

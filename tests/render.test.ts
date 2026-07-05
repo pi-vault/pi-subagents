@@ -1,27 +1,16 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
-import { ExecutionStateStore } from "../src/core/execution-state.js";
+import { describe, expect, test } from "vitest";
 import {
   buildSubagentCallText,
   buildSubagentResultText,
   renderSubagentMessage,
   toSubagentCommandMessage,
 } from "../src/tui/render.js";
-import type {
-  SlashLiveDetails,
-  SubagentExecutionDetails,
-} from "../src/shared/types.js";
+import type { SubagentExecutionDetails } from "../src/shared/types.js";
 
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
 };
-
-function createTheme() {
-  return {
-    fg: (_color: string, text: string) => text,
-    bold: (text: string) => text,
-  };
-}
 
 function createDetails(
   overrides: Partial<SubagentExecutionDetails> = {},
@@ -65,46 +54,6 @@ function createDetails(
     ...overrides,
   };
 }
-
-function createSlashLiveDetails(
-  overrides: Partial<SlashLiveDetails> = {},
-): SlashLiveDetails {
-  return {
-    kind: "slash-live",
-    requestId: "req-1",
-    status: "running",
-    agent: "Scout",
-    task: "explore this repo",
-    cwd: "/repo",
-    durationMs: 42,
-    startedAt: 0,
-    recentToolActivity: [
-      { label: "read package", preview: '{"path":"package.json"}' },
-    ],
-    ...overrides,
-  };
-}
-
-describe("slash live state", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  test("tickLive refreshes duration from elapsed time", () => {
-    const store = new ExecutionStateStore();
-    store.startLive({
-      requestId: "req-widget",
-      agent: "Scout",
-      task: "inspect this repo",
-      cwd: "/repo",
-      startedAtMs: 1_000,
-    });
-
-    const result = store.tickLive("req-widget", 1_450);
-
-    expect(result?.durationMs).toBe(450);
-  });
-});
 
 describe("subagent render helpers", () => {
   test("renderCall includes agent, task preview, and cwd when present", () => {
@@ -167,216 +116,35 @@ describe("subagent render helpers", () => {
     expect(text).toContain("final answer");
   });
 
-  test("renders running slash card with agent, task, cwd, and recent activity", () => {
-    const text = buildSubagentResultText("", createSlashLiveDetails(), false, theme);
-
-    expect(text).toContain("RUNNING");
-    expect(text).toContain("Scout");
-    expect(text).toContain("explore this repo");
-    expect(text).toContain("cwd: /repo");
-    expect(text).toContain("tools: read package");
-  });
-
-  test("slash-live duration keeps advancing across renders while request is running", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"));
-
-    const store = new ExecutionStateStore();
-    const details = store.startLive({
-      requestId: "req-live-1",
-      agent: "Scout",
-      task: "inspect repo",
-      cwd: "/repo",
-      model: "gpt-5",
-    });
-
-    const component = renderSubagentMessage(
-      {
-        customType: "pi-subagent-result",
-        content: "",
-        display: true,
-        details,
-      } as never,
-      { expanded: false } as never,
-      createTheme() as never,
-      store,
-    );
-
-    expect(component.render(80).join("\n")).toContain("0ms");
-    vi.advanceTimersByTime(2400);
-    expect(component.render(80).join("\n")).toContain("2400ms");
-
-    vi.useRealTimers();
-  });
-
-  test("renderSubagentMessage resolves slash details from the latest snapshot", () => {
-    const store = new ExecutionStateStore();
-    const details = store.startLive({
-      requestId: "req-1",
-      agent: "Scout",
-      task: "inspect this repo",
-      cwd: "/repo",
-    });
-
-    store.updateLive("req-1", {
-      durationMs: 10,
-      activity: { label: "read done", preview: '{"path":"package.json"}' },
-    });
-
+  test("renderSubagentMessage renders completed details", () => {
     const text = renderSubagentMessage(
-      {
-        content: "",
-        details,
-      },
+      { content: "the answer", details: createDetails() },
       { expanded: false } as never,
-      createTheme() as never,
-      store,
+      theme as never,
     ).render(120).join("\n");
 
-    expect(text).toContain("read done");
+    expect(text).toContain("SUCCESS Scout");
   });
 
-  test("slash live render shows updated duration after a tick", () => {
-    const store = new ExecutionStateStore();
-    store.startLive({
-      requestId: "req-tick",
-      agent: "Scout",
-      task: "inspect this repo",
-      cwd: "/repo",
-      startedAtMs: 1_000,
-    });
-
-    store.tickLive("req-tick", 1_250);
-
-    const text = buildSubagentResultText(
-      "",
-      createSlashLiveDetails({ requestId: "req-tick", durationMs: 250 }),
-      false,
-      theme,
-    );
-
-    expect(text).toContain("duration: 250ms");
-  });
-
-  test("running inline slash card does not freeze at a stale duration across quiet renders", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-09T12:00:00.000Z"));
-
-    const store = new ExecutionStateStore();
-    const details = store.startLive({
-      requestId: "req-freeze-check",
-      agent: "scout",
-      task: "explore this repo",
-      cwd: "/repo",
-    });
-
-    const component = renderSubagentMessage(
-      { content: "", details },
+  test("renderSubagentMessage renders without details (plain text)", () => {
+    const text = renderSubagentMessage(
+      { content: "plain output" },
       { expanded: false } as never,
-      createTheme() as never,
-      store,
-    );
+      theme as never,
+    ).render(120).join("\n");
 
-    const first = component.render(120).join("\n");
-    vi.advanceTimersByTime(2500);
-    const second = component.render(120).join("\n");
-
-    expect(first).not.toContain("2500ms");
-    expect(second).toContain("2500ms");
-    vi.useRealTimers();
+    expect(text).toContain("plain output");
   });
 
-  test("slash live message component refreshes when snapshot changes", () => {
-    const store = new ExecutionStateStore();
-    const details = store.startLive({
-      requestId: "req-live",
-      agent: "Scout",
-      task: "inspect this repo",
-      cwd: "/repo",
-    });
-
-    const component = renderSubagentMessage(
-      {
-        content: "",
-        details,
-      },
-      { expanded: false } as never,
-      createTheme() as never,
-      store,
-    );
-
-    const initial = component.render(120).join("\n");
-    expect(initial).toContain("RUNNING");
-    expect(initial).not.toContain("read done");
-
-    store.updateLive("req-live", {
-      durationMs: 10,
-      activity: { label: "read done", preview: '{"path":"package.json"}' },
-    });
-
-    const updated = component.render(120).join("\n");
-    expect(updated).toContain("read done");
-  });
-
-  test("renderSubagentMessage shows final output after slash snapshot finalizes", () => {
-    const store = new ExecutionStateStore();
-    const details = store.startLive({
-      requestId: "req-final",
-      agent: "Scout",
-      task: "inspect this repo",
-      cwd: "/repo",
-    });
-
-    store.finalizeLive("req-final", {
-      content: "final answer",
+  test("toSubagentCommandMessage wraps details into message envelope", () => {
+    const message = toSubagentCommandMessage({
+      content: "done",
       isError: false,
       details: createDetails(),
     });
 
-    const text = renderSubagentMessage(
-      {
-        content: "",
-        details,
-      },
-      { expanded: true } as never,
-      createTheme() as never,
-      store,
-    ).render(120).join("\n");
-
-    expect(text).toContain("final output:");
-    expect(text).toContain("final answer");
-  });
-
-  test("expanded running slash card shows detailed recent tool activity", () => {
-    const text = buildSubagentResultText(
-      "",
-      createSlashLiveDetails({
-        requestId: "req-expanded",
-        recentToolActivity: [
-          { label: "read start", preview: '{"path":"package.json"}' },
-          { label: "read done", preview: '{"content":[{"type":"text","text":"ok"}]}' },
-        ],
-      }),
-      true,
-      theme,
-    );
-
-    expect(text).toContain("recent tools:");
-    expect(text).toContain("- read start:");
-    expect(text).toContain("- read done:");
-  });
-
-  test("toSubagentCommandMessage keeps live slash details when provided", () => {
-    const message = toSubagentCommandMessage({
-      content: "",
-      isError: false,
-      details: createSlashLiveDetails(),
-    });
-
-    expect(message.details).toMatchObject({
-      kind: "slash-live",
-      requestId: "req-1",
-      status: "running",
-    });
+    expect(message.customType).toBe("pi-subagent-result");
+    expect(message.display).toBe(true);
+    expect(message.details?.agent).toBe("Scout");
   });
 });

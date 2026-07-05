@@ -7,12 +7,11 @@ import {
   discoverToolNames,
   exportAgentToUserScope,
 } from "./core/agents.js";
+import { AgentManager } from "./core/agent-manager.js";
 import { loadConfig, saveConfig } from "./core/config.js";
-import { ExecutionStateStore } from "./core/execution-state.js";
 import { resolvePaths } from "./core/paths.js";
 import {
   registerAgentCommand,
-  registerSlashAgentBridge,
   registerSubagentTool,
 } from "./core/subagent.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
@@ -20,7 +19,7 @@ import { showAgentsMenu } from "./tui/agents-menu.js";
 import { renderSubagentMessage } from "./tui/render.js";
 
 export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
-  const stateStore = new ExecutionStateStore();
+  const manager = new AgentManager();
   return {
     resolvePaths,
     loadConfig,
@@ -32,7 +31,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     disableAgentInUserScope,
     deleteUserAgentOverride,
     saveConfig,
-    stateStore,
+    manager,
   };
 }
 
@@ -45,22 +44,21 @@ export function registerSubagentsExtension(
       msg as Parameters<typeof renderSubagentMessage>[0],
       opts,
       theme,
-      deps.stateStore,
     ),
   );
-  registerSlashAgentBridge(pi, deps);
   registerSubagentTool(pi, deps);
-  registerAgentCommand(pi, deps, undefined, () => true);
+  registerAgentCommand(pi, deps);
+
+  // Cleanup on session shutdown
+  pi.on("session_shutdown", () => {
+    deps.manager.dispose();
+  });
 
   pi.registerCommand("agents", {
     description: "Open the interactive pi-subagents agents menu",
     handler: async (_args, ctx) => {
       await showAgentsMenu(ctx, deps);
     },
-  });
-
-  pi.on("session_start", async (_event, ctx) => {
-    deps.stateStore.hydrateFromSession(ctx.sessionManager);
   });
 }
 
