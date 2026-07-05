@@ -1,6 +1,6 @@
 {
   "name": "@pi-vault/pi-subagents",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Pi extension for delegating tasks to isolated and specialized subagents",
   "author": "Lanh Hoang <lanhhoang@users.noreply.github.com>",
