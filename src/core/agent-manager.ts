@@ -62,6 +62,7 @@ export class AgentManager {
       type: agentDef.name,
       status: "running",
       toolUses: 0,
+      turnCount: 0,
       startedAt: Date.now(),
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       invocation: {
@@ -69,6 +70,7 @@ export class AgentManager {
         task: options.prompt,
         cwd: options.cwd,
       },
+      compactionCount: 0,
     };
     this.agents.set(id, record);
 
@@ -154,7 +156,7 @@ export class AgentManager {
 
   abort(id: string): boolean {
     const record = this.agents.get(id);
-    if (record?.status !== "running") return false;
+    if (record?.status !== "running" && record?.status !== "queued") return false;
     record.abortController?.abort();
     return true;
   }

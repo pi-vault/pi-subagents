@@ -35,6 +35,7 @@ describe("loadConfig", () => {
       maxRecursiveLevel: DEFAULT_CONFIG.maxRecursiveLevel,
       defaultMaxTurns: 20,
       graceTurns: DEFAULT_CONFIG.graceTurns,
+      defaultJoinMode: DEFAULT_CONFIG.defaultJoinMode,
     });
   });
 
@@ -59,6 +60,7 @@ describe("loadConfig", () => {
       maxRecursiveLevel: 5,
       defaultMaxTurns: 15,
       graceTurns: 3,
+      defaultJoinMode: "smart",
     });
 
     expect(JSON.parse(readFileSync(paths.configPath, "utf8"))).toEqual({
@@ -66,6 +68,7 @@ describe("loadConfig", () => {
       maxRecursiveLevel: 5,
       defaultMaxTurns: 15,
       graceTurns: 3,
+      defaultJoinMode: "smart",
     });
   });
 });

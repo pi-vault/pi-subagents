@@ -53,7 +53,9 @@ function completedRecord(result = "done"): AgentRecord {
     result,
     error: undefined,
     toolUses: 0,
+    turnCount: 0,
     lifetimeUsage: emptyUsage(),
+    compactionCount: 0,
   };
 }
 
@@ -68,7 +70,7 @@ function createDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     }),
     loadConfig: () => ({
       exists: false,
-      config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultMaxTurns: 0, graceTurns: 5 },
+      config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultMaxTurns: 0, graceTurns: 5, defaultJoinMode: "smart" as const },
     }),
     discoverAgents: () => createDiscovery([createAgent()]),
     discoverToolNames: () => ["bash", "read"],

@@ -65,6 +65,7 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     maxRecursiveLevel: 3,
     defaultMaxTurns: 0,
     graceTurns: 5,
+    defaultJoinMode: "smart",
   };
   const discovery: AgentDiscoveryResult = {
     agents: [
@@ -301,6 +302,7 @@ describe("subagents extension", () => {
         maxRecursiveLevel: 3,
         defaultMaxTurns: 0,
         graceTurns: 5,
+        defaultJoinMode: "smart",
       },
     ]);
   });
