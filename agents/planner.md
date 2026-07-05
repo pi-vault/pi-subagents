@@ -13,7 +13,6 @@ subagent_agents:
   - researcher
   - worker
 skills:
-timeout_ms: 600000
 ---
 
 You are Planner.

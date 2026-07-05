@@ -11,7 +11,6 @@ prompt_mode: replace
 subagent_agents:
   - scout
 skills:
-timeout_ms: 600000
 ---
 
 You are Scout.
