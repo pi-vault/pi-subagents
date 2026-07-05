@@ -61,9 +61,6 @@ export function discoverToolNames(
   );
 }
 
-/** @deprecated Use parseAgentContent from agent-format.ts directly */
-export const parseAgentFile = parseAgentContent;
-
 function discoverAgentsFromDirectory(directory: string): AgentDiscoveryResult {
   if (!existsSync(directory)) {
     return { agents: [], diagnostics: [] };
@@ -77,7 +74,7 @@ function discoverAgentsFromDirectory(directory: string): AgentDiscoveryResult {
 
   for (const fileName of fileNames) {
     const filePath = resolve(directory, fileName);
-    const parsed = parseAgentFile(filePath, readFileSync(filePath, "utf8"));
+    const parsed = parseAgentContent(filePath, readFileSync(filePath, "utf8"));
     if (parsed.ok) {
       agents.push(parsed.agent);
     } else {
@@ -132,9 +129,6 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
   };
 }
 
-/** @deprecated Use serializeAgent from agent-format.ts directly */
-export const createAgentMarkdown = serializeAgent;
-
 export function exportAgentToUserScope(
   paths: ResolvedPaths,
   discovery: AgentDiscoveryResult,
@@ -154,13 +148,12 @@ export function exportAgentToUserScope(
     model: agent.model,
     thinking: agent.thinking,
     subagentAgents: agent.subagentAgents,
-    timeoutMs: agent.timeoutMs,
     skills: agent.skills,
     systemPrompt: agent.systemPrompt,
   });
   writeFileSync(filePath, markdown, "utf8");
 
-  const parsed = parseAgentFile(filePath, markdown);
+  const parsed = parseAgentContent(filePath, markdown);
   if (!parsed.ok) {
     throw new Error(parsed.diagnostic.reason);
   }
@@ -191,7 +184,7 @@ export function disableAgentInUserScope(
   ].join("\n");
   writeFileSync(filePath, markdown, "utf8");
 
-  const parsed = parseAgentFile(filePath, markdown);
+  const parsed = parseAgentContent(filePath, markdown);
   if (!parsed.ok) {
     throw new Error(parsed.diagnostic.reason);
   }
@@ -261,12 +254,6 @@ export function createAgentFile(
     throw new Error(`unknown subagent_agents: ${unknownAgents.join(", ")}`);
   }
 
-  if (input.timeoutMs !== undefined) {
-    if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
-      throw new Error("timeout_ms must be a positive finite number");
-    }
-  }
-
   const targetName = name ?? filenameSlug;
   const targetNameKey = normalizeNameForComparison(targetName);
   const existingNameKeys = new Set(
@@ -285,13 +272,12 @@ export function createAgentFile(
     model: normalizeOptionalString(input.model),
     thinking: normalizeOptionalString(input.thinking),
     subagentAgents,
-    timeoutMs: input.timeoutMs,
     skills: input.skills,
     systemPrompt,
   });
   writeFileSync(filePath, markdown, { encoding: "utf8", flag: "wx" });
 
-  const parsed = parseAgentFile(filePath, markdown);
+  const parsed = parseAgentContent(filePath, markdown);
   if (!parsed.ok) {
     throw new Error(
       `created invalid agent file: ${basename(filePath)}: ${parsed.diagnostic.reason}`,

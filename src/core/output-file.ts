@@ -34,24 +34,6 @@ export function writeInitialEntry(path: string, agentId: string, prompt: string,
   writeFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
 }
 
-export function appendEntry(
-  path: string,
-  agentId: string,
-  type: "assistant" | "user" | "toolResult",
-  message: unknown,
-  cwd: string,
-): void {
-  const entry = {
-    isSidechain: true,
-    agentId,
-    type,
-    message,
-    timestamp: new Date().toISOString(),
-    cwd,
-  };
-  appendFileSync(path, `${JSON.stringify(entry)}\n`, "utf-8");
-}
-
 /**
  * Subscribe to session events and flush new messages to the output file on each turn_end.
  * Returns a cleanup function that does a final flush and unsubscribes.

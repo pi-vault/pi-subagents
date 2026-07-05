@@ -1,5 +1,9 @@
 # Spec 1a: Session Execution Model — Core Plumbing
 
+> **Implementation Status (2025-07):** Fully implemented. Key deviations from original design:
+> - `timeoutMs` removed from `RunOptions` and `SpawnOptions` (replaced by turn-based limits in Spec 1b).
+> - Files live in `src/tui/` not `src/ui/`.
+
 Replace child-process spawning with in-process `AgentSession` for single-agent foreground execution. This is the foundational change. Tool schema, frontmatter, and execution features are unchanged — those come in Specs 1b and 1c.
 
 ## Context

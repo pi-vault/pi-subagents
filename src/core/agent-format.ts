@@ -256,21 +256,6 @@ export function parseAgentContent(
     };
   }
 
-  let timeoutMs: number | undefined;
-  if (frontmatter.timeout_ms !== undefined) {
-    const parsedTimeout = Number(frontmatter.timeout_ms);
-    if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {
-      return {
-        ok: false,
-        diagnostic: {
-          path: filePath,
-          reason: "timeout_ms must be a positive finite number",
-        },
-      };
-    }
-    timeoutMs = parsedTimeout;
-  }
-
   const model = normalizeAgentModel(frontmatter.model);
   const thinking =
     typeof frontmatter.thinking === "string" && frontmatter.thinking.trim()
@@ -421,7 +406,6 @@ export function parseAgentContent(
       model,
       thinking,
       subagentAgents: subagentAgents.value,
-      timeoutMs,
       enabled,
       skills,
       promptMode,
@@ -466,15 +450,38 @@ export function serializeAgent(input: AgentCreationInput): string {
   if (subagentAgents.length > 0) {
     frontmatter.push(`subagent_agents: ${subagentAgents.join(", ")}`);
   }
-  if (input.timeoutMs !== undefined) {
-    frontmatter.push(`timeout_ms: ${input.timeoutMs}`);
-  }
   if (input.skills === false) {
     frontmatter.push("skills: none");
   } else if (input.skills === true) {
     frontmatter.push("skills: all");
   } else if (Array.isArray(input.skills) && input.skills.length > 0) {
     frontmatter.push(`skills: ${uniqueStrings(input.skills).join(", ")}`);
+  }
+  if (input.promptMode) {
+    frontmatter.push(`prompt_mode: ${input.promptMode}`);
+  }
+  if (input.maxTurns != null && input.maxTurns > 0) {
+    frontmatter.push(`max_turns: ${input.maxTurns}`);
+  }
+  if (input.inheritContext === true) {
+    frontmatter.push("inherit_context: true");
+  }
+  if (input.runInBackground === true) {
+    frontmatter.push("run_in_background: true");
+  }
+  if (input.isolated === true) {
+    frontmatter.push("isolated: true");
+  }
+  if (input.isolation) {
+    frontmatter.push(`isolation: ${input.isolation}`);
+  }
+  if (input.extensions === false) {
+    frontmatter.push("extensions: false");
+  } else if (Array.isArray(input.extensions) && input.extensions.length > 0) {
+    frontmatter.push(`extensions: ${input.extensions.join(", ")}`);
+  }
+  if (input.disallowedTools && input.disallowedTools.length > 0) {
+    frontmatter.push(`disallowed_tools: ${input.disallowedTools.join(", ")}`);
   }
   frontmatter.push("---", systemPrompt);
 

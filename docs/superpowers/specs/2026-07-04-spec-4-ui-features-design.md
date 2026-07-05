@@ -1,5 +1,11 @@
 # Spec 4: UI Features
 
+> **Implementation Status (2025-07):** Fully implemented with minor deviations:
+> - Files live in `src/tui/` (not `src/ui/` as originally specified).
+> - `statusIcon()` and `formatDuration()` were removed from `format.ts` during dead-code cleanup; `conversation-viewer.ts` computes status icons inline.
+> - `viewer-keys.ts` was inlined into `conversation-viewer.ts` (no separate file).
+> - `FleetList.onAgentFinished()` consolidated into time-based linger check inside `agentRecords()`.
+
 Three TUI components for observing and interacting with agents: a persistent widget showing live agent status, a fleet list for navigation, and an overlay conversation viewer with steering. Also enhances the notification renderer from Spec 2.
 
 ## Prerequisites

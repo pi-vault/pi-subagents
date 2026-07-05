@@ -1,5 +1,7 @@
 # Spec 3: Parallel Execution
 
+> **Implementation Status (2025-07):** NOT IMPLEMENTED. The `parallel` tool, `wait_for_group` tool, and `GroupTracker` class do not exist. A lightweight `smart-batch-tracker.ts` provides automatic notification grouping but not explicit parallel orchestration. This spec remains a future design target.
+
 Coordinated parallel agent execution. Spawn multiple agents as a named group, track them as a unit, wait for all to complete, and aggregate results. Builds on Spec 2's individual background execution.
 
 ## Prerequisites

@@ -1,5 +1,8 @@
 import type { AgentManager } from "../core/agent-manager.js";
 import type { GroupJoinManager } from "../core/group-join-manager.js";
+import type { AgentActivity } from "../tui/activity.js";
+import type { AgentWidget } from "../tui/agent-widget.js";
+import type { FleetList } from "../tui/fleet-list.js";
 import type {
   AgentCreationInput,
   AgentDefinition,
@@ -8,6 +11,7 @@ import type {
   LoadedConfig,
   ResolvedPaths,
   SubagentsConfig,
+  WidgetMode,
 } from "./types.js";
 
 export interface RuntimeDeps {
@@ -37,6 +41,18 @@ export interface RuntimeDeps {
   groupJoin?: GroupJoinManager;
   pendingNudges?: Map<string, ReturnType<typeof setTimeout>>;
   defaultJoinMode?: JoinMode;
+  widgetMode?: WidgetMode;
+  fleetView?: boolean;
+  setWidgetMode?: (mode: WidgetMode) => void;
+  setFleetView?: (enabled: boolean) => void;
   registerBatchAgent?: (id: string) => void;
   disposeBatchTracker?: () => void;
+  /** Live sidebar widget — present when TUI is active. */
+  widget?: AgentWidget;
+  /** Fleet list below the editor — present when TUI is active. */
+  fleet?: FleetList;
+  /** Per-agent live activity state map — shared between index.ts and subagent.ts. */
+  agentActivity?: Map<string, AgentActivity>;
+  /** Ensure widget and fleet timers are running (call after any agent spawn). */
+  ensureTimers?: () => void;
 }

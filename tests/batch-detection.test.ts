@@ -10,6 +10,7 @@ function makeRecord(
   return {
     id,
     type: "test",
+    description: "test",
     status: "completed",
     toolUses: 0,
     turnCount: 0,

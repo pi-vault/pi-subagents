@@ -111,18 +111,6 @@ describe("parseAgentContent", () => {
     });
   });
 
-  test("parses timeout_ms as positive number", () => {
-    const result = parseAgentContent(
-      "/tmp/agent.md",
-      "---\nname: a\ndescription: d\ntools: read\ntimeout_ms: 180000\n---\nbody\n",
-    );
-
-    expect(result).toMatchObject({
-      ok: true,
-      agent: { timeoutMs: 180000 },
-    });
-  });
-
   test('parses model field, normalizes "default" to undefined', () => {
     const result = parseAgentContent(
       "/tmp/agent.md",
@@ -288,22 +276,6 @@ describe("parseAgentContent", () => {
     });
   });
 
-  test("returns error for timeout_ms: 0 and timeout_ms: -1 and timeout_ms: NaN", () => {
-    for (const bad of ["0", "-1", "NaN"]) {
-      const result = parseAgentContent(
-        "/tmp/a.md",
-        `---\nname: a\ndescription: d\ntools: read\ntimeout_ms: ${bad}\n---\nbody\n`,
-      );
-      expect(result).toMatchObject({
-        ok: false,
-        diagnostic: {
-          path: "/tmp/a.md",
-          reason: "timeout_ms must be a positive finite number",
-        },
-      });
-    }
-  });
-
   test("handles unicode in description and body", () => {
     const result = parseAgentContent(
       "/tmp/agent.md",
@@ -355,7 +327,6 @@ describe("serializeAgent", () => {
       model: "claude-sonnet",
       thinking: "medium",
       subagentAgents: ["worker"],
-      timeoutMs: 180000,
       skills: ["tdd", "writing-go"],
       systemPrompt: "# System prompt\nInspect the repo.",
     };
@@ -369,7 +340,6 @@ describe("serializeAgent", () => {
         "model: claude-sonnet",
         "thinking: medium",
         "subagent_agents: worker",
-        "timeout_ms: 180000",
         "skills: tdd, writing-go",
         "---",
         "# System prompt",
@@ -428,16 +398,6 @@ describe("serializeAgent", () => {
       systemPrompt: "body",
     });
     expect(result).not.toContain("subagent_agents:");
-  });
-
-  test("omits timeout_ms when undefined", () => {
-    const result = serializeAgent({
-      description: "d",
-      tools: ["read"],
-      subagentAgents: [],
-      systemPrompt: "body",
-    });
-    expect(result).not.toContain("timeout_ms:");
   });
 
   test("serializes skills: none for false, skills: all for true, comma-separated for array", () => {
@@ -716,7 +676,6 @@ describe("round-trip", () => {
       model: "claude-sonnet",
       thinking: "medium",
       subagentAgents: ["worker"],
-      timeoutMs: 180000,
       skills: ["tdd", "writing-go"],
       systemPrompt: "# System prompt\nInspect the repo.",
     };
@@ -735,7 +694,6 @@ describe("round-trip", () => {
         model: "claude-sonnet",
         thinking: "medium",
         subagentAgents: ["worker"],
-        timeoutMs: 180000,
         skills: ["tdd", "writing-go"],
         systemPrompt: "# System prompt\nInspect the repo.\n",
       },
@@ -771,7 +729,6 @@ describe("round-trip", () => {
       model: "claude-sonnet",
       thinking: "high",
       subagentAgents: ["worker"],
-      timeoutMs: 60000,
       skills: ["tdd"],
       systemPrompt: "body",
     };
@@ -794,7 +751,6 @@ describe("round-trip", () => {
         model: "claude-sonnet",
         thinking: "high",
         subagentAgents: ["worker"],
-        timeoutMs: 60000,
         skills: ["tdd"],
       },
     });
@@ -809,9 +765,72 @@ describe("round-trip", () => {
         model: undefined,
         thinking: undefined,
         subagentAgents: [],
-        timeoutMs: undefined,
         skills: undefined,
       },
     });
+  });
+
+  test("round-trip preserves Phase 2 frontmatter fields", () => {
+    const input: AgentCreationInput = {
+      description: "Test agent",
+      tools: ["read", "bash"],
+      subagentAgents: [],
+      systemPrompt: "Do work.",
+      promptMode: "append",
+      maxTurns: 10,
+      inheritContext: true,
+      runInBackground: true,
+      isolated: true,
+      isolation: "worktree",
+      extensions: ["ext-a", "ext-b"],
+      disallowedTools: ["write", "edit"],
+    };
+
+    const serialized = serializeAgent(input);
+    const parsed = parseAgentContent("/tmp/phase2.md", serialized);
+    expect(parsed).toMatchObject({
+      ok: true,
+      agent: {
+        promptMode: "append",
+        maxTurns: 10,
+        inheritContext: true,
+        runInBackground: true,
+        isolated: true,
+        isolation: "worktree",
+        extensions: ["ext-a", "ext-b"],
+        disallowedTools: ["write", "edit"],
+      },
+    });
+  });
+
+  test("round-trip omits Phase 2 fields when at defaults", () => {
+    const input: AgentCreationInput = {
+      description: "Minimal",
+      tools: ["read"],
+      subagentAgents: [],
+      systemPrompt: "body",
+    };
+
+    const serialized = serializeAgent(input);
+    expect(serialized).not.toContain("prompt_mode:");
+    expect(serialized).not.toContain("max_turns:");
+    expect(serialized).not.toContain("inherit_context:");
+    expect(serialized).not.toContain("run_in_background:");
+    expect(serialized).not.toContain("isolated:");
+    expect(serialized).not.toContain("isolation:");
+    expect(serialized).not.toContain("extensions:");
+    expect(serialized).not.toContain("disallowed_tools:");
+  });
+
+  test("serializeAgent writes extensions: false", () => {
+    const input: AgentCreationInput = {
+      description: "d",
+      tools: ["read"],
+      subagentAgents: [],
+      systemPrompt: "body",
+      extensions: false,
+    };
+    const serialized = serializeAgent(input);
+    expect(serialized).toContain("extensions: false");
   });
 });

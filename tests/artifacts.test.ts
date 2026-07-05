@@ -4,7 +4,6 @@ import {
   encodePiCwd,
   getArtifactPaths,
   resolvePiEncodedSessionDir,
-  resolveRuntimeArtifactsPaths,
 } from "../src/shared/artifacts.js";
 import type { ResolvedPaths } from "../src/shared/types.js";
 
@@ -25,28 +24,13 @@ describe("artifact helpers", () => {
     );
   });
 
-  test("resolves no-parent artifact and session roots under the encoded cwd session dir", () => {
+  test("resolves no-parent session root under the encoded cwd session dir", () => {
     const paths = createPaths();
     const cwd = "/repo/worktree";
 
     expect(resolvePiEncodedSessionDir(paths, cwd)).toBe(
       join(paths.sessionsDir, "--repo-worktree--"),
     );
-    expect(resolveRuntimeArtifactsPaths(paths, cwd)).toEqual({
-      rootDir: join(paths.sessionsDir, "--repo-worktree--", "subagent-artifacts"),
-      nestedEventsDir: join(
-        paths.sessionsDir,
-        "--repo-worktree--",
-        "subagent-artifacts",
-        "nested-subagent-events",
-      ),
-      nestedRunsDir: join(
-        paths.sessionsDir,
-        "--repo-worktree--",
-        "subagent-artifacts",
-        "nested-subagent-runs",
-      ),
-    });
   });
 
   test("uses the parent session dir for artifacts when a parent session exists", () => {

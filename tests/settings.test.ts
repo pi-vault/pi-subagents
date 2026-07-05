@@ -67,4 +67,80 @@ describe("settings", () => {
     applySettings({}, appliers);
     expect(called).toBe(false);
   });
+
+  it("sanitize preserves widgetMode 'all'", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ widgetMode: "all" }));
+    const settings = loadSettings(projectDir);
+    expect(settings.widgetMode).toBe("all");
+  });
+
+  it("sanitize preserves widgetMode 'background'", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ widgetMode: "background" }));
+    const settings = loadSettings(projectDir);
+    expect(settings.widgetMode).toBe("background");
+  });
+
+  it("sanitize preserves widgetMode 'off'", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ widgetMode: "off" }));
+    const settings = loadSettings(projectDir);
+    expect(settings.widgetMode).toBe("off");
+  });
+
+  it("sanitize strips invalid widgetMode", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ widgetMode: "invalid" }));
+    const settings = loadSettings(projectDir);
+    expect(settings.widgetMode).toBeUndefined();
+  });
+
+  it("sanitize preserves fleetView true", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ fleetView: true }));
+    const settings = loadSettings(projectDir);
+    expect(settings.fleetView).toBe(true);
+  });
+
+  it("sanitize preserves fleetView false", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ fleetView: false }));
+    const settings = loadSettings(projectDir);
+    expect(settings.fleetView).toBe(false);
+  });
+
+  it("sanitize strips non-boolean fleetView", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ fleetView: "yes" }));
+    const settings = loadSettings(projectDir);
+    expect(settings.fleetView).toBeUndefined();
+  });
+
+  it("applySettings calls setWidgetMode when widgetMode is set", () => {
+    let widgetMode: string | undefined;
+    const appliers: SettingsAppliers = {
+      setMaxConcurrent: () => {},
+      setDefaultJoinMode: () => {},
+      setWidgetMode: (m) => { widgetMode = m; },
+    };
+    applySettings({ widgetMode: "all" }, appliers);
+    expect(widgetMode).toBe("all");
+  });
+
+  it("applySettings calls setFleetView when fleetView is set", () => {
+    let fleetView: boolean | undefined;
+    const appliers: SettingsAppliers = {
+      setMaxConcurrent: () => {},
+      setDefaultJoinMode: () => {},
+      setFleetView: (v) => { fleetView = v; },
+    };
+    applySettings({ fleetView: false }, appliers);
+    expect(fleetView).toBe(false);
+  });
+
+  it("applySettings does not call setWidgetMode or setFleetView when absent", () => {
+    let called = false;
+    const appliers: SettingsAppliers = {
+      setMaxConcurrent: () => {},
+      setDefaultJoinMode: () => {},
+      setWidgetMode: () => { called = true; },
+      setFleetView: () => { called = true; },
+    };
+    applySettings({ maxConcurrent: 4 }, appliers);
+    expect(called).toBe(false);
+  });
 });

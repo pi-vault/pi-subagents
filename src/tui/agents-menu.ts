@@ -10,6 +10,7 @@ import type {
   AgentDiscoveryDiagnostic,
   ResolvedPaths,
   SubagentsConfig,
+  WidgetMode,
 } from "../shared/types.js";
 
 type MenuChoice<T> = { label: string; value: T };
@@ -26,15 +27,17 @@ type SettingsKey =
   | "maxRecursiveLevel"
   | "defaultMaxTurns"
   | "graceTurns"
-  | "defaultJoinMode";
+  | "defaultJoinMode"
+  | "widgetMode"
+  | "fleetView";
 
 type SettingsMenuItem = {
   key: SettingsKey;
   label: string;
   promptTitle: string;
-  formatValue: (config: SubagentsConfig) => string;
-  parse: (raw: string) => number | string | undefined;
-  apply?: (value: number | string, deps: RuntimeDeps) => void;
+  formatValue: (config: SubagentsConfig, deps?: Partial<RuntimeDeps>) => string;
+  parse: (raw: string) => number | string | boolean | undefined;
+  apply?: (value: number | string | boolean, deps: RuntimeDeps) => void;
 };
 
 export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
@@ -101,6 +104,34 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
       }
     },
   },
+  {
+    key: "widgetMode",
+    label: "Widget Mode",
+    promptTitle: "Widget Mode (all / background / off)",
+    formatValue: (_config, deps) => deps?.widgetMode ?? "background",
+    parse: (raw) => {
+      const t = raw.trim();
+      return t === "all" || t === "background" || t === "off" ? t : undefined;
+    },
+    apply: (value, deps) => {
+      deps.widgetMode = value as WidgetMode;
+      deps.setWidgetMode?.(value as WidgetMode);
+    },
+  },
+  {
+    key: "fleetView",
+    label: "Fleet View",
+    promptTitle: "Fleet View (true / false)",
+    formatValue: (_config, deps) => String(deps?.fleetView ?? true),
+    parse: (raw) => {
+      const t = raw.trim().toLowerCase();
+      return t === "true" ? true : t === "false" ? false : undefined;
+    },
+    apply: (value, deps) => {
+      deps.fleetView = value as boolean;
+      deps.setFleetView?.(value as boolean);
+    },
+  },
 ];
 
 type AgentMenuEntry = {
@@ -110,15 +141,6 @@ type AgentMenuEntry = {
   override?: AgentDefinition;
   diagnostic?: AgentDiscoveryDiagnostic;
 };
-
-function parseCommaSeparatedList(value: string | undefined): string[] {
-  return value
-    ? value
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-    : [];
-}
 
 export function renderRow(theme: Theme, label: string, selected: boolean): string {
   if (selected) {
@@ -145,10 +167,6 @@ export function buildAlignedRows<T>(rows: Array<MenuRow<T>>): string[] {
   });
 }
 
-function buildSelectLabels<T>(rows: Array<MenuRow<T>>): string[] {
-  return buildAlignedRows(rows);
-}
-
 async function showRowsMenu<T>(
   ctx: ExtensionCommandContext,
   title: string,
@@ -159,7 +177,7 @@ async function showRowsMenu<T>(
 
   if (!ctx.ui.custom) {
     if (ctx.ui.select) {
-      const selectLabels = buildSelectLabels(rows);
+      const selectLabels = buildAlignedRows(rows);
       const selectedLabel = await ctx.ui.select(title, selectLabels);
       if (selectedLabel === undefined) {
         return undefined;
@@ -293,22 +311,12 @@ function buildAgentMenuEntries(paths: ResolvedPaths): AgentMenuEntry[] {
     });
 }
 
-function statusLabelForEntry(entry: AgentMenuEntry): string {
-  if (entry.state === "bundled") {
-    return "[bundled]";
-  }
-  if (entry.state === "override") {
-    return "[global override]";
-  }
-  return "[disabled override]";
-}
-
 export function describeAgentEntry(
   entry: AgentMenuEntry,
 ): Pick<MenuRow<AgentMenuEntry>, "label" | "detail"> {
   return {
     label: entry.name,
-    detail: statusLabelForEntry(entry),
+    detail: entry.state === "bundled" ? "[bundled]" : entry.state === "override" ? "[global override]" : "[disabled override]",
   };
 }
 
@@ -321,11 +329,12 @@ async function promptForAgentName(
 
 function buildSettingsRows(
   config: SubagentsConfig,
+  deps: RuntimeDeps,
 ): Array<MenuRow<SettingsKey | "back">> {
   return [
     ...SETTINGS_MENU_ITEMS.map((item) => ({
       label: item.label,
-      detail: item.formatValue(config),
+      detail: item.formatValue(config, deps),
       value: item.key,
     })),
     { label: "Back", value: "back", kind: "back" },
@@ -399,12 +408,6 @@ async function runCreateAgentFlow(
     return;
   }
 
-  const timeoutInput = await ctx.ui.input("Timeout ms (optional)", "180000");
-  if (timeoutInput === undefined) {
-    ctx.ui.notify("Agent creation cancelled", "info");
-    return;
-  }
-
   const systemPrompt = await ctx.ui.editor("Agent markdown body", "");
   if (systemPrompt === undefined) {
     ctx.ui.notify("Agent creation cancelled", "info");
@@ -415,11 +418,10 @@ async function runCreateAgentFlow(
     name,
     filenameSlug,
     description,
-    tools: parseCommaSeparatedList(tools),
+    tools: tools ? tools.split(",").map((e) => e.trim()).filter(Boolean) : [],
     model,
     thinking,
-    subagentAgents: parseCommaSeparatedList(subagentAgents),
-    timeoutMs: timeoutInput.trim() ? Number(timeoutInput) : undefined,
+    subagentAgents: subagentAgents ? subagentAgents.split(",").map((e) => e.trim()).filter(Boolean) : [],
     systemPrompt,
   };
 
@@ -469,7 +471,7 @@ export async function runAgentsMenuSettingsFlow(
     const selected = await showRowsMenu(
       ctx,
       "Settings",
-      buildSettingsRows(config),
+      buildSettingsRows(config, deps),
       "Select a setting to edit",
     );
 
@@ -482,7 +484,7 @@ export async function runAgentsMenuSettingsFlow(
       return;
     }
 
-    const raw = await ctx.ui.input(item.promptTitle, item.formatValue(config));
+    const raw = await ctx.ui.input(item.promptTitle, item.formatValue(config, deps));
     if (raw === undefined) {
       continue;
     }

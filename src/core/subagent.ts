@@ -17,6 +17,8 @@ import {
   renderSubagentCall,
   renderSubagentResult,
 } from "../tui/render.js";
+import { createActivityTracker } from "../tui/activity.js";
+import { describeActivity } from "../tui/format.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
 import { resolveModel } from "./model-resolver.js";
 import {
@@ -292,10 +294,17 @@ export function registerSubagentTool(
 
         // Background spawn path
         if (params.run_in_background) {
+          // Create activity tracker for live widget/fleet updates
+          const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(
+            resolved.maxTurns,
+            () => deps.widget?.update(),
+          );
+
           const id = deps.manager.spawn(ctx, agentDef, {
             ...spawnOptions,
             isBackground: true,
             isolation: params.isolation as "worktree" | undefined,
+            ...bgCallbacks,
             onSessionCreated: (session) => {
               try {
                 const sessionPath = createOutputFilePath(effectiveCwd, id, `bg-${Date.now()}`);
@@ -311,6 +320,10 @@ export function registerSubagentTool(
               }
             },
           });
+
+          // Store in shared activity map and start timers
+          deps.agentActivity?.set(id, bgState);
+          deps.ensureTimers?.();
 
           // Register in batch tracker for smart group detection
           deps.registerBatchAgent?.(id);
@@ -334,10 +347,22 @@ export function registerSubagentTool(
         }
 
         // Synchronous foreground path (with optional isolation)
+        const { state: fgState, callbacks: fgCallbacks } = createActivityTracker(
+          resolved.maxTurns,
+          () => {
+            ctx.ui?.setWorkingMessage?.(
+              `${agentDef.name}: ${describeActivity(fgState.activeTools, fgState.responseText)}`,
+            );
+          },
+        );
+
         const { id, record } = await deps.manager.spawnAndWait(ctx, agentDef, {
           ...spawnOptions,
           isolation: params.isolation as "worktree" | undefined,
+          ...fgCallbacks,
         });
+
+        ctx.ui?.setWorkingMessage?.();
 
         // Build execution details (shared between artifacts and return value)
         const details: SubagentExecutionDetails = {

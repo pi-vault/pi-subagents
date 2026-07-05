@@ -1,20 +1,25 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { JoinMode } from "../shared/types.js";
+import type { JoinMode, WidgetMode } from "../shared/types.js";
 
 export interface SubagentsSettings {
   maxConcurrent?: number;
   defaultJoinMode?: JoinMode;
+  widgetMode?: WidgetMode;
+  fleetView?: boolean;
 }
 
 export interface SettingsAppliers {
   setMaxConcurrent: (n: number) => void;
   setDefaultJoinMode: (mode: JoinMode) => void;
+  setWidgetMode?: (mode: WidgetMode) => void;
+  setFleetView?: (enabled: boolean) => void;
 }
 
 const MAX_CONCURRENT_CEILING = 1024;
 const VALID_JOIN_MODES: ReadonlySet<string> = new Set(["async", "group", "smart"]);
+const VALID_WIDGET_MODES: ReadonlySet<string> = new Set(["all", "background", "off"]);
 
 function sanitize(raw: unknown): SubagentsSettings {
   if (!raw || typeof raw !== "object") return {};
@@ -29,6 +34,12 @@ function sanitize(raw: unknown): SubagentsSettings {
   }
   if (typeof r.defaultJoinMode === "string" && VALID_JOIN_MODES.has(r.defaultJoinMode)) {
     out.defaultJoinMode = r.defaultJoinMode as JoinMode;
+  }
+  if (typeof r.widgetMode === "string" && VALID_WIDGET_MODES.has(r.widgetMode)) {
+    out.widgetMode = r.widgetMode as WidgetMode;
+  }
+  if (typeof r.fleetView === "boolean") {
+    out.fleetView = r.fleetView;
   }
   return out;
 }
@@ -68,4 +79,6 @@ export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()):
 export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers): void {
   if (typeof s.maxConcurrent === "number") appliers.setMaxConcurrent(s.maxConcurrent);
   if (s.defaultJoinMode) appliers.setDefaultJoinMode(s.defaultJoinMode);
+  if (s.widgetMode !== undefined) appliers.setWidgetMode?.(s.widgetMode);
+  if (s.fleetView !== undefined) appliers.setFleetView?.(s.fleetView);
 }
