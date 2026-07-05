@@ -8,6 +8,7 @@ vi.mock("../src/core/agent-runner.js", () => ({
     responseText: "done",
     session: {},
     aborted: false,
+    steered: false,
   }),
 }));
 

@@ -135,7 +135,7 @@ describe("runAgent", () => {
     expect(mockSession.bindExtensions).toHaveBeenCalledWith({});
   });
 
-  it("returns RunResult with responseText and aborted flag", async () => {
+  it("returns RunResult with responseText, aborted, and steered flags", async () => {
     const agentDef = makeAgentDef();
     const result = await runAgent(agentDef, makeRunOptions(), {});
 
@@ -143,6 +143,7 @@ describe("runAgent", () => {
     expect(result).toHaveProperty("session");
     expect(result).toHaveProperty("aborted");
     expect(result.aborted).toBe(false);
+    expect(result.steered).toBe(false);
   });
 
   it("enforces timeout via setTimeout + session.abort()", async () => {
