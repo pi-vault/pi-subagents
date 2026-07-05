@@ -144,7 +144,7 @@ export async function runAgent(
     responseText = getLastAssistantText(session);
   }
 
-  return { responseText, session: session as unknown, aborted };
+  return { responseText, session: session as unknown, aborted, steered: false };
 }
 
 function buildSystemPrompt(agentDef: AgentDefinition, cwd: string): string {
