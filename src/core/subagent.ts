@@ -240,7 +240,6 @@ export function registerSubagentTool(
           parentSystemPrompt,
           parentSignal: signal,
           currentDepth: 0,
-          allowedAgents: agentDef.subagentAgents,
         };
 
         const detailBase = {
@@ -471,7 +470,6 @@ export function registerAgentCommand(
           cwd: ctx.cwd,
           maxTurns,
           currentDepth: 0,
-          allowedAgents: agentDef.subagentAgents,
         });
 
         pi.sendMessage({
