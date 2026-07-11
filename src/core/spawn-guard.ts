@@ -1,18 +1,15 @@
 export const DEFAULT_MAX_SPAWNS_PER_SESSION = 40;
 
 function normalizeNonNegativeInteger(value: unknown): number | undefined {
-  if (typeof value === "string") {
-    if (!value.trim()) return undefined;
-    const n = Number(value);
-    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return undefined;
-    return n;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0)
-      return undefined;
-    return value;
-  }
-  return undefined;
+  const n =
+    typeof value === "string"
+      ? value.trim()
+        ? Number(value)
+        : NaN
+      : typeof value === "number"
+        ? value
+        : NaN;
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
 }
 
 /**

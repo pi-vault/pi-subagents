@@ -71,6 +71,7 @@ describe("loadConfig", () => {
       defaultMaxTurns: 15,
       graceTurns: 3,
       defaultJoinMode: "smart",
+      maxSpawnsPerSession: 40,
     });
   });
 });

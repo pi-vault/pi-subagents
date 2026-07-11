@@ -34,6 +34,7 @@ export function saveConfig(
         defaultMaxTurns: config.defaultMaxTurns,
         graceTurns: config.graceTurns,
         defaultJoinMode: config.defaultJoinMode,
+        maxSpawnsPerSession: config.maxSpawnsPerSession,
       },
       null,
       2,
