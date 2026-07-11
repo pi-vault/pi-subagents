@@ -13,11 +13,15 @@ import {
   serializeAgent,
   uniqueStrings,
 } from "./agent-format.js";
+import { parseChain, parseJsonChain } from "./chain-serializer.js";
 import type {
   AgentCreationInput,
   AgentDefinition,
   AgentDiscoveryDiagnostic,
   AgentDiscoveryResult,
+  ChainConfig,
+  ChainDiscoveryDiagnostic,
+  ChainDiscoveryResult,
   ResolvedPaths,
 } from "../shared/types.js";
 
@@ -285,4 +289,96 @@ export function createAgentFile(
   }
 
   return parsed.agent;
+}
+
+// ---------------------------------------------------------------------------
+// Chain discovery
+// ---------------------------------------------------------------------------
+
+function discoverChainsFromDirectory(
+  directory: string,
+): ChainDiscoveryResult {
+  if (!existsSync(directory)) return { chains: [], diagnostics: [] };
+
+  const diagnostics: ChainDiscoveryDiagnostic[] = [];
+  const fileNames = readdirSync(directory)
+    .filter((f) => f.endsWith(".chain.md") || f.endsWith(".chain.json"))
+    .sort();
+
+  // Parse all files, dedup by name within directory.
+  // .chain.json wins over .chain.md for the same chain name (spec §4).
+  const byName = new Map<string, ChainConfig>();
+  for (const fileName of fileNames) {
+    const filePath = resolve(directory, fileName);
+    try {
+      const content = readFileSync(filePath, "utf8");
+      const config = fileName.endsWith(".chain.json")
+        ? parseJsonChain(filePath, content)
+        : parseChain(filePath, content);
+      const key = config.name.toLowerCase();
+      const existing = byName.get(key);
+      if (existing) {
+        if (
+          existing.filePath.endsWith(".chain.json") &&
+          filePath.endsWith(".chain.md")
+        ) {
+          // JSON already registered — skip the .md variant silently
+          continue;
+        }
+        // Same-format or .md being replaced by .json — emit diagnostic for the overwritten entry
+        diagnostics.push({
+          filePath: existing.filePath,
+          error: `duplicate chain name "${config.name}" in same directory; "${fileName}" wins`,
+        });
+      }
+      byName.set(key, config);
+    } catch (e) {
+      diagnostics.push({
+        filePath,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  return { chains: [...byName.values()], diagnostics };
+}
+
+export function discoverChains(
+  paths: ResolvedPaths,
+  cwd?: string,
+): ChainDiscoveryResult {
+  // Priority: project > user > bundled (higher priority = inserted first, wins on conflict)
+  const projectChainsDir = cwd ? join(cwd, ".pi", "chains") : undefined;
+  const projectResult = projectChainsDir
+    ? discoverChainsFromDirectory(projectChainsDir)
+    : { chains: [], diagnostics: [] };
+  const userResult = discoverChainsFromDirectory(paths.userChainsDir);
+  const bundledResult = discoverChainsFromDirectory(paths.bundledChainsDir);
+  const chainsByName = new Map<string, ChainConfig>();
+  const diagnostics = [
+    ...projectResult.diagnostics,
+    ...userResult.diagnostics,
+    ...bundledResult.diagnostics,
+  ];
+
+  for (const chain of [
+    ...projectResult.chains,
+    ...userResult.chains,
+    ...bundledResult.chains,
+  ]) {
+    const key = chain.name.toLowerCase();
+    if (chainsByName.has(key)) {
+      diagnostics.push({
+        filePath: chain.filePath,
+        error: `duplicate chain name "${chain.name}" skipped; higher-priority scope wins`,
+      });
+      continue;
+    }
+    chainsByName.set(key, chain);
+  }
+
+  return {
+    chains: [...chainsByName.values()],
+    diagnostics,
+  };
 }

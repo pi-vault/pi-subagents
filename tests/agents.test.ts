@@ -27,6 +27,8 @@ function createPaths(rootDir: string): ResolvedPaths {
     userAgentsDir: join(rootDir, "agent", "agents"),
     bundledAgentsDir: join(rootDir, "bundled-agents"),
     sessionsDir: join(rootDir, "agent", "sessions"),
+    userChainsDir: join(rootDir, "agent", "chains"),
+    bundledChainsDir: join(rootDir, "bundled-chains"),
   };
 }
 

@@ -9,6 +9,10 @@ export function getBundledAgentsDir(): string {
   return resolve(currentDir, "../../agents");
 }
 
+export function getBundledChainsDir(): string {
+  return resolve(currentDir, "../../chains");
+}
+
 export function resolvePaths(agentDir = getAgentDir()): ResolvedPaths {
   return {
     agentDir,
@@ -16,5 +20,7 @@ export function resolvePaths(agentDir = getAgentDir()): ResolvedPaths {
     userAgentsDir: join(agentDir, "agents"),
     bundledAgentsDir: getBundledAgentsDir(),
     sessionsDir: join(agentDir, "sessions"),
+    userChainsDir: join(agentDir, "chains"),
+    bundledChainsDir: getBundledChainsDir(),
   };
 }
