@@ -11,10 +11,7 @@ const OUTPUT_REF_PATTERN = /\{outputs\.([^}]*)\}/g;
 const SAFE_OUTPUT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class ChainOutputValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ChainOutputValidationError";
-  }
+  readonly name = "ChainOutputValidationError";
 }
 
 function isParallelStep(step: ChainStep): step is ParallelStep {
@@ -53,11 +50,9 @@ function getTemplateStrings(step: ChainStep): string[] {
 }
 
 export function validateChainOutputBindings(steps: ChainStep[]): void {
-  const available = new Set<string>();
-  const seen = new Set<string>();
+  const defined = new Set<string>();
 
   for (const step of steps) {
-    // Validate references in task templates
     for (const template of getTemplateStrings(step)) {
       for (const match of template.matchAll(OUTPUT_REF_PATTERN)) {
         const name = match[1] ?? "";
@@ -66,28 +61,26 @@ export function validateChainOutputBindings(steps: ChainStep[]): void {
             `Invalid chain output reference '{outputs.${name}}': name must match ${SAFE_OUTPUT_NAME_PATTERN.source}`,
           );
         }
-        if (!available.has(name)) {
+        if (!defined.has(name)) {
           throw new ChainOutputValidationError(
-            `Unknown chain output reference '{outputs.${name}}'. Available: ${[...available].join(", ") || "(none)"}`,
+            `Unknown chain output reference '{outputs.${name}}'. Available: ${[...defined].join(", ") || "(none)"}`,
           );
         }
       }
     }
 
-    // Validate and register output names from this step
     for (const name of getOutputNames(step)) {
       if (!SAFE_OUTPUT_NAME_PATTERN.test(name)) {
         throw new ChainOutputValidationError(
           `Invalid chain output name '${name}': must match ${SAFE_OUTPUT_NAME_PATTERN.source}`,
         );
       }
-      if (seen.has(name)) {
+      if (defined.has(name)) {
         throw new ChainOutputValidationError(
           `Duplicate chain output name '${name}'.`,
         );
       }
-      seen.add(name);
-      available.add(name);
+      defined.add(name);
     }
   }
 }
