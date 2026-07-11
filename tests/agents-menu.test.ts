@@ -2,7 +2,6 @@ import { describe, expect, test, vi } from "vitest";
 import { SETTINGS_MENU_ITEMS, renderRow } from "../src/tui/agents-menu.js";
 import type { SubagentsConfig } from "../src/shared/types.js";
 import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
-import { AgentManager } from "../src/core/agent-manager.js";
 
 function createTheme() {
   const calls: Array<{ method: string; color?: string; text: string }> = [];
@@ -152,12 +151,9 @@ describe("SETTINGS_MENU_ITEMS", () => {
 
     test("apply calls setMaxSpawnsPerSession on manager", () => {
       const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "maxSpawnsPerSession");
-      const manager = new AgentManager();
-      const spy = vi.spyOn(manager, "setMaxSpawnsPerSession");
-      const deps = { manager } as unknown as RuntimeDeps;
-      item?.apply?.(15, deps);
-      expect(spy).toHaveBeenCalledWith(15);
-      manager.dispose();
+      const setMaxSpawnsPerSession = vi.fn();
+      item?.apply?.(15, { manager: { setMaxSpawnsPerSession } } as unknown as RuntimeDeps);
+      expect(setMaxSpawnsPerSession).toHaveBeenCalledWith(15);
     });
   });
 });

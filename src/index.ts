@@ -164,11 +164,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   });
 
   // Apply spawn limit from config
-  {
-    const initPaths = resolvePaths();
-    const { config: initConfig } = loadConfig(initPaths);
-    manager.setMaxSpawnsPerSession(initConfig.maxSpawnsPerSession);
-  }
+  manager.setMaxSpawnsPerSession(loadConfig(resolvePaths()).config.maxSpawnsPerSession);
 
   function sendNudge(record: Parameters<typeof formatTaskNotification>[0]): void {
     const notification = formatTaskNotification(record);

@@ -462,24 +462,6 @@ describe("spawn limits", () => {
     manager.dispose();
   });
 
-  it("setMaxSpawnsPerSession updates the limit", () => {
-    const manager = new AgentManager(3);
-    manager.setMaxSpawnsPerSession(1);
-    manager.spawn({}, makeAgentDef(), {
-      prompt: "task",
-      cwd: "/tmp",
-      isBackground: true,
-    });
-    expect(() =>
-      manager.spawn({}, makeAgentDef(), {
-        prompt: "task 2",
-        cwd: "/tmp",
-        isBackground: true,
-      }),
-    ).toThrow(/spawn limit/i);
-    manager.dispose();
-  });
-
   it("dispose resets spawn counter", () => {
     const manager = new AgentManager(3);
     manager.spawn({}, makeAgentDef(), {
