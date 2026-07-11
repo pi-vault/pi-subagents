@@ -10,9 +10,11 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
+  ResolvedToolBudget,
   SubagentExecutionDetails,
   SubagentToolInput,
 } from "../shared/types.js";
+import { validateToolBudget } from "./tool-budget.js";
 import {
   renderSubagentCall,
   renderSubagentResult,
@@ -70,6 +72,22 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   ),
   isolation: Type.Optional(
     Type.String({ description: "Run agent in a temporary git worktree" }),
+  ),
+  tool_budget: Type.Optional(
+    Type.Object(
+      {
+        soft: Type.Optional(
+          Type.Number({ minimum: 1, description: "Advisory nudge threshold" }),
+        ),
+        hard: Type.Number({ minimum: 1, description: "Hard block threshold" }),
+        block: Type.Optional(
+          Type.Union([Type.Array(Type.String()), Type.Literal("*")], {
+            description: "Tools to block at hard limit. Default: read, grep, find, ls",
+          }),
+        ),
+      },
+      { description: "Tool call budget with soft/hard limits" },
+    ),
   ),
 });
 
@@ -161,6 +179,7 @@ export function registerSubagentTool(
             maxTurns: agentDef.maxTurns,
             isolated: agentDef.isolated,
             inheritContext: agentDef.inheritContext,
+            toolBudget: agentDef.toolBudget,
           },
           {
             model: params.model,
@@ -168,10 +187,12 @@ export function registerSubagentTool(
             maxTurns: params.max_turns,
             isolated: params.isolated,
             inheritContext: params.inherit_context,
+            toolBudget: params.tool_budget,
           },
           {
             model: undefined,
             defaultMaxTurns: loadedConfig.config.defaultMaxTurns,
+            toolBudget: loadedConfig.config.toolBudget,
           },
         );
 
@@ -231,6 +252,36 @@ export function registerSubagentTool(
             ctx as { resourceLoader?: { getSystemPrompt?: () => string } }
           ).resourceLoader?.getSystemPrompt?.() ?? undefined;
 
+        // Validate the merged tool budget
+        let resolvedBudget: ResolvedToolBudget | undefined;
+        if (resolved.toolBudget) {
+          const validated = validateToolBudget(resolved.toolBudget);
+          if (validated.error) {
+            return {
+              content: [{ type: "text", text: validated.error }],
+              isError: true,
+              details: {
+                agent: params.agent,
+                task: params.task,
+                sourcePath: "",
+                cwd: effectiveCwd,
+                maxTurns: 0,
+                durationMs: 0,
+                childSessionDir: "",
+                childSessionPath: "",
+                model: resolved.model,
+                status: "error" as const,
+                stopReason: "error",
+                exitCode: null,
+                stderr: validated.error,
+                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+                recentToolActivity: [],
+              },
+            };
+          }
+          resolvedBudget = validated.budget;
+        }
+
         const spawnOptions = {
           prompt: params.task.trim(),
           cwd: effectiveCwd,
@@ -240,6 +291,7 @@ export function registerSubagentTool(
           parentSystemPrompt,
           parentSignal: signal,
           currentDepth: 0,
+          toolBudget: resolvedBudget,
         };
 
         const detailBase = {
