@@ -20,6 +20,7 @@ isolation:
 extensions: true
 subagent_agents:
   - scout
+tool_budget: {"soft": 8, "hard": 15}
 disallowed_tools:
 skills:
 ---
