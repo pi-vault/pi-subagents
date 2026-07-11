@@ -74,4 +74,54 @@ describe("loadConfig", () => {
       maxSpawnsPerSession: 40,
     });
   });
+
+  test("loads toolBudget from config file", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
+    const configDir = join(agentDir, "extensions");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "subagents.json"),
+      JSON.stringify({ toolBudget: { soft: 5, hard: 10 } }),
+    );
+
+    const result = loadConfig(resolvePaths(agentDir));
+
+    expect(result.config.toolBudget).toEqual({ soft: 5, hard: 10 });
+  });
+
+  test("saveConfig persists toolBudget", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
+    const paths = resolvePaths(agentDir);
+
+    saveConfig(paths, {
+      maxConcurrency: 3,
+      maxRecursiveLevel: 3,
+      defaultMaxTurns: 0,
+      graceTurns: 5,
+      defaultJoinMode: "smart",
+      maxSpawnsPerSession: 15,
+      toolBudget: { soft: 5, hard: 10 },
+    });
+
+    const saved = JSON.parse(readFileSync(paths.configPath, "utf8"));
+    expect(saved.maxSpawnsPerSession).toBe(15);
+    expect(saved.toolBudget).toEqual({ soft: 5, hard: 10 });
+  });
+
+  test("saveConfig omits toolBudget when undefined", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
+    const paths = resolvePaths(agentDir);
+
+    saveConfig(paths, {
+      maxConcurrency: 3,
+      maxRecursiveLevel: 3,
+      defaultMaxTurns: 0,
+      graceTurns: 5,
+      defaultJoinMode: "smart",
+      maxSpawnsPerSession: 40,
+    });
+
+    const saved = JSON.parse(readFileSync(paths.configPath, "utf8"));
+    expect(saved.toolBudget).toBeUndefined();
+  });
 });

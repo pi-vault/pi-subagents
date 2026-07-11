@@ -120,4 +120,32 @@ describe("SETTINGS_MENU_ITEMS", () => {
       expect(item?.formatValue(config, {})).toBe("true");
     });
   });
+
+  describe("maxSpawnsPerSession item", () => {
+    test("contains maxSpawnsPerSession item with correct key and label", () => {
+      const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "maxSpawnsPerSession");
+      expect(item).toBeDefined();
+      expect(item?.label).toBe("Max Spawns Per Session");
+    });
+
+    test("formatValue returns string of config.maxSpawnsPerSession", () => {
+      const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "maxSpawnsPerSession");
+      const cfg = { maxSpawnsPerSession: 25 } as SubagentsConfig;
+      expect(item?.formatValue(cfg)).toBe("25");
+    });
+
+    test("parse accepts non-negative integers", () => {
+      const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "maxSpawnsPerSession");
+      expect(item?.parse("0")).toBe(0);
+      expect(item?.parse("10")).toBe(10);
+      expect(item?.parse("40")).toBe(40);
+    });
+
+    test("parse rejects negative numbers and non-integers", () => {
+      const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "maxSpawnsPerSession");
+      expect(item?.parse("-1")).toBeUndefined();
+      expect(item?.parse("1.5")).toBeUndefined();
+      expect(item?.parse("abc")).toBeUndefined();
+    });
+  });
 });

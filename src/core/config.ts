@@ -5,6 +5,7 @@ import type {
   LoadedConfig,
   ResolvedPaths,
   SubagentsConfig,
+  ToolBudgetConfig,
 } from "../shared/types.js";
 
 export const DEFAULT_CONFIG: SubagentsConfig = {
@@ -25,22 +26,20 @@ export function saveConfig(
   config: SubagentsConfig,
 ): void {
   mkdirSync(dirname(paths.configPath), { recursive: true });
-  writeFileSync(
-    paths.configPath,
-    `${JSON.stringify(
-      {
-        maxConcurrency: config.maxConcurrency,
-        maxRecursiveLevel: config.maxRecursiveLevel,
-        defaultMaxTurns: config.defaultMaxTurns,
-        graceTurns: config.graceTurns,
-        defaultJoinMode: config.defaultJoinMode,
-        maxSpawnsPerSession: config.maxSpawnsPerSession,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+
+  const data: Record<string, unknown> = {
+    maxConcurrency: config.maxConcurrency,
+    maxRecursiveLevel: config.maxRecursiveLevel,
+    defaultMaxTurns: config.defaultMaxTurns,
+    graceTurns: config.graceTurns,
+    defaultJoinMode: config.defaultJoinMode,
+    maxSpawnsPerSession: config.maxSpawnsPerSession,
+  };
+  if (config.toolBudget) {
+    data.toolBudget = config.toolBudget;
+  }
+
+  writeFileSync(paths.configPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
 }
 
 export function loadConfig(paths: ResolvedPaths): LoadedConfig {
@@ -91,6 +90,14 @@ export function loadConfig(paths: ResolvedPaths): LoadedConfig {
       maxSpawnsPerSession: isFiniteNumber(raw.maxSpawnsPerSession)
         ? raw.maxSpawnsPerSession
         : DEFAULT_CONFIG.maxSpawnsPerSession,
+      // Structural check only; deep validation (soft/hard/block) is done by
+      // validateToolBudget() at resolution time in tool-budget.ts.
+      toolBudget:
+        raw.toolBudget &&
+        typeof raw.toolBudget === "object" &&
+        !Array.isArray(raw.toolBudget)
+          ? (raw.toolBudget as ToolBudgetConfig)
+          : undefined,
     },
     exists: true,
   };
