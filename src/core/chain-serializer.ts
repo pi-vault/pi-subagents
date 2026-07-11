@@ -13,9 +13,7 @@ import type {
 // Frontmatter
 // ---------------------------------------------------------------------------
 
-interface Frontmatter {
-  [key: string]: string;
-}
+type Frontmatter = Record<string, string>;
 
 function parseFrontmatter(content: string): {
   frontmatter: Frontmatter;
@@ -134,10 +132,6 @@ function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
 
 export function parseChain(filePath: string, content: string): ChainConfig {
   const { frontmatter: fm, body } = parseFrontmatter(content);
-
-  if (Object.keys(fm).length === 0) {
-    throw new Error(`${filePath}: missing frontmatter (expected --- block)`);
-  }
 
   if (!fm.name) {
     throw new Error(`${filePath}: frontmatter missing 'name'`);
@@ -341,16 +335,6 @@ export function serializeJsonChain(config: ChainConfig): string {
     chain: config.steps,
   };
   if (config.packageName) root.package = config.packageName;
-  if (config.extraFields) {
-    for (const [key, value] of Object.entries(config.extraFields)) {
-      if (
-        key !== "name" &&
-        key !== "description" &&
-        key !== "package" &&
-        key !== "chain"
-      )
-        root[key] = value;
-    }
-  }
+  if (config.extraFields) Object.assign(root, config.extraFields);
   return `${JSON.stringify(root, null, 2)}\n`;
 }
