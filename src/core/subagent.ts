@@ -252,48 +252,6 @@ export function registerSubagentTool(
             ctx as { resourceLoader?: { getSystemPrompt?: () => string } }
           ).resourceLoader?.getSystemPrompt?.() ?? undefined;
 
-        // Validate the merged tool budget
-        let resolvedBudget: ResolvedToolBudget | undefined;
-        if (resolved.toolBudget) {
-          const validated = validateToolBudget(resolved.toolBudget);
-          if (validated.error) {
-            return {
-              content: [{ type: "text", text: validated.error }],
-              isError: true,
-              details: {
-                agent: params.agent,
-                task: params.task,
-                sourcePath: "",
-                cwd: effectiveCwd,
-                maxTurns: 0,
-                durationMs: 0,
-                childSessionDir: "",
-                childSessionPath: "",
-                model: resolved.model,
-                status: "error" as const,
-                stopReason: "error",
-                exitCode: null,
-                stderr: validated.error,
-                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
-                recentToolActivity: [],
-              },
-            };
-          }
-          resolvedBudget = validated.budget;
-        }
-
-        const spawnOptions = {
-          prompt: params.task.trim(),
-          cwd: effectiveCwd,
-          maxTurns: resolved.maxTurns,
-          graceTurns: loadedConfig.config.graceTurns,
-          inheritContext: resolved.inheritContext,
-          parentSystemPrompt,
-          parentSignal: signal,
-          currentDepth: 0,
-          toolBudget: resolvedBudget,
-        };
-
         const detailBase = {
           agent: agentDef.name,
           task: params.task,
@@ -309,6 +267,32 @@ export function registerSubagentTool(
           stderr: "",
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
           recentToolActivity: [] as SubagentExecutionDetails["recentToolActivity"],
+        };
+
+        // Validate the merged tool budget
+        let resolvedBudget: ResolvedToolBudget | undefined;
+        if (resolved.toolBudget) {
+          const validated = validateToolBudget(resolved.toolBudget);
+          if (validated.error) {
+            return {
+              content: [{ type: "text", text: validated.error }],
+              isError: true,
+              details: { ...detailBase, status: "error" as const, stopReason: "error", stderr: validated.error },
+            };
+          }
+          resolvedBudget = validated.budget;
+        }
+
+        const spawnOptions = {
+          prompt: params.task.trim(),
+          cwd: effectiveCwd,
+          maxTurns: resolved.maxTurns,
+          graceTurns: loadedConfig.config.graceTurns,
+          inheritContext: resolved.inheritContext,
+          parentSystemPrompt,
+          parentSignal: signal,
+          currentDepth: 0,
+          toolBudget: resolvedBudget,
         };
 
         // Resume path
