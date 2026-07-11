@@ -118,5 +118,10 @@ export function outputEntryFromResult(
   stepIndex: number,
   structured?: unknown,
 ): ChainOutputMapEntry {
-  return { text, structured, agent, stepIndex };
+  return {
+    text,
+    ...(structured !== undefined ? { structured } : {}),
+    agent,
+    stepIndex,
+  };
 }

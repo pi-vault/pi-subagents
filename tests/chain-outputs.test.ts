@@ -62,6 +62,19 @@ describe("validateChainOutputBindings", () => {
       ChainOutputValidationError,
     );
   });
+
+  test("accepts dynamic parallel step with collect output", () => {
+    const steps: ChainStep[] = [
+      { agent: "scout", task: "find targets", as: "targets" },
+      {
+        expand: { from: { output: "targets", path: "/items" }, item: "target" },
+        parallel: { agent: "reviewer", task: "review {target}" },
+        collect: { as: "reviews" },
+      },
+      { agent: "worker", task: "synthesize {outputs.reviews}" },
+    ];
+    expect(() => validateChainOutputBindings(steps)).not.toThrow();
+  });
 });
 
 describe("resolveOutputReferences", () => {
@@ -101,14 +114,14 @@ describe("resolveOutputReferences", () => {
 });
 
 describe("outputEntryFromResult", () => {
-  test("creates entry from text result", () => {
+  test("creates entry from text result without structured key", () => {
     const entry = outputEntryFromResult("scout", "found files", 0);
     expect(entry).toEqual({
       text: "found files",
-      structured: undefined,
       agent: "scout",
       stepIndex: 0,
     });
+    expect("structured" in entry).toBe(false);
   });
 
   test("creates entry with structured output", () => {

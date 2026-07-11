@@ -365,6 +365,8 @@ export interface DynamicParallelStep {
   collect: { as: string; outputSchema?: JsonSchemaObject };
   concurrency?: number;
   failFast?: boolean;
+  phase?: string;
+  label?: string;
   acceptance?: AcceptanceInput;
 }
 
