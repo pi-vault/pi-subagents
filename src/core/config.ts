@@ -90,6 +90,8 @@ export function loadConfig(paths: ResolvedPaths): LoadedConfig {
       maxSpawnsPerSession: isFiniteNumber(raw.maxSpawnsPerSession)
         ? raw.maxSpawnsPerSession
         : DEFAULT_CONFIG.maxSpawnsPerSession,
+      // Structural check only; deep validation (soft/hard/block) is done by
+      // validateToolBudget() at resolution time in tool-budget.ts.
       toolBudget:
         raw.toolBudget &&
         typeof raw.toolBudget === "object" &&
