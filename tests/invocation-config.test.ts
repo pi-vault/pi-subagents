@@ -104,3 +104,37 @@ describe("resolveInvocationConfig", () => {
     expect(result.inheritContext).toBe(false);
   });
 });
+
+describe("toolBudget resolution (inverted priority)", () => {
+  it("tool param toolBudget takes priority over frontmatter", () => {
+    const result = resolveInvocationConfig(
+      { toolBudget: { hard: 20 } },
+      { toolBudget: { soft: 5, hard: 10 } },
+      {},
+    );
+    expect(result.toolBudget).toEqual({ soft: 5, hard: 10 });
+  });
+
+  it("frontmatter toolBudget used when tool param omits it", () => {
+    const result = resolveInvocationConfig(
+      { toolBudget: { hard: 20 } },
+      {},
+      {},
+    );
+    expect(result.toolBudget).toEqual({ hard: 20 });
+  });
+
+  it("config toolBudget used as fallback", () => {
+    const result = resolveInvocationConfig(
+      {},
+      {},
+      { toolBudget: { hard: 30 } },
+    );
+    expect(result.toolBudget).toEqual({ hard: 30 });
+  });
+
+  it("returns undefined when all sources omit toolBudget", () => {
+    const result = resolveInvocationConfig({}, {}, {});
+    expect(result.toolBudget).toBeUndefined();
+  });
+});

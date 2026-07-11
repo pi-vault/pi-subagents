@@ -1,9 +1,12 @@
+import type { ToolBudgetConfig } from "../shared/types.js";
+
 export interface AgentFrontmatterConfig {
   model?: string;
   thinking?: string;
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
+  toolBudget?: ToolBudgetConfig;
 }
 
 export interface ToolParamConfig {
@@ -12,12 +15,14 @@ export interface ToolParamConfig {
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
+  toolBudget?: ToolBudgetConfig;
 }
 
 export interface ParentDefaults {
   model?: string;
   thinking?: string;
   defaultMaxTurns?: number;
+  toolBudget?: ToolBudgetConfig;
 }
 
 export interface ResolvedInvocationConfig {
@@ -26,6 +31,7 @@ export interface ResolvedInvocationConfig {
   maxTurns: number;
   isolated: boolean;
   inheritContext: boolean;
+  toolBudget?: ToolBudgetConfig;
 }
 
 export function resolveInvocationConfig(
@@ -44,5 +50,8 @@ export function resolveInvocationConfig(
     isolated: frontmatter.isolated ?? toolParams.isolated ?? false,
     inheritContext:
       frontmatter.inheritContext ?? toolParams.inheritContext ?? false,
+    // Tool budgets: inverted priority (tool params > frontmatter > config).
+    // The parent orchestrator can restrict a child's budget per-call.
+    toolBudget: toolParams.toolBudget ?? frontmatter.toolBudget ?? defaults.toolBudget,
   };
 }
