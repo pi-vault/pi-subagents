@@ -51,6 +51,7 @@ function makeMockDeps(stepResults: Array<{ result: string; status?: string }>) {
     const record: Partial<AgentRecord> = {
       id: `agent-${callIndex}`,
       type: "mock",
+      description: "mock agent",
       status: (r.status as AgentRecord["status"]) ?? "completed",
       result: r.result,
       error: r.status === "error" ? r.result : undefined,
@@ -174,8 +175,6 @@ Create `src/core/chain-execution.ts`. This is the largest file. The implementati
 The core structure:
 
 ```typescript
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import type {
   AgentDefinition,
   AgentRecord,
@@ -245,8 +244,12 @@ export async function executeChain(
   const results: Array<{ agent: string; output: string; status: string }> = [];
   const chainSteps = [...steps];
 
+  let aborted = false;
   for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
-    if (signal?.aborted) break;
+    if (signal?.aborted) {
+      aborted = true;
+      break;
+    }
 
     const step = chainSteps[stepIndex]!;
     const template = templates[stepIndex];
@@ -412,6 +415,13 @@ export async function executeChain(
   const summary = results
     .map((r) => `[${r.agent}] ${r.output.slice(0, 200)}`)
     .join("\n\n");
+
+  if (aborted) {
+    return {
+      content: `Chain aborted after ${results.length} of ${chainSteps.length} steps.\n\n${summary}`,
+      isError: true,
+    };
+  }
 
   return {
     content: prev || summary,
