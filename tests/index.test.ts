@@ -303,6 +303,7 @@ describe("subagents extension", () => {
       "Default Max Turns",
       "Grace Turns",
       "Default Join Mode",
+      "Max Spawns Per Session",
       "Widget Mode",
       "Fleet View",
     ]);
@@ -312,6 +313,7 @@ describe("subagents extension", () => {
       "Default Max Turns (0 = unlimited)",
       "Grace Turns (extra turns after soft limit)",
       "Default Join Mode (async, group, smart)",
+      "Max Spawns Per Session (0 = block all)",
       "Widget Mode (all / background / off)",
       "Fleet View (true / false)",
     ]);
@@ -319,7 +321,7 @@ describe("subagents extension", () => {
 
   test("settings flow edits one selected setting and writes only that change", async () => {
     const writes: SubagentsConfig[] = [];
-    const selections = ["Max Concurrency      3", "Back"];
+    const selections = ["Max Concurrency         3", "Back"];
     const inputs = ["7"];
 
     await runAgentsMenuSettingsFlow(
@@ -357,7 +359,7 @@ describe("subagents extension", () => {
   test("menu settings rejects invalid numeric input and does not save", async () => {
     const writes: SubagentsConfig[] = [];
     const notifications: Array<{ message: string; level: string }> = [];
-    const selections = ["Max Concurrency      3", "Back"];
+    const selections = ["Max Concurrency         3", "Back"];
     const inputs = ["abc"];
 
     await runAgentsMenuSettingsFlow(
@@ -417,7 +419,7 @@ describe("subagents extension", () => {
 
   test("settings fallback without ui.custom still shows current values in select labels", async () => {
     const seenOptions: string[][] = [];
-    const selections = ["Max Concurrency      3", "Back"];
+    const selections = ["Max Concurrency         3", "Back"];
 
     await runAgentsMenuSettingsFlow(
       {
@@ -436,7 +438,7 @@ describe("subagents extension", () => {
       createMenuDeps(),
     );
 
-    expect(seenOptions.some((options) => options.includes("Max Concurrency      3"))).toBe(true);
+    expect(seenOptions.some((options) => options.includes("Max Concurrency         3"))).toBe(true);
   });
 
   test("menu action reports export errors instead of throwing", async () => {
