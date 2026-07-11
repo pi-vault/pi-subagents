@@ -10,6 +10,7 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
+  ChainStep,
   ResolvedToolBudget,
   SubagentExecutionDetails,
   SubagentToolInput,
@@ -31,7 +32,7 @@ import {
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
-  agent: Type.String({ description: "Name of the agent to invoke" }),
+  agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
   task: Type.String({ description: "Task to delegate to the agent" }),
   cwd: Type.Optional(
     Type.String({ description: "Working directory for the subagent" }),
@@ -89,6 +90,37 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
       { description: "Tool call budget with soft/hard limits" },
     ),
   ),
+  chain: Type.Optional(
+    Type.Array(
+      Type.Object({
+        agent: Type.Optional(Type.String()),
+        task: Type.Optional(Type.String()),
+        phase: Type.Optional(Type.String()),
+        label: Type.Optional(Type.String()),
+        as: Type.Optional(Type.String()),
+        output: Type.Optional(Type.Union([Type.String(), Type.Literal(false)])),
+        outputMode: Type.Optional(Type.String()),
+        reads: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal(false)])),
+        model: Type.Optional(Type.String()),
+        skills: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal(false)])),
+        progress: Type.Optional(Type.Boolean()),
+        cwd: Type.Optional(Type.String()),
+        parallel: Type.Optional(Type.Array(Type.Any())),
+        concurrency: Type.Optional(Type.Number()),
+        failFast: Type.Optional(Type.Boolean()),
+        worktree: Type.Optional(Type.Boolean()),
+        expand: Type.Optional(Type.Any()),
+        collect: Type.Optional(Type.Any()),
+      }),
+      { description: "Chain execution: sequential/parallel steps" },
+    ),
+  ),
+  chain_append: Type.Optional(
+    Type.Object({
+      chain_id: Type.String({ description: "ID of running async chain" }),
+      steps: Type.Array(Type.Any(), { description: "Steps to append" }),
+    }),
+  ),
 });
 
 export function findAgentByName(
@@ -124,7 +156,7 @@ function parseAndResolveAgent(
   discovery: AgentDiscoveryResult,
   input: SubagentToolInput,
 ): AgentDefinition {
-  const requestedAgent = input.agent.trim();
+  const requestedAgent = (input.agent ?? "").trim();
   if (!requestedAgent) {
     throw new Error(
       `Missing agent. Available agents: ${listAvailableAgents(discovery)}`,
@@ -151,7 +183,18 @@ export function registerSubagentTool(
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Delegate a task to a discovered agent.",
+    description: `Delegate a task to a discovered agent. Supports single agent, chain (sequential/parallel pipeline), and chain_append modes.
+
+## CHAIN mode
+
+Pass a \`chain\` array to run multiple agents in sequence/parallel:
+
+chain: [
+  { agent: "scout", task: "Analyze {task}", as: "context" },
+  { agent: "planner", task: "Plan based on {outputs.context}" }
+]
+
+Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
     parameters: SUBAGENT_TOOL_PARAMETERS,
     renderCall: renderSubagentCall,
     renderResult: (result, options, theme) =>
@@ -168,6 +211,86 @@ export function registerSubagentTool(
       const paths = deps.resolvePaths();
       const loadedConfig = deps.loadConfig(paths);
       const discovery = deps.discoverAgents(paths);
+
+      const stubDetails = (o: Partial<SubagentExecutionDetails>): SubagentExecutionDetails => ({
+        status: "error", agent: "", task: "", sourcePath: "", cwd: effectiveCwd,
+        maxTurns: 0, durationMs: 0, childSessionDir: "", childSessionPath: "",
+        stopReason: "error", exitCode: null, stderr: "",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+        recentToolActivity: [], ...o,
+      });
+
+      // --- Chain mode dispatch ---
+      if (params.chain) {
+        try {
+          const { executeChain } = await import("./chain-execution.js");
+          const chainResult = await executeChain({
+            steps: params.chain as ChainStep[],
+            task: params.task ?? "",
+            spawnAndWait: async (agentDef, prompt, stepCwd) => {
+              return deps.manager.spawnAndWait(ctx, agentDef, {
+                prompt,
+                cwd: stepCwd || effectiveCwd,
+                maxTurns: loadedConfig.config.defaultMaxTurns,
+              });
+            },
+            findAgent: (name) => {
+              const agent = findAgentByName(discovery, name);
+              if (!agent) throw new Error(`Unknown agent: "${name}"`);
+              return agent;
+            },
+            cwd: effectiveCwd,
+            runId: `chain-${Date.now().toString(36)}`,
+            signal,
+          });
+          return {
+            content: [{ type: "text", text: chainResult.content }],
+            isError: chainResult.isError,
+            details: stubDetails({
+              status: chainResult.isError ? "error" : "success",
+              agent: "(chain)",
+              task: params.task ?? "",
+              stopReason: chainResult.isError ? "error" : "completed",
+              stderr: chainResult.isError ? chainResult.content : "",
+            }),
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: [{ type: "text", text: message }],
+            isError: true,
+            details: stubDetails({ agent: "(chain)", task: params.task ?? "", stderr: message }),
+          };
+        }
+      }
+
+      // --- Chain append dispatch ---
+      if (params.chain_append) {
+        const { enqueueChainAppendRequest } = await import("./chain-append.js");
+        enqueueChainAppendRequest(
+          params.chain_append.chain_id,
+          params.chain_append.steps as ChainStep[],
+        );
+        return {
+          content: [{ type: "text", text: `Steps appended to chain ${params.chain_append.chain_id}.` }],
+          isError: false,
+          details: stubDetails({
+            status: "success",
+            agent: "(chain-append)",
+            task: `append to ${params.chain_append.chain_id}`,
+            stopReason: "completed",
+          }),
+        };
+      }
+
+      // --- Guard: agent required for single mode ---
+      if (!params.agent) {
+        return {
+          content: [{ type: "text", text: "Missing 'agent'. Provide 'agent' for single mode or 'chain' for chain mode." }],
+          isError: true,
+          details: stubDetails({ task: params.task ?? "", stderr: "Missing agent" }),
+        };
+      }
 
       try {
         const agentDef = parseAndResolveAgent(discovery, params);
@@ -463,7 +586,7 @@ export function registerSubagentTool(
           isError: true,
           details: {
             status: "error" as const,
-            agent: params.agent,
+            agent: params.agent ?? "",
             task: params.task,
             sourcePath: "",
             cwd: effectiveCwd,

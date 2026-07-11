@@ -12,79 +12,13 @@ import {
   registerSubagentTool,
 } from "../src/core/subagent.js";
 import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
-import type {
-  AgentDefinition,
-  AgentDiscoveryResult,
-  AgentRecord,
-  LifetimeUsage,
-} from "../src/shared/types.js";
-
-function createAgent(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
-  return {
-    name: "Scout",
-    description: "Scout files",
-    tools: ["read", "bash"],
-    subagentAgents: [],
-    systemPrompt: "You are Scout.",
-    sourcePath: "/repo/agents/scout.md",
-    ...overrides,
-  };
-}
-
-function createDiscovery(agents: AgentDefinition[] = []): AgentDiscoveryResult {
-  return { agents, diagnostics: [] };
-}
-
-function emptyUsage(): LifetimeUsage {
-  return {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheWriteTokens: 0,
-  };
-}
-
-function completedRecord(result = "done"): AgentRecord {
-  return {
-    id: "test-inv",
-    type: "subagent",
-    description: "test task",
-    status: "completed",
-    startedAt: 1000,
-    durationMs: 42,
-    result,
-    error: undefined,
-    toolUses: 0,
-    turnCount: 0,
-    lifetimeUsage: emptyUsage(),
-  };
-}
-
-function createDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
-  return {
-    resolvePaths: () => ({
-      agentDir: "/tmp/pi-agent",
-      configPath: "/tmp/pi-agent/extensions/subagents.json",
-      userAgentsDir: "/tmp/pi-agent/agents",
-      bundledAgentsDir: "/repo/agents",
-      sessionsDir: "/tmp/pi-agent/sessions",
-      userChainsDir: "/tmp/pi-agent/chains",
-      bundledChainsDir: "/repo/chains",
-    }),
-    loadConfig: () => ({
-      exists: false,
-      config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultMaxTurns: 0, graceTurns: 5, defaultJoinMode: "smart" as const, maxSpawnsPerSession: 40 },
-    }),
-    discoverAgents: () => createDiscovery([createAgent()]),
-    discoverToolNames: () => ["bash", "read"],
-    createAgentFile: () => { throw new Error("not used"); },
-    exportAgentToUserScope: () => { throw new Error("not used"); },
-    disableAgentInUserScope: () => { throw new Error("not used"); },
-    deleteUserAgentOverride: () => {},
-    saveConfig: () => {},
-    manager: new AgentManager(),
-    ...overrides,
-  };
-}
+import {
+  completedRecord,
+  createAgent,
+  createDeps,
+  createDiscovery,
+  emptyUsage,
+} from "./_test-helpers.js";
 
 type ToolDef = Parameters<ExtensionAPI["registerTool"]>[0];
 
