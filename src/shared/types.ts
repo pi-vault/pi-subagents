@@ -296,3 +296,175 @@ export interface EnvInfo {
   branch: string;
   platform: string;
 }
+
+// ---------------------------------------------------------------------------
+// Chain execution types (spec section 2)
+// ---------------------------------------------------------------------------
+
+export interface AcceptanceInput {
+  description: string;
+  command?: string;
+}
+
+export type JsonSchemaObject = Record<string, unknown>;
+
+export interface SequentialStep {
+  agent: string;
+  task?: string;
+  phase?: string;
+  label?: string;
+  as?: string;
+  outputSchema?: JsonSchemaObject;
+  output?: string | false;
+  outputMode?: "inline" | "file-only";
+  reads?: string[] | false;
+  model?: string;
+  skills?: string[] | false;
+  progress?: boolean;
+  cwd?: string;
+  acceptance?: AcceptanceInput;
+  toolBudget?: ToolBudgetConfig;
+}
+
+export interface ParallelTaskItem {
+  agent: string;
+  task?: string;
+  phase?: string;
+  label?: string;
+  as?: string;
+  outputSchema?: JsonSchemaObject;
+  count?: number;
+  output?: string | false;
+  outputMode?: "inline" | "file-only";
+  reads?: string[] | false;
+  model?: string;
+  skills?: string[] | false;
+  progress?: boolean;
+  cwd?: string;
+  acceptance?: AcceptanceInput;
+  toolBudget?: ToolBudgetConfig;
+}
+
+export interface ParallelStep {
+  parallel: ParallelTaskItem[];
+  concurrency?: number;
+  failFast?: boolean;
+  worktree?: boolean;
+  cwd?: string;
+}
+
+export interface DynamicParallelStep {
+  expand: {
+    from: { output: string; path: string };
+    item?: string;
+    key?: string;
+    maxItems?: number;
+    onEmpty?: "skip" | "fail";
+  };
+  parallel: DynamicParallelTemplate;
+  collect: { as: string; outputSchema?: JsonSchemaObject };
+  concurrency?: number;
+  failFast?: boolean;
+  phase?: string;
+  label?: string;
+  acceptance?: AcceptanceInput;
+}
+
+export type DynamicParallelTemplate = Omit<ParallelTaskItem, "as" | "count">;
+
+export type ChainStep = SequentialStep | ParallelStep | DynamicParallelStep;
+
+export interface ChainOutputMapEntry {
+  text: string;
+  structured?: unknown;
+  agent: string;
+  stepIndex: number;
+}
+
+export type ChainOutputMap = Record<string, ChainOutputMapEntry>;
+
+export interface ChainConfig {
+  name: string;
+  localName?: string;
+  packageName?: string;
+  description: string;
+  filePath: string;
+  steps: ChainStepConfig[];
+  extraFields?: Record<string, string>;
+}
+
+export interface ChainStepConfig {
+  agent?: string;
+  task?: string;
+  phase?: string;
+  label?: string;
+  as?: string;
+  outputSchema?: string | JsonSchemaObject;
+  output?: string | false;
+  outputMode?: "inline" | "file-only";
+  reads?: string[] | false;
+  model?: string;
+  skills?: string[] | false;
+  progress?: boolean;
+  cwd?: string;
+  acceptance?: AcceptanceInput;
+  toolBudget?: ToolBudgetConfig;
+  parallel?: ChainStepConfig[];
+  concurrency?: number;
+  failFast?: boolean;
+  worktree?: boolean;
+  expand?: DynamicParallelStep["expand"];
+  collect?: DynamicParallelStep["collect"];
+}
+
+export type WorkflowNodeStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "paused"
+  | "stopped";
+
+export interface WorkflowGraphNode {
+  id: string;
+  kind: "step" | "parallel-group" | "dynamic-parallel-group" | "agent";
+  agent?: string;
+  phase?: string;
+  label: string;
+  status: WorkflowNodeStatus;
+  flatIndex?: number;
+  stepIndex?: number;
+  children?: WorkflowGraphNode[];
+  dynamic?: {
+    sourceOutput: string;
+    sourcePath: string;
+    itemName: string;
+    maxItems?: number;
+    collectAs?: string;
+  };
+  itemKey?: string;
+  outputName?: string;
+  structured?: boolean;
+  error?: string;
+}
+
+export interface WorkflowGraphSnapshot {
+  runId: string;
+  mode: SubagentRunMode;
+  phases: Array<{ title: string; nodeIds: string[] }>;
+  nodes: WorkflowGraphNode[];
+  currentNodeId?: string;
+}
+
+export type SubagentRunMode = "single" | "parallel" | "chain";
+
+export interface ChainDiscoveryDiagnostic {
+  filePath: string;
+  error: string;
+}
+
+export interface ChainDiscoveryResult {
+  chains: ChainConfig[];
+  diagnostics: ChainDiscoveryDiagnostic[];
+}
