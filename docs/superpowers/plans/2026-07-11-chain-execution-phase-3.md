@@ -10,11 +10,25 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-11-chain-execution-design.md`
 
-**Reference:** `/Users/lanh/Developer/pi-packages/nicobailon-pi-subagents` (source project to port from)
+**Reference:** `/Users/lanh/Developer/pi-packages/nicobailon-pi-subagents/src/agents/chain-serializer.ts`
 
 **Parent plan:** `docs/superpowers/plans/2026-07-11-chain-execution.md`
 
-**Prerequisites:** Phase 1 complete (chain types in `src/shared/types.ts`), Phase 2 complete (`chain-outputs.ts` for `validateChainOutputBindings`).
+**Prerequisites:** Phase 1 complete (chain types in `src/shared/types.ts`), Phase 2 complete (`chain-outputs.ts` for `validateChainOutputBindings`, `tool-budget.ts` for `validateToolBudget`).
+
+**Key dependencies in this project:**
+
+- `validateChainOutputBindings(steps: ChainStep[]): void` from `./chain-outputs.js`
+- `validateToolBudget(raw: unknown, label?: string): { budget?: ResolvedToolBudget; error?: string }` from `./tool-budget.js`
+- Types: `ChainConfig`, `ChainStepConfig`, `ChainStep`, `ToolBudgetConfig` from `../shared/types.js`
+
+**Differences from reference (nicobailon-pi-subagents):**
+
+- No `AgentSource` type — our `ChainConfig` uses `filePath` only (no `source` field)
+- No `parsePackageName` / `buildRuntimeName` / `frontmatterNameForConfig` — store `packageName` from frontmatter `package` field directly; `name` = frontmatter name as-is
+- No `validateAcceptanceInput` yet — skip acceptance validation for now (type already allows it on `ChainStepConfig`)
+- No `parseFrontmatter` from external module — inline a simple key-value parser (chain frontmatter is flat)
+- `validateToolBudget` in our project returns `{ budget?, error? }` vs reference's `validateToolBudgetConfig` — use our version
 
 ---
 
@@ -39,7 +53,6 @@ import {
   serializeChain,
   serializeJsonChain,
 } from "../src/core/chain-serializer.js";
-import type { ChainConfig } from "../src/shared/types.js";
 
 describe("parseChain (.chain.md)", () => {
   test("parses a simple 2-step chain", () => {
@@ -98,6 +111,23 @@ describe("parseChain (.chain.md)", () => {
     expect(config.steps[0]!.progress).toBe(true);
   });
 
+  test("handles output: false", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "---",
+      "",
+      "## a",
+      "output: false",
+      "",
+      "task",
+    ].join("\n");
+
+    const config = parseChain("/tmp/test.chain.md", content);
+    expect(config.steps[0]!.output).toBe(false);
+  });
+
   test("handles reads: false", () => {
     const content = [
       "---",
@@ -132,6 +162,157 @@ describe("parseChain (.chain.md)", () => {
     expect(config.steps[0]!.reads).toEqual(["file1.md", "file2.md"]);
   });
 
+  test("handles skills: false and comma-separated skills", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "---",
+      "",
+      "## a",
+      "skills: false",
+      "",
+      "task a",
+      "",
+      "## b",
+      "skills: code-review, testing",
+      "",
+      "task b",
+    ].join("\n");
+
+    const config = parseChain("/tmp/test.chain.md", content);
+    expect(config.steps[0]!.skills).toBe(false);
+    expect(config.steps[1]!.skills).toEqual(["code-review", "testing"]);
+  });
+
+  test("rejects inline JSON outputSchema", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "---",
+      "",
+      "## a",
+      'outputSchema: {"type":"object"}',
+      "",
+      "task",
+    ].join("\n");
+
+    expect(() => parseChain("/tmp/test.chain.md", content)).toThrow(
+      /inline.*outputSchema/i,
+    );
+  });
+
+  test("parses outputSchema as file path", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "---",
+      "",
+      "## a",
+      "outputSchema: schemas/result.json",
+      "",
+      "task",
+    ].join("\n");
+
+    const config = parseChain("/tmp/test.chain.md", content);
+    expect(config.steps[0]!.outputSchema).toBe("schemas/result.json");
+  });
+
+  test("throws on invalid toolBudget JSON", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "---",
+      "",
+      "## a",
+      "toolBudget: not-json",
+      "",
+      "task",
+    ].join("\n");
+
+    expect(() => parseChain("/tmp/test.chain.md", content)).toThrow(
+      /toolBudget/,
+    );
+  });
+
+  test("throws on invalid toolBudget structure", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "---",
+      "",
+      "## a",
+      'toolBudget: {"soft": 5}',
+      "",
+      "task",
+    ].join("\n");
+
+    expect(() => parseChain("/tmp/test.chain.md", content)).toThrow(/hard/);
+  });
+
+  test("parses valid toolBudget", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "---",
+      "",
+      "## a",
+      'toolBudget: {"hard": 10, "soft": 5}',
+      "",
+      "task",
+    ].join("\n");
+
+    const config = parseChain("/tmp/test.chain.md", content);
+    expect(config.steps[0]!.toolBudget).toEqual({ hard: 10, soft: 5 });
+  });
+
+  test("preserves extra frontmatter fields", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "version: 2",
+      "author: dev",
+      "---",
+      "",
+      "## a",
+      "",
+      "task",
+    ].join("\n");
+
+    const config = parseChain("/tmp/test.chain.md", content);
+    expect(config.extraFields).toEqual({ version: "2", author: "dev" });
+  });
+
+  test("parses package field", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "package: @org/tools",
+      "---",
+      "",
+      "## a",
+      "",
+      "task",
+    ].join("\n");
+
+    const config = parseChain("/tmp/test.chain.md", content);
+    expect(config.packageName).toBe("@org/tools");
+  });
+
+  test("throws on missing frontmatter", () => {
+    const content = "## a\ntask";
+    expect(() => parseChain("/tmp/bad.chain.md", content)).toThrow(
+      /frontmatter/,
+    );
+  });
+
   test("throws on missing frontmatter name", () => {
     const content = [
       "---",
@@ -139,10 +320,44 @@ describe("parseChain (.chain.md)", () => {
       "---",
       "",
       "## a",
+      "",
       "task text",
     ].join("\n");
 
-    expect(() => parseChain("/tmp/bad.chain.md", content)).toThrow();
+    expect(() => parseChain("/tmp/bad.chain.md", content)).toThrow(/name/);
+  });
+
+  test("throws on missing frontmatter description", () => {
+    const content = [
+      "---",
+      "name: test",
+      "---",
+      "",
+      "## a",
+      "",
+      "task text",
+    ].join("\n");
+
+    expect(() => parseChain("/tmp/bad.chain.md", content)).toThrow(
+      /description/,
+    );
+  });
+
+  test("progress: false sets false explicitly", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test",
+      "---",
+      "",
+      "## a",
+      "progress: false",
+      "",
+      "task",
+    ].join("\n");
+
+    const config = parseChain("/tmp/test.chain.md", content);
+    expect(config.steps[0]!.progress).toBe(false);
   });
 });
 
@@ -189,6 +404,58 @@ describe("parseJsonChain (.chain.json)", () => {
     expect(config.steps[1]!.collect).toEqual({ as: "reviews" });
   });
 
+  test("validates per-step toolBudget", () => {
+    const content = JSON.stringify({
+      name: "test",
+      description: "test",
+      chain: [{ agent: "a", task: "t", toolBudget: { soft: 5 } }],
+    });
+
+    expect(() => parseJsonChain("/tmp/bad.chain.json", content)).toThrow(
+      /hard/,
+    );
+  });
+
+  test("validates per-step as object", () => {
+    const content = JSON.stringify({
+      name: "test",
+      description: "test",
+      chain: ["not an object"],
+    });
+
+    expect(() => parseJsonChain("/tmp/bad.chain.json", content)).toThrow(
+      /must be an object/,
+    );
+  });
+
+  test("validates toolBudget in parallel tasks", () => {
+    const content = JSON.stringify({
+      name: "test",
+      description: "test",
+      chain: [
+        {
+          parallel: [{ agent: "a", task: "t", toolBudget: { hard: -1 } }],
+        },
+      ],
+    });
+
+    expect(() => parseJsonChain("/tmp/bad.chain.json", content)).toThrow(
+      /hard/,
+    );
+  });
+
+  test("preserves extra string fields", () => {
+    const content = JSON.stringify({
+      name: "test",
+      description: "test",
+      version: "2",
+      chain: [{ agent: "a", task: "t" }],
+    });
+
+    const config = parseJsonChain("/tmp/test.chain.json", content);
+    expect(config.extraFields).toEqual({ version: "2" });
+  });
+
   test("throws on invalid JSON", () => {
     expect(() => parseJsonChain("/tmp/bad.chain.json", "not json")).toThrow();
   });
@@ -198,6 +465,24 @@ describe("parseJsonChain (.chain.json)", () => {
       parseJsonChain(
         "/tmp/bad.chain.json",
         JSON.stringify({ description: "no name", chain: [] }),
+      ),
+    ).toThrow();
+  });
+
+  test("throws on missing description", () => {
+    expect(() =>
+      parseJsonChain(
+        "/tmp/bad.chain.json",
+        JSON.stringify({ name: "test", chain: [] }),
+      ),
+    ).toThrow();
+  });
+
+  test("throws on missing chain array", () => {
+    expect(() =>
+      parseJsonChain(
+        "/tmp/bad.chain.json",
+        JSON.stringify({ name: "test", description: "test" }),
       ),
     ).toThrow();
   });
@@ -227,9 +512,49 @@ describe("serializeChain", () => {
     const serialized = serializeChain(original);
     const reparsed = parseChain("/tmp/test.chain.md", serialized);
     expect(reparsed.name).toBe(original.name);
+    expect(reparsed.description).toBe(original.description);
     expect(reparsed.steps.length).toBe(original.steps.length);
     expect(reparsed.steps[0]!.agent).toBe(original.steps[0]!.agent);
     expect(reparsed.steps[0]!.as).toBe(original.steps[0]!.as);
+    expect(reparsed.steps[0]!.task).toBe(original.steps[0]!.task);
+  });
+
+  test("roundtrips all step fields", () => {
+    const original = parseChain(
+      "/tmp/test.chain.md",
+      [
+        "---",
+        "name: full",
+        "description: full test",
+        "package: @org/tools",
+        "---",
+        "",
+        "## agent",
+        "phase: Build",
+        "label: Do stuff",
+        "as: result",
+        "output: out.md",
+        "outputMode: file-only",
+        "reads: a.md, b.md",
+        "model: openai/gpt-4o",
+        "skills: code-review, testing",
+        "progress: true",
+        "",
+        "Build the thing",
+      ].join("\n"),
+    );
+
+    const serialized = serializeChain(original);
+    const reparsed = parseChain("/tmp/test.chain.md", serialized);
+    expect(reparsed.packageName).toBe("@org/tools");
+    expect(reparsed.steps[0]!.phase).toBe("Build");
+    expect(reparsed.steps[0]!.label).toBe("Do stuff");
+    expect(reparsed.steps[0]!.output).toBe("out.md");
+    expect(reparsed.steps[0]!.outputMode).toBe("file-only");
+    expect(reparsed.steps[0]!.reads).toEqual(["a.md", "b.md"]);
+    expect(reparsed.steps[0]!.model).toBe("openai/gpt-4o");
+    expect(reparsed.steps[0]!.skills).toEqual(["code-review", "testing"]);
+    expect(reparsed.steps[0]!.progress).toBe(true);
   });
 });
 
@@ -250,6 +575,24 @@ describe("serializeJsonChain", () => {
     expect(reparsed.steps[0]!.agent).toBe("a");
     expect(reparsed.steps[0]!.as).toBe("out");
   });
+
+  test("includes package and extraFields", () => {
+    const original = parseJsonChain(
+      "/tmp/test.chain.json",
+      JSON.stringify({
+        name: "test",
+        description: "test",
+        package: "@org/tools",
+        version: "2",
+        chain: [{ agent: "a", task: "t" }],
+      }),
+    );
+
+    const serialized = serializeJsonChain(original);
+    const parsed = JSON.parse(serialized);
+    expect(parsed.package).toBe("@org/tools");
+    expect(parsed.version).toBe("2");
+  });
 });
 ```
 
@@ -260,153 +603,194 @@ Expected: FAIL (module not found)
 
 - [ ] **Step 3: Implement `chain-serializer.ts`**
 
-Create `src/core/chain-serializer.ts`. Port the parsing logic from reference `src/agents/chain-serializer.ts`, adapting to our types. Key patterns:
+Create `src/core/chain-serializer.ts`. Port the parsing logic from reference `src/agents/chain-serializer.ts`, adapting to our types and available utilities.
 
-- Frontmatter parsed by splitting on `---` delimiters
+Key patterns:
+
+- Frontmatter parsed by splitting on `---` delimiters (flat key-value pairs)
 - Step sections split by `## agent-name` regex: `/^##\s+(.+)[^\S\n]*$/gm`
-- Step config lines: `/^([\w-]+):\s*(.*)$/` until first blank line
-- Remaining text is the task template
-- JSON chain validates structure and calls `validateChainOutputBindings`
+- Step body split at first blank line: config lines before, task text after
+- Config lines parsed: `/^([\w-]+):\s*(.*)$/`
+- `outputSchema`: reject inline JSON (starts with `{` or `[`), only accept file paths
+- `toolBudget`: parse as JSON, then validate via `validateToolBudget()` — throw on error
+- `progress`: explicit "true" → true, "false" → false (not `val !== "false"`)
+- `reads`/`skills`: comma-separated list or "false"; collapse empty result to `false`
+- JSON chain: validate each step is object, validate toolBudget recursively (step, parallel tasks, dynamic template)
+- JSON chain: call `validateChainOutputBindings` with `steps as unknown as ChainStep[]` (structurally compatible)
+- JSON chain: preserve extra string fields (exclude reserved keys: name, description, package, chain)
 
 ```typescript
-import { validateChainOutputBindings } from "./chain-outputs.js";
+import {
+  ChainOutputValidationError,
+  validateChainOutputBindings,
+} from "./chain-outputs.js";
+import { validateToolBudget } from "./tool-budget.js";
 import type {
   ChainConfig,
+  ChainStep,
   ChainStepConfig,
-  ToolBudgetConfig,
 } from "../shared/types.js";
+
+// ---------------------------------------------------------------------------
+// Frontmatter
+// ---------------------------------------------------------------------------
+
+interface Frontmatter {
+  [key: string]: string;
+}
+
+function parseFrontmatter(content: string): {
+  frontmatter: Frontmatter;
+  body: string;
+} {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return { frontmatter: {}, body: content };
+  const fm: Frontmatter = {};
+  for (const line of match[1]!.split("\n")) {
+    const kv = line.match(/^([\w-]+):\s*(.*)$/);
+    if (kv) fm[kv[1]!] = kv[2]!.trim();
+  }
+  return { frontmatter: fm, body: content.slice(match[0].length) };
+}
+
+// ---------------------------------------------------------------------------
+// .chain.md step body parsing
+// ---------------------------------------------------------------------------
+
+function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
+  const lines = sectionBody.split("\n");
+  const blankIndex = lines.findIndex((line) => line.trim() === "");
+  const configLines = blankIndex === -1 ? lines : lines.slice(0, blankIndex);
+  const task = (
+    blankIndex === -1 ? "" : lines.slice(blankIndex + 1).join("\n")
+  ).trim();
+
+  const step: ChainStepConfig = { agent, task };
+  for (const line of configLines) {
+    const match = line.match(/^([\w-]+):\s*(.*)$/);
+    if (!match) continue;
+    const key = match[1]!.trim().toLowerCase();
+    const val = match[2]!.trim();
+
+    switch (key) {
+      case "output":
+        if (val === "false") step.output = false;
+        else if (val) step.output = val;
+        break;
+      case "phase":
+        if (val) step.phase = val;
+        break;
+      case "label":
+        if (val) step.label = val;
+        break;
+      case "as":
+        if (val) step.as = val;
+        break;
+      case "outputschema":
+        if (val.startsWith("{") || val.startsWith("[")) {
+          throw new Error(
+            `Inline outputSchema values are not supported in .chain.md files; use a schema file path.`,
+          );
+        }
+        if (val) step.outputSchema = val;
+        break;
+      case "outputmode":
+        if (val === "inline" || val === "file-only") step.outputMode = val;
+        break;
+      case "reads":
+        if (val === "false") {
+          step.reads = false;
+        } else {
+          const reads = val
+            .split(",")
+            .map((v) => v.trim())
+            .filter(Boolean);
+          step.reads = reads.length > 0 ? reads : false;
+        }
+        break;
+      case "model":
+        if (val) step.model = val;
+        break;
+      case "skills":
+        if (val === "false") {
+          step.skills = false;
+        } else {
+          const skills = val
+            .split(",")
+            .map((v) => v.trim())
+            .filter(Boolean);
+          step.skills = skills.length > 0 ? skills : false;
+        }
+        break;
+      case "progress":
+        if (val === "true") step.progress = true;
+        else if (val === "false") step.progress = false;
+        break;
+      case "toolbudget": {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(val);
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `Invalid toolBudget in .chain.md step '${agent}': ${msg}`,
+          );
+        }
+        const validation = validateToolBudget(
+          parsed,
+          `toolBudget for step '${agent}'`,
+        );
+        if (validation.error) throw new Error(validation.error);
+        step.toolBudget = parsed as ChainStepConfig["toolBudget"];
+        break;
+      }
+    }
+  }
+
+  return step;
+}
 
 // ---------------------------------------------------------------------------
 // .chain.md parsing
 // ---------------------------------------------------------------------------
 
-interface Frontmatter {
-  name?: string;
-  description?: string;
-  package?: string;
-  [key: string]: string | undefined;
-}
-
-function parseFrontmatter(raw: string): Frontmatter {
-  const result: Frontmatter = {};
-  for (const line of raw.split("\n")) {
-    const match = line.match(/^([\w-]+):\s*(.*)$/);
-    if (match) result[match[1]!] = match[2]!.trim();
-  }
-  return result;
-}
-
-function parseStepConfig(lines: string[]): {
-  config: Partial<ChainStepConfig>;
-  taskStart: number;
-} {
-  const config: Partial<ChainStepConfig> = {};
-  let i = 0;
-  for (; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (line.trim() === "") break;
-    const match = line.match(/^([\w-]+):\s*(.*)$/);
-    if (!match) break;
-    const key = match[1]!.toLowerCase();
-    const val = match[2]!.trim();
-    switch (key) {
-      case "output":
-        config.output = val === "false" ? false : val;
-        break;
-      case "outputmode":
-        if (val === "inline" || val === "file-only") config.outputMode = val;
-        break;
-      case "phase":
-        config.phase = val;
-        break;
-      case "label":
-        config.label = val;
-        break;
-      case "as":
-        config.as = val;
-        break;
-      case "reads":
-        config.reads =
-          val === "false"
-            ? false
-            : val
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean);
-        break;
-      case "model":
-        config.model = val || undefined;
-        break;
-      case "skills":
-        config.skills =
-          val === "false"
-            ? false
-            : val
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean);
-        break;
-      case "progress":
-        config.progress = val !== "false";
-        break;
-      case "toolbudget":
-        try {
-          config.toolBudget = JSON.parse(val) as ToolBudgetConfig;
-        } catch {
-          // ignore invalid JSON
-        }
-        break;
-      case "outputschema":
-        config.outputSchema = val;
-        break;
-    }
-  }
-  return { config, taskStart: i };
-}
-
 export function parseChain(filePath: string, content: string): ChainConfig {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) throw new Error(`${filePath}: missing frontmatter`);
+  const { frontmatter: fm, body } = parseFrontmatter(content);
 
-  const fm = parseFrontmatter(fmMatch[1]!);
-  if (!fm.name) throw new Error(`${filePath}: frontmatter missing 'name'`);
+  if (!fm.name) {
+    throw new Error(`${filePath}: frontmatter missing 'name'`);
+  }
+  if (!fm.description) {
+    throw new Error(`${filePath}: frontmatter missing 'description'`);
+  }
 
-  const body = content.slice(fmMatch[0].length);
-  const stepMatches = [...body.matchAll(/^##\s+(.+)[^\S\n]*$/gm)];
-  if (stepMatches.length === 0) {
+  const matches = [...body.matchAll(/^##\s+(.+)[^\S\n]*$/gm)];
+  if (matches.length === 0) {
     throw new Error(`${filePath}: no step headings (## agent-name) found`);
   }
 
   const steps: ChainStepConfig[] = [];
-  for (let i = 0; i < stepMatches.length; i++) {
-    const match = stepMatches[i]!;
-    const agentName = match[1]!.trim();
-    const start = match.index! + match[0].length;
-    const end =
-      i + 1 < stepMatches.length ? stepMatches[i + 1]!.index! : body.length;
-    const sectionText = body.slice(start, end).replace(/^\n+/, "");
-    const sectionLines = sectionText.split("\n");
-
-    const { config, taskStart } = parseStepConfig(sectionLines);
-    const task = sectionLines.slice(taskStart).join("\n").trim();
-
-    steps.push({
-      agent: agentName,
-      ...(task ? { task } : {}),
-      ...config,
-    });
+  for (let i = 0; i < matches.length; i++) {
+    const match = matches[i]!;
+    const agent = match[1]!.trim();
+    const lineEndOffset = body[match.index! + match[0].length] === "\n" ? 1 : 0;
+    const sectionStart = match.index! + match[0].length + lineEndOffset;
+    const sectionEnd =
+      i + 1 < matches.length ? matches[i + 1]!.index! : body.length;
+    const sectionBody = body.slice(sectionStart, sectionEnd).trimEnd();
+    steps.push(parseStepBody(agent, sectionBody));
   }
 
-  const { name, description, package: pkg, ...extra } = fm;
   const extraFields: Record<string, string> = {};
-  for (const [k, v] of Object.entries(extra)) {
-    if (v !== undefined) extraFields[k] = v;
+  for (const [key, value] of Object.entries(fm)) {
+    if (key === "name" || key === "package" || key === "description") continue;
+    extraFields[key] = value;
   }
 
   return {
-    name: name!,
-    description: description ?? "",
-    packageName: pkg,
+    name: fm.name,
+    description: fm.description,
+    packageName: fm.package || undefined,
     filePath,
     steps,
     ...(Object.keys(extraFields).length > 0 ? { extraFields } : {}),
@@ -417,40 +801,104 @@ export function parseChain(filePath: string, content: string): ChainConfig {
 // .chain.json parsing
 // ---------------------------------------------------------------------------
 
+function validateJsonStepToolBudget(value: unknown, label: string): void {
+  const result = validateToolBudget(value, label);
+  if (result.error) throw new Error(result.error);
+}
+
 export function parseJsonChain(filePath: string, content: string): ChainConfig {
-  let raw: unknown;
+  let parsed: unknown;
   try {
-    raw = JSON.parse(content);
-  } catch (e) {
-    throw new Error(`${filePath}: invalid JSON — ${(e as Error).message}`);
+    parsed = JSON.parse(content);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`${filePath}: invalid JSON — ${msg}`);
   }
 
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`${filePath}: root must be a JSON object`);
   }
 
-  const obj = raw as Record<string, unknown>;
-  if (typeof obj.name !== "string" || !obj.name) {
+  const input = parsed as Record<string, unknown>;
+  if (typeof input.name !== "string" || !input.name.trim()) {
     throw new Error(`${filePath}: missing required 'name' field`);
   }
-  if (typeof obj.description !== "string") {
+  if (typeof input.description !== "string") {
     throw new Error(`${filePath}: missing required 'description' field`);
   }
-  if (!Array.isArray(obj.chain)) {
+  if (!Array.isArray(input.chain)) {
     throw new Error(`${filePath}: missing required 'chain' array`);
   }
 
-  const steps = obj.chain as ChainStepConfig[];
+  // Per-step validation
+  for (let i = 0; i < input.chain.length; i++) {
+    const step = input.chain[i];
+    if (!step || typeof step !== "object" || Array.isArray(step)) {
+      throw new Error(`${filePath}: step ${i + 1} must be an object`);
+    }
+    const rec = step as Record<string, unknown>;
 
-  // Validate output bindings across the chain
-  validateChainOutputBindings(steps as unknown[]);
+    // Validate toolBudget at step level
+    if (rec.toolBudget !== undefined) {
+      validateJsonStepToolBudget(rec.toolBudget, `step ${i + 1} toolBudget`);
+    }
+
+    // Validate toolBudget in parallel tasks
+    const parallel = rec.parallel;
+    if (Array.isArray(parallel)) {
+      for (let j = 0; j < parallel.length; j++) {
+        const task = parallel[j];
+        if (!task || typeof task !== "object" || Array.isArray(task)) continue;
+        const taskRec = task as Record<string, unknown>;
+        if (taskRec.toolBudget !== undefined) {
+          validateJsonStepToolBudget(
+            taskRec.toolBudget,
+            `step ${i + 1} parallel task ${j + 1} toolBudget`,
+          );
+        }
+      }
+    } else if (parallel && typeof parallel === "object") {
+      // Dynamic parallel template
+      const tmpl = parallel as Record<string, unknown>;
+      if (tmpl.toolBudget !== undefined) {
+        validateJsonStepToolBudget(
+          tmpl.toolBudget,
+          `step ${i + 1} dynamic template toolBudget`,
+        );
+      }
+    }
+  }
+
+  // Validate output bindings
+  try {
+    validateChainOutputBindings(input.chain as unknown as ChainStep[]);
+  } catch (error) {
+    if (error instanceof ChainOutputValidationError) {
+      throw new Error(`${filePath}: ${error.message}`);
+    }
+    throw error;
+  }
+
+  // Preserve extra string fields
+  const extraFields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (
+      key === "name" ||
+      key === "description" ||
+      key === "package" ||
+      key === "chain"
+    )
+      continue;
+    if (typeof value === "string") extraFields[key] = value;
+  }
 
   return {
-    name: obj.name as string,
-    description: obj.description as string,
-    packageName: obj.package as string | undefined,
+    name: (input.name as string).trim(),
+    description: (input.description as string).trim(),
+    packageName: typeof input.package === "string" ? input.package : undefined,
     filePath,
-    steps,
+    steps: input.chain as ChainStepConfig[],
+    ...(Object.keys(extraFields).length > 0 ? { extraFields } : {}),
   };
 }
 
@@ -459,62 +907,69 @@ export function parseJsonChain(filePath: string, content: string): ChainConfig {
 // ---------------------------------------------------------------------------
 
 export function serializeChain(config: ChainConfig): string {
-  const lines: string[] = ["---", `name: ${config.name}`];
-  if (config.description) lines.push(`description: ${config.description}`);
+  const lines: string[] = [];
+  lines.push("---");
+  lines.push(`name: ${config.name}`);
   if (config.packageName) lines.push(`package: ${config.packageName}`);
+  lines.push(`description: ${config.description}`);
   if (config.extraFields) {
-    for (const [k, v] of Object.entries(config.extraFields)) {
-      lines.push(`${k}: ${v}`);
+    for (const [key, value] of Object.entries(config.extraFields)) {
+      lines.push(`${key}: ${value}`);
     }
   }
-  lines.push("---", "");
+  lines.push("---");
+  lines.push("");
 
-  for (const step of config.steps) {
+  for (let i = 0; i < config.steps.length; i++) {
+    const step = config.steps[i]!;
     lines.push(`## ${step.agent}`);
+    if (step.output === false) lines.push("output: false");
+    else if (step.output) lines.push(`output: ${step.output}`);
     if (step.phase) lines.push(`phase: ${step.phase}`);
     if (step.label) lines.push(`label: ${step.label}`);
     if (step.as) lines.push(`as: ${step.as}`);
-    if (step.output !== undefined) {
-      lines.push(`output: ${step.output === false ? "false" : step.output}`);
-    }
+    if (step.outputSchema) lines.push(`outputSchema: ${step.outputSchema}`);
     if (step.outputMode) lines.push(`outputMode: ${step.outputMode}`);
-    if (step.reads !== undefined) {
-      lines.push(
-        `reads: ${step.reads === false ? "false" : (step.reads as string[]).join(", ")}`,
-      );
-    }
+    if (step.reads === false) lines.push("reads: false");
+    else if (Array.isArray(step.reads) && step.reads.length > 0)
+      lines.push(`reads: ${step.reads.join(", ")}`);
     if (step.model) lines.push(`model: ${step.model}`);
-    if (step.skills !== undefined) {
-      lines.push(
-        `skills: ${step.skills === false ? "false" : (step.skills as string[]).join(", ")}`,
-      );
-    }
-    if (step.progress !== undefined) lines.push(`progress: ${step.progress}`);
-    if (step.toolBudget)
+    if (step.skills === false) lines.push("skills: false");
+    else if (Array.isArray(step.skills) && step.skills.length > 0)
+      lines.push(`skills: ${step.skills.join(", ")}`);
+    if (step.progress !== undefined)
+      lines.push(`progress: ${step.progress ? "true" : "false"}`);
+    if (step.toolBudget !== undefined)
       lines.push(`toolBudget: ${JSON.stringify(step.toolBudget)}`);
     lines.push("");
-    if (step.task) lines.push(step.task);
-    lines.push("");
+    lines.push(step.task ?? "");
+    if (i < config.steps.length - 1) lines.push("");
   }
 
-  return lines.join("\n");
+  return `${lines.join("\n")}\n`;
 }
 
 export function serializeJsonChain(config: ChainConfig): string {
-  return JSON.stringify(
-    {
-      name: config.name,
-      description: config.description,
-      ...(config.packageName ? { package: config.packageName } : {}),
-      chain: config.steps,
-    },
-    null,
-    2,
-  );
+  const root: Record<string, unknown> = {
+    name: config.name,
+    description: config.description,
+    chain: config.steps,
+  };
+  if (config.packageName) root.package = config.packageName;
+  if (config.extraFields) {
+    for (const [key, value] of Object.entries(config.extraFields)) {
+      if (
+        key !== "name" &&
+        key !== "description" &&
+        key !== "package" &&
+        key !== "chain"
+      )
+        root[key] = value;
+    }
+  }
+  return `${JSON.stringify(root, null, 2)}\n`;
 }
 ```
-
-Note: `ChainStepConfig` and `ChainStep` are structurally compatible for the fields `validateChainOutputBindings` inspects (`as`, `task`, `parallel`, `expand`, `collect`). The cast `steps as unknown as ChainStep[]` is safe here. If TypeScript complains, adjust the validation function to accept `ReadonlyArray<{as?: string; task?: string; parallel?: unknown; expand?: unknown; collect?: unknown}>` instead.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -524,7 +979,7 @@ Expected: PASS
 - [ ] **Step 5: Run full check**
 
 Run: `pnpm check`
-Expected: PASS
+Expected: PASS (typecheck + lint + all tests)
 
 - [ ] **Step 6: Commit**
 
