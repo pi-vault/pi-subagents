@@ -2,19 +2,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `maxSpawnsPerSession` and `toolBudget` are persisted in config, `toolBudget` flows through invocation-config resolution, settings menu entry added.
+**Goal:** `toolBudget` is persisted in config and flows through invocation-config resolution. Settings menu entry added for `maxSpawnsPerSession`.
 
-**Prerequisite:** Phase 1 complete (types and pure modules exist).
+**Prerequisite:** Phase 1 complete (types, pure modules, and `maxSpawnsPerSession` config wiring exist).
 
 **Tech Stack:** TypeScript, Vitest, Biome
 
 **Spec:** `docs/superpowers/specs/2026-07-08-spawn-limits-tool-budgets-design.md`
 
-**Deliverable:** Config persists new fields. Invocation-config resolves `toolBudget` with inverted priority (tool params > frontmatter > config). Settings menu shows "Max Spawns Per Session".
+**Deliverable:** Config persists `toolBudget`. Invocation-config resolves `toolBudget` with inverted priority (tool params > frontmatter > config). Settings menu shows "Max Spawns Per Session".
+
+**Already landed in Phase 1:**
+- `SubagentsConfig.maxSpawnsPerSession` and `SubagentsConfig.toolBudget?` types in `types.ts`
+- `DEFAULT_CONFIG.maxSpawnsPerSession: 40` in `config.ts`
+- `saveConfig` writes `maxSpawnsPerSession`
+- `loadConfig` reads `maxSpawnsPerSession`
+- `AgentDefinition.toolBudget?`, `SubagentToolInput.tool_budget?`, `RunOptions.toolBudget?`, `SpawnOptions.toolBudget?` in `types.ts`
+- All existing tests pass (`npm run check` clean)
 
 ---
 
-### Task 2.1: Update `src/core/config.ts`
+### Task 2.1: Add `toolBudget` persistence to `src/core/config.ts`
 
 **Files:**
 
@@ -22,7 +30,7 @@
 
 - [ ] **Step 1: Add import for `ToolBudgetConfig`**
 
-At the top of config.ts, add `ToolBudgetConfig` to the type import:
+At the top of config.ts, add `ToolBudgetConfig` to the existing type import:
 
 ```typescript
 import type {
@@ -34,22 +42,9 @@ import type {
 } from "../shared/types.js";
 ```
 
-- [ ] **Step 2: Update `DEFAULT_CONFIG`**
+- [ ] **Step 2: Update `saveConfig` to conditionally write `toolBudget`**
 
-```typescript
-export const DEFAULT_CONFIG: SubagentsConfig = {
-  maxConcurrency: 3,
-  maxRecursiveLevel: 3,
-  defaultMaxTurns: 0,
-  graceTurns: 5,
-  defaultJoinMode: "smart",
-  maxSpawnsPerSession: 40,
-};
-```
-
-- [ ] **Step 3: Update `saveConfig`**
-
-In the `JSON.stringify` object, add the new fields after `defaultJoinMode`:
+Change the `saveConfig` body to build a `data` object and conditionally add `toolBudget`:
 
 ```typescript
 export function saveConfig(
@@ -74,17 +69,11 @@ export function saveConfig(
 }
 ```
 
-- [ ] **Step 4: Update `loadConfig` return object**
+- [ ] **Step 3: Add `toolBudget` to `loadConfig` return object**
 
-In the final `return` block of `loadConfig`, add the new fields after `defaultJoinMode`:
+In the final `return` block of `loadConfig`, add after the existing `maxSpawnsPerSession` field:
 
 ```typescript
-      maxSpawnsPerSession:
-        isFiniteNumber(raw.maxSpawnsPerSession) &&
-        Number.isInteger(raw.maxSpawnsPerSession) &&
-        (raw.maxSpawnsPerSession as number) >= 0
-          ? (raw.maxSpawnsPerSession as number)
-          : DEFAULT_CONFIG.maxSpawnsPerSession,
       toolBudget:
         raw.toolBudget &&
         typeof raw.toolBudget === "object" &&
@@ -93,19 +82,20 @@ In the final `return` block of `loadConfig`, add the new fields after `defaultJo
           : undefined,
 ```
 
-- [ ] **Step 5: Run typecheck**
+Note: Deep validation of `toolBudget` fields (soft/hard/block) happens at resolution time via `validateToolBudget()` in `tool-budget.ts`. Config loading only does structural checks, consistent with nicobailon's approach.
 
-Run: `cd /Users/lanh/Developer/pi-vault/pi-subagents && npx tsc --noEmit`
+- [ ] **Step 4: Run typecheck**
+
+Run: `npx tsc --noEmit`
 Expected: No errors
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```
-feat(config): persist maxSpawnsPerSession and toolBudget
+feat(config): persist toolBudget in saveConfig/loadConfig
 
-- DEFAULT_CONFIG adds maxSpawnsPerSession: 40
-- loadConfig validates and loads both new fields
-- saveConfig conditionally writes toolBudget
+- saveConfig conditionally writes toolBudget when defined
+- loadConfig reads toolBudget with structural type check
 ```
 
 ---
@@ -116,7 +106,7 @@ feat(config): persist maxSpawnsPerSession and toolBudget
 
 - Modify: `src/tui/agents-menu.ts`
 
-- [ ] **Step 1: Add to `SettingsKey` type**
+- [ ] **Step 1: Add `maxSpawnsPerSession` to `SettingsKey` type**
 
 ```typescript
 type SettingsKey =
@@ -144,24 +134,23 @@ Insert after the `defaultJoinMode` entry (before `widgetMode`):
       const value = Number(raw);
       return Number.isInteger(value) && value >= 0 ? value : undefined;
     },
-    apply: (value, deps) => {
-      deps.manager.setMaxSpawnsPerSession(value as number);
-    },
   },
 ```
 
+Note: No `apply` callback here. The runtime `setMaxSpawnsPerSession` method on `AgentManager` does not exist yet -- it will be added in Phase 3, and the `apply` callback will be wired at that time. This matches the pattern used by `maxRecursiveLevel` (config-only, no live `apply`). The value is persisted to config and takes effect on next config load.
+
 - [ ] **Step 3: Run typecheck**
 
-Run: `cd /Users/lanh/Developer/pi-vault/pi-subagents && npx tsc --noEmit`
-Expected: Error -- `setMaxSpawnsPerSession` does not exist on `AgentManager`. This is expected and will be resolved in Phase 3. If you are running phases sequentially, note this error and proceed.
+Run: `npx tsc --noEmit`
+Expected: No errors
 
 - [ ] **Step 4: Commit**
 
 ```
 feat(settings): add Max Spawns Per Session menu entry
 
-- agents-menu.ts: new SettingsKey + menu item with parse/apply
-- Note: typecheck error on setMaxSpawnsPerSession expected until Phase 3
+- agents-menu.ts: new SettingsKey + menu item with parse
+- apply callback deferred to Phase 3 (setMaxSpawnsPerSession)
 ```
 
 ---
@@ -180,7 +169,7 @@ Add the import at the top:
 import type { ToolBudgetConfig } from "../shared/types.js";
 ```
 
-Add `toolBudget?: ToolBudgetConfig;` to each of the three input interfaces:
+Add `toolBudget?: ToolBudgetConfig;` to each of the four interfaces:
 
 ```typescript
 export interface AgentFrontmatterConfig {
@@ -228,9 +217,11 @@ Add to the return object, after `inheritContext`:
     toolBudget: toolParams.toolBudget ?? frontmatter.toolBudget ?? defaults.toolBudget,
 ```
 
+This uses **inverted priority** compared to model/thinking/maxTurns (where frontmatter wins). For budgets, the calling parent should be able to restrict a child's budget per-call. This matches the spec and nicobailon's `resolveEffectiveToolBudget` pattern.
+
 - [ ] **Step 3: Run typecheck**
 
-Run: `cd /Users/lanh/Developer/pi-vault/pi-subagents && npx tsc --noEmit`
+Run: `npx tsc --noEmit`
 Expected: No errors
 
 - [ ] **Step 4: Commit**
@@ -293,8 +284,8 @@ describe("toolBudget resolution (inverted priority)", () => {
 
 - [ ] **Step 2: Run invocation-config tests**
 
-Run: `cd /Users/lanh/Developer/pi-vault/pi-subagents && npx vitest run tests/invocation-config.test.ts`
-Expected: All tests PASS
+Run: `npx vitest run tests/invocation-config.test.ts`
+Expected: All tests PASS (14 existing + 4 new = 18 total)
 
 - [ ] **Step 3: Commit**
 
@@ -312,49 +303,18 @@ test: add toolBudget invocation-config resolution tests
 
 - Modify: `tests/config.test.ts`
 
-- [ ] **Step 1: Update the "uses defaults" test**
+The existing tests already cover `maxSpawnsPerSession` in DEFAULT_CONFIG, loadConfig, and saveConfig (landed in Phase 1). This task adds `toolBudget` persistence tests and explicit assertions for the new fields.
 
-The existing test asserts `toEqual(DEFAULT_CONFIG)` which will now include `maxSpawnsPerSession: 40`. This should already pass since we updated `DEFAULT_CONFIG`. Verify by also checking the new field explicitly. Add after `expect(result.config.graceTurns).toBe(5);`:
+- [ ] **Step 1: Add explicit assertions to the "uses defaults" test**
+
+Add after `expect(result.config.graceTurns).toBe(5);`:
 
 ```typescript
 expect(result.config.maxSpawnsPerSession).toBe(40);
 expect(result.config.toolBudget).toBeUndefined();
 ```
 
-- [ ] **Step 2: Update the "merges configured values" test**
-
-The `toEqual` assertion needs updating to include the new default field. Change the expected object:
-
-```typescript
-expect(result.config).toEqual({
-  maxConcurrency: 7,
-  maxRecursiveLevel: DEFAULT_CONFIG.maxRecursiveLevel,
-  defaultMaxTurns: 20,
-  graceTurns: DEFAULT_CONFIG.graceTurns,
-  defaultJoinMode: DEFAULT_CONFIG.defaultJoinMode,
-  maxSpawnsPerSession: DEFAULT_CONFIG.maxSpawnsPerSession,
-});
-```
-
-- [ ] **Step 3: Add test for `maxSpawnsPerSession` persistence**
-
-```typescript
-test("loads maxSpawnsPerSession from config file", () => {
-  const agentDir = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
-  const configDir = join(agentDir, "extensions");
-  mkdirSync(configDir, { recursive: true });
-  writeFileSync(
-    join(configDir, "subagents.json"),
-    JSON.stringify({ maxSpawnsPerSession: 10 }),
-  );
-
-  const result = loadConfig(resolvePaths(agentDir));
-
-  expect(result.config.maxSpawnsPerSession).toBe(10);
-});
-```
-
-- [ ] **Step 4: Add test for `toolBudget` persistence**
+- [ ] **Step 2: Add test for `toolBudget` load**
 
 ```typescript
 test("loads toolBudget from config file", () => {
@@ -372,10 +332,10 @@ test("loads toolBudget from config file", () => {
 });
 ```
 
-- [ ] **Step 5: Add test for saveConfig with new fields**
+- [ ] **Step 3: Add test for saveConfig round-trip with `toolBudget`**
 
 ```typescript
-test("saveConfig persists maxSpawnsPerSession and toolBudget", () => {
+test("saveConfig persists toolBudget", () => {
   const agentDir = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
   const paths = resolvePaths(agentDir);
 
@@ -395,7 +355,7 @@ test("saveConfig persists maxSpawnsPerSession and toolBudget", () => {
 });
 ```
 
-- [ ] **Step 6: Add test for saveConfig omitting undefined toolBudget**
+- [ ] **Step 4: Add test for saveConfig omitting undefined `toolBudget`**
 
 ```typescript
 test("saveConfig omits toolBudget when undefined", () => {
@@ -416,47 +376,19 @@ test("saveConfig omits toolBudget when undefined", () => {
 });
 ```
 
-- [ ] **Step 7: Update existing `saveConfig` test assertion**
+- [ ] **Step 5: Run config tests**
 
-The existing test `"saveConfig writes only supported config keys"` needs the new field. Update the expected object:
+Run: `npx vitest run tests/config.test.ts`
+Expected: All tests PASS (4 existing + 3 new = 7 total)
 
-```typescript
-expect(JSON.parse(readFileSync(paths.configPath, "utf8"))).toEqual({
-  maxConcurrency: 7,
-  maxRecursiveLevel: 5,
-  defaultMaxTurns: 15,
-  graceTurns: 3,
-  defaultJoinMode: "smart",
-  maxSpawnsPerSession: 40,
-});
-```
-
-And update the input to include `maxSpawnsPerSession: 40`:
-
-```typescript
-saveConfig(paths, {
-  maxConcurrency: 7,
-  maxRecursiveLevel: 5,
-  defaultMaxTurns: 15,
-  graceTurns: 3,
-  defaultJoinMode: "smart",
-  maxSpawnsPerSession: 40,
-});
-```
-
-- [ ] **Step 8: Run config tests**
-
-Run: `cd /Users/lanh/Developer/pi-vault/pi-subagents && npx vitest run tests/config.test.ts`
-Expected: All tests PASS
-
-- [ ] **Step 9: Commit**
+- [ ] **Step 6: Commit**
 
 ```
-test(config): add persistence tests for maxSpawnsPerSession and toolBudget
+test(config): add toolBudget persistence tests
 
-- 4 new tests: load maxSpawnsPerSession, load toolBudget,
-  saveConfig round-trip, saveConfig omits undefined toolBudget
-- Update existing default and merge tests for new fields
+- 3 new tests: load toolBudget, saveConfig round-trip,
+  saveConfig omits undefined toolBudget
+- Add explicit maxSpawnsPerSession/toolBudget assertions to defaults test
 ```
 
 ---
@@ -465,10 +397,8 @@ test(config): add persistence tests for maxSpawnsPerSession and toolBudget
 
 - [ ] **Step 1: Run full check suite**
 
-Run: `cd /Users/lanh/Developer/pi-vault/pi-subagents && npm run check`
-Expected: All pass. Note: if Phase 3 is not yet implemented, typecheck may error on the `setMaxSpawnsPerSession` call in agents-menu.ts. If so, comment out the `apply` body temporarily and add a `// TODO: uncomment in Phase 3` marker.
-
----
+Run: `npm run check`
+Expected: All pass (lint, typecheck, tests).
 
 ---
 
