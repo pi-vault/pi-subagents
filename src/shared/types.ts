@@ -1,5 +1,17 @@
 export type JoinMode = "async" | "group" | "smart";
 
+export interface ToolBudgetConfig {
+  soft?: number;
+  hard: number;
+  block?: string[] | "*";
+}
+
+export interface ResolvedToolBudget {
+  soft?: number;
+  hard: number;
+  block: string[] | "*";
+}
+
 export type WidgetMode = "all" | "background" | "off";
 
 export interface NotificationDetails {
@@ -23,6 +35,8 @@ export interface SubagentsConfig {
   defaultMaxTurns: number;
   graceTurns: number;
   defaultJoinMode: JoinMode;
+  maxSpawnsPerSession: number;
+  toolBudget?: ToolBudgetConfig;
 }
 
 export interface ResolvedPaths {
@@ -64,6 +78,7 @@ export interface AgentDefinition {
   isolation?: "worktree";
   extensions?: true | string[] | false;
   disallowedTools?: string[];
+  toolBudget?: ToolBudgetConfig;
 }
 
 export interface AgentDiscoveryDiagnostic {
@@ -108,6 +123,7 @@ export interface SubagentToolInput {
   run_in_background?: boolean;
   resume?: string;
   isolation?: string;
+  tool_budget?: ToolBudgetConfig;
 }
 
 export interface SubagentUsage {
@@ -239,6 +255,7 @@ export interface RunOptions {
     cacheWrite: number;
   }) => void;
   onSessionCreated?: (session: unknown) => void;
+  toolBudget?: ResolvedToolBudget;
 }
 
 export interface RunResult {
@@ -270,6 +287,7 @@ export interface SpawnOptions {
     cacheWrite: number;
   }) => void;
   onSessionCreated?: (session: unknown) => void;
+  toolBudget?: ResolvedToolBudget;
 }
 
 export interface EnvInfo {

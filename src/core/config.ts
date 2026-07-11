@@ -13,6 +13,7 @@ export const DEFAULT_CONFIG: SubagentsConfig = {
   defaultMaxTurns: 0,
   graceTurns: 5,
   defaultJoinMode: "smart",
+  maxSpawnsPerSession: 40,
 };
 
 function isFiniteNumber(value: unknown): value is number {
@@ -86,6 +87,9 @@ export function loadConfig(paths: ResolvedPaths): LoadedConfig {
       defaultJoinMode: validJoinModes.includes(raw.defaultJoinMode as JoinMode)
         ? (raw.defaultJoinMode as JoinMode)
         : DEFAULT_CONFIG.defaultJoinMode,
+      maxSpawnsPerSession: isFiniteNumber(raw.maxSpawnsPerSession)
+        ? raw.maxSpawnsPerSession
+        : DEFAULT_CONFIG.maxSpawnsPerSession,
     },
     exists: true,
   };

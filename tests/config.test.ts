@@ -36,6 +36,7 @@ describe("loadConfig", () => {
       defaultMaxTurns: 20,
       graceTurns: DEFAULT_CONFIG.graceTurns,
       defaultJoinMode: DEFAULT_CONFIG.defaultJoinMode,
+      maxSpawnsPerSession: DEFAULT_CONFIG.maxSpawnsPerSession,
     });
   });
 
@@ -61,6 +62,7 @@ describe("loadConfig", () => {
       defaultMaxTurns: 15,
       graceTurns: 3,
       defaultJoinMode: "smart",
+      maxSpawnsPerSession: 40,
     });
 
     expect(JSON.parse(readFileSync(paths.configPath, "utf8"))).toEqual({

@@ -84,6 +84,7 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     defaultMaxTurns: 0,
     graceTurns: 5,
     defaultJoinMode: "smart",
+    maxSpawnsPerSession: 40,
   };
   const discovery: AgentDiscoveryResult = {
     agents: [
@@ -348,6 +349,7 @@ describe("subagents extension", () => {
         defaultMaxTurns: 0,
         graceTurns: 5,
         defaultJoinMode: "smart",
+        maxSpawnsPerSession: 40,
       },
     ]);
   });
