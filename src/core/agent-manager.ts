@@ -97,7 +97,6 @@ export class AgentManager {
     if (spawnError) {
       throw new Error(spawnError);
     }
-    this.spawnCount++;
 
     const id = generateId();
     const record: AgentRecord = {
@@ -115,6 +114,7 @@ export class AgentManager {
       compactionCount: 0,
     };
     this.agents.set(id, record);
+    this.spawnCount++;
 
     const args: SpawnArgs = { ctx, agentDef, options };
 

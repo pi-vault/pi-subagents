@@ -501,4 +501,29 @@ describe("spawn limits", () => {
     expect(manager.getSpawnCount()).toBe(1);
     manager.dispose();
   });
+
+  it("maxSpawnsPerSession = 0 blocks all spawns", () => {
+    const manager = new AgentManager(3);
+    manager.setMaxSpawnsPerSession(0);
+    expect(() =>
+      manager.spawn({}, makeAgentDef(), {
+        prompt: "task",
+        cwd: "/tmp",
+        isBackground: true,
+      }),
+    ).toThrow(/spawn limit/i);
+    manager.dispose();
+  });
+
+  it("resume does not increment spawn counter", async () => {
+    const manager = new AgentManager(3);
+    const { id } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    expect(manager.getSpawnCount()).toBe(1);
+    await manager.resume(id, "continue");
+    expect(manager.getSpawnCount()).toBe(1);
+    manager.dispose();
+  });
 });
