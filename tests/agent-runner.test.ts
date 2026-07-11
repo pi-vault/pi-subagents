@@ -505,6 +505,139 @@ describe("runAgent", () => {
     expect(systemPrompt).toContain("Focus on security.");
     expect(systemPrompt).toContain("<sub_agent_context>");
   });
+
+  describe("tool budget enforcement", () => {
+    function makeMockSessionWithTools(toolEvents: { toolName: string }[]) {
+      const mockSession = {
+        subscribe: vi.fn((handler: (event: { type: string; toolName?: string }) => void) => {
+          for (const event of toolEvents) {
+            handler({ type: "tool_execution_start", toolName: event.toolName });
+          }
+          return () => {};
+        }),
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        prompt: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+        steer: vi.fn().mockResolvedValue(undefined),
+        messages: [],
+      };
+      return mockSession;
+    }
+
+    it("steers once when soft limit is reached", async () => {
+      const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+      // 3 tool calls: soft=2, hard=10 → steer fires at call 2
+      const mockSession = makeMockSessionWithTools([
+        { toolName: "read" },
+        { toolName: "grep" },
+        { toolName: "bash" },
+      ]);
+      vi.mocked(createAgentSession).mockResolvedValue({
+        session: mockSession as never,
+        extensionsResult: { extensions: [] } as never,
+      });
+
+      await runAgent(
+        makeAgentDef(),
+        makeRunOptions({ toolBudget: { soft: 2, hard: 10, block: ["read", "grep", "find", "ls"] } }),
+        {},
+      );
+
+      expect(mockSession.steer).toHaveBeenCalledTimes(1);
+      const steerMsg = mockSession.steer.mock.calls[0]?.[0] as string;
+      expect(steerMsg).toContain("soft");
+      expect(mockSession.abort).not.toHaveBeenCalled();
+    });
+
+    it("does not steer again for subsequent tool calls past soft limit", async () => {
+      const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+      // 5 tool calls: soft=2 → steer fires only once
+      const mockSession = makeMockSessionWithTools([
+        { toolName: "read" },
+        { toolName: "grep" },
+        { toolName: "bash" },
+        { toolName: "write" },
+        { toolName: "edit" },
+      ]);
+      vi.mocked(createAgentSession).mockResolvedValue({
+        session: mockSession as never,
+        extensionsResult: { extensions: [] } as never,
+      });
+
+      await runAgent(
+        makeAgentDef(),
+        makeRunOptions({ toolBudget: { soft: 2, hard: 20, block: ["read", "grep", "find", "ls"] } }),
+        {},
+      );
+
+      expect(mockSession.steer).toHaveBeenCalledTimes(1);
+    });
+
+    it("aborts when a blocked tool is called past the hard limit", async () => {
+      const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+      // hard=2, block=["read"] → abort fires on 3rd call (read)
+      const mockSession = makeMockSessionWithTools([
+        { toolName: "bash" },
+        { toolName: "write" },
+        { toolName: "read" }, // blocked tool past hard limit
+      ]);
+      vi.mocked(createAgentSession).mockResolvedValue({
+        session: mockSession as never,
+        extensionsResult: { extensions: [] } as never,
+      });
+
+      const result = await runAgent(
+        makeAgentDef(),
+        makeRunOptions({ toolBudget: { hard: 2, block: ["read", "grep", "find", "ls"] } }),
+        {},
+      );
+
+      expect(mockSession.steer).toHaveBeenCalledWith(expect.stringContaining("hard"));
+      expect(mockSession.abort).toHaveBeenCalled();
+      expect(result.aborted).toBe(true);
+    });
+
+    it("does not abort when a non-blocked tool is called past the hard limit", async () => {
+      const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+      // hard=2, block=["read","grep","find","ls"] → bash is not blocked
+      const mockSession = makeMockSessionWithTools([
+        { toolName: "read" },
+        { toolName: "write" },
+        { toolName: "bash" }, // not in block list
+      ]);
+      vi.mocked(createAgentSession).mockResolvedValue({
+        session: mockSession as never,
+        extensionsResult: { extensions: [] } as never,
+      });
+
+      const result = await runAgent(
+        makeAgentDef(),
+        makeRunOptions({ toolBudget: { hard: 2, block: ["read", "grep", "find", "ls"] } }),
+        {},
+      );
+
+      expect(mockSession.abort).not.toHaveBeenCalled();
+      expect(result.aborted).toBe(false);
+    });
+
+    it("does not enforce budget when toolBudget is not set", async () => {
+      const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+      const mockSession = makeMockSessionWithTools([
+        { toolName: "read" },
+        { toolName: "grep" },
+        { toolName: "bash" },
+      ]);
+      vi.mocked(createAgentSession).mockResolvedValue({
+        session: mockSession as never,
+        extensionsResult: { extensions: [] } as never,
+      });
+
+      await runAgent(makeAgentDef(), makeRunOptions(), {});
+
+      expect(mockSession.steer).not.toHaveBeenCalled();
+      expect(mockSession.abort).not.toHaveBeenCalled();
+    });
+  });
 });
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
