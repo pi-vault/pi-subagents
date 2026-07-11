@@ -1,10 +1,10 @@
-import { isAbsolute, join } from "node:path";
 import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import type {
   ChainStep,
   ParallelStep,
   DynamicParallelStep,
-  SequentialStep,
 } from "../shared/types.js";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ export function isDynamicParallelStep(
 export function getStepAgents(step: ChainStep): string[] {
   if (isParallelStep(step)) return step.parallel.map((t) => t.agent);
   if (isDynamicParallelStep(step)) return [step.parallel.agent];
-  return [(step as SequentialStep).agent];
+  return [step.agent];
 }
 
 // ---------------------------------------------------------------------------
@@ -46,8 +46,7 @@ export function resolveChainTemplates(steps: ChainStep[]): ResolvedTemplates {
     if (isDynamicParallelStep(step)) {
       return step.parallel.task ?? "{previous}";
     }
-    const seq = step as SequentialStep;
-    if (seq.task) return seq.task;
+    if (step.task) return step.task;
     return i === 0 ? "{task}" : "{previous}";
   });
 }
@@ -154,7 +153,7 @@ export function buildChainInstructions(
 // ---------------------------------------------------------------------------
 
 export function createChainDir(runId: string, baseDir?: string): string {
-  const dir = join(baseDir ?? "/tmp/pi-subagents-chain-runs", runId);
+  const dir = join(baseDir ?? join(tmpdir(), "pi-subagents-chain-runs"), runId);
   mkdirSync(dir, { recursive: true });
   return dir;
 }

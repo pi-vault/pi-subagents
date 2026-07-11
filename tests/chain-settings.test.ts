@@ -1,10 +1,16 @@
-import { describe, expect, test } from "vitest";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, test } from "vitest";
 import {
   isParallelStep,
   isDynamicParallelStep,
+  getStepAgents,
   resolveChainTemplates,
   resolveStepBehavior,
   buildChainInstructions,
+  createChainDir,
+  removeChainDir,
 } from "../src/core/chain-settings.js";
 import type {
   ChainStep,
@@ -52,6 +58,29 @@ describe("isDynamicParallelStep", () => {
   test("false for sequential step", () => {
     const step: SequentialStep = { agent: "a", task: "t" };
     expect(isDynamicParallelStep(step)).toBe(false);
+  });
+});
+
+describe("getStepAgents", () => {
+  test("returns single agent for sequential step", () => {
+    const step: SequentialStep = { agent: "agent-a" };
+    expect(getStepAgents(step)).toEqual(["agent-a"]);
+  });
+
+  test("returns multiple agents for parallel step", () => {
+    const step: ParallelStep = {
+      parallel: [{ agent: "a", task: "t1" }, { agent: "b", task: "t2" }],
+    };
+    expect(getStepAgents(step)).toEqual(["a", "b"]);
+  });
+
+  test("returns agent for dynamic parallel step", () => {
+    const step: DynamicParallelStep = {
+      expand: { from: { output: "x", path: "/items" } },
+      parallel: { agent: "dyn-agent" },
+      collect: { as: "results" },
+    };
+    expect(getStepAgents(step)).toEqual(["dyn-agent"]);
   });
 });
 
@@ -212,5 +241,40 @@ describe("buildChainInstructions", () => {
     );
     expect(prefix).toBe("");
     expect(suffix).toBe("");
+  });
+});
+
+describe("createChainDir / removeChainDir", () => {
+  const testBaseDir = join(tmpdir(), "pi-subagents-chain-test");
+  const createdDirs: string[] = [];
+
+  afterEach(() => {
+    for (const d of createdDirs) removeChainDir(d);
+    createdDirs.length = 0;
+    removeChainDir(testBaseDir);
+  });
+
+  test("creates directory and returns path containing runId", () => {
+    const dir = createChainDir("run-123", testBaseDir);
+    createdDirs.push(dir);
+    expect(existsSync(dir)).toBe(true);
+    expect(dir).toContain("run-123");
+  });
+
+  test("uses default base dir when none provided", () => {
+    const dir = createChainDir("run-default");
+    createdDirs.push(dir);
+    expect(existsSync(dir)).toBe(true);
+    expect(dir).toContain("pi-subagents-chain-runs");
+  });
+
+  test("removeChainDir removes existing directory", () => {
+    const dir = createChainDir("run-remove", testBaseDir);
+    removeChainDir(dir);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  test("removeChainDir handles non-existent directory gracefully", () => {
+    expect(() => removeChainDir("/nonexistent-dir-abc123")).not.toThrow();
   });
 });
