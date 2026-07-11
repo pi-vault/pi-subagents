@@ -704,6 +704,22 @@ describe("new frontmatter fields", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.diagnostic.reason).toContain("tool_budget");
   });
+
+  test("returns error for tool_budget with invalid structure (hard < 1)", () => {
+    const content =
+      '---\nname: test\ndescription: A test\ntools: read\ntool_budget: {"hard": 0}\n---\nPrompt\n';
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.diagnostic.reason).toContain("hard");
+  });
+
+  test("returns error for tool_budget with soft > hard", () => {
+    const content =
+      '---\nname: test\ndescription: A test\ntools: read\ntool_budget: {"soft": 20, "hard": 10}\n---\nPrompt\n';
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.diagnostic.reason).toContain("soft");
+  });
 });
 
 describe("round-trip", () => {
@@ -823,6 +839,7 @@ describe("round-trip", () => {
       isolation: "worktree",
       extensions: ["ext-a", "ext-b"],
       disallowedTools: ["write", "edit"],
+      toolBudget: { soft: 5, hard: 10 },
     };
 
     const serialized = serializeAgent(input);
@@ -838,6 +855,7 @@ describe("round-trip", () => {
         isolation: "worktree",
         extensions: ["ext-a", "ext-b"],
         disallowedTools: ["write", "edit"],
+        toolBudget: { soft: 5, hard: 10 },
       },
     });
   });
@@ -859,6 +877,7 @@ describe("round-trip", () => {
     expect(serialized).not.toContain("isolation:");
     expect(serialized).not.toContain("extensions:");
     expect(serialized).not.toContain("disallowed_tools:");
+    expect(serialized).not.toContain("tool_budget:");
   });
 
   test("serializeAgent writes extensions: false", () => {

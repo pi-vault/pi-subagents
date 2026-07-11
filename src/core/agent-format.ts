@@ -5,6 +5,7 @@ import type {
   AgentDiscoveryDiagnostic,
   ToolBudgetConfig,
 } from "../shared/types.js";
+import { validateToolBudget } from "./tool-budget.js";
 
 type ParseResult =
   | { ok: true; agent: AgentDefinition }
@@ -398,7 +399,7 @@ export function parseAgentContent(
       ? disallowedToolsResult.value
       : undefined;
 
-  // tool_budget (JSON object string or YAML object)
+  // tool_budget (JSON object string in frontmatter)
   let toolBudget: ToolBudgetConfig | undefined;
   if (frontmatter.tool_budget !== undefined) {
     if (typeof frontmatter.tool_budget === "string") {
@@ -424,6 +425,15 @@ export function parseAgentContent(
       !Array.isArray(frontmatter.tool_budget)
     ) {
       toolBudget = frontmatter.tool_budget as ToolBudgetConfig;
+    }
+  }
+  if (toolBudget) {
+    const validated = validateToolBudget(toolBudget, "tool_budget");
+    if (validated.error) {
+      return {
+        ok: false,
+        diagnostic: { path: filePath, reason: validated.error },
+      };
     }
   }
 
