@@ -4,7 +4,7 @@
 
 **Goal:** Extend paths and agent discovery to find chain files from project (`.pi/chains/`), user, and bundled directories.
 
-**Architecture:** Add chain directory fields to `ResolvedPaths`, add `discoverChains()` function to `src/core/agents.ts` that scans directories in priority order (project > user > bundled) and returns deduplicated chain configs.
+**Architecture:** Add chain directory fields to `ResolvedPaths`, add `discoverChains()` function to `src/core/agents.ts` that scans directories in priority order (project > user > bundled) and returns deduplicated chain configs. Within a single directory, `.chain.json` takes priority over `.chain.md` when both define the same chain name (per spec section 4).
 
 **Tech Stack:** TypeScript, Vitest
 
@@ -25,7 +25,7 @@
 - Modify: `src/shared/types.ts` (add chain paths to `ResolvedPaths`)
 - Modify: `src/core/paths.ts` (add chain directory resolution)
 - Modify: `src/core/agents.ts` (add `discoverChains()`)
-- Test: `tests/agents.test.ts` (add chain discovery tests, or create a new test file)
+- Create: `tests/chain-discovery.test.ts`
 
 - [ ] **Step 1: Add chain directory fields to `ResolvedPaths`**
 
@@ -68,6 +68,8 @@ export function resolvePaths(agentDir = getAgentDir()): ResolvedPaths {
 }
 ```
 
+Note: No `chains/` directory exists in the project root yet. `getBundledChainsDir()` will resolve to a non-existent path, which `discoverChainsFromDirectory()` handles gracefully (returns empty). Bundled chain files can be added later.
+
 - [ ] **Step 3: Run typecheck to find any breakage from ResolvedPaths change**
 
 Run: `pnpm typecheck`
@@ -75,28 +77,31 @@ Expected: PASS (or fix any callers that destructure ResolvedPaths — the new fi
 
 - [ ] **Step 4: Add `discoverChains()` to `src/core/agents.ts`**
 
-Add at the end of the file:
+Add imports at the top of the file (merge into existing import blocks):
 
 ```typescript
 import { parseChain, parseJsonChain } from "./chain-serializer.js";
-import type {
-  ChainConfig,
-  ChainDiscoveryDiagnostic,
-  ChainDiscoveryResult,
-} from "../shared/types.js";
+```
 
+Add `ChainConfig`, `ChainDiscoveryDiagnostic`, and `ChainDiscoveryResult` to the existing `../shared/types.js` import.
+
+Add the following functions at the end of the file:
+
+```typescript
 function discoverChainsFromDirectory(directory: string): {
   chains: ChainConfig[];
   diagnostics: ChainDiscoveryDiagnostic[];
 } {
   if (!existsSync(directory)) return { chains: [], diagnostics: [] };
 
-  const chains: ChainConfig[] = [];
   const diagnostics: ChainDiscoveryDiagnostic[] = [];
   const fileNames = readdirSync(directory)
     .filter((f) => f.endsWith(".chain.md") || f.endsWith(".chain.json"))
     .sort((a, b) => a.localeCompare(b));
 
+  // Parse all files, dedup by name within directory.
+  // .chain.json wins over .chain.md for the same chain name (spec §4).
+  const byName = new Map<string, ChainConfig>();
   for (const fileName of fileNames) {
     const filePath = resolve(directory, fileName);
     try {
@@ -104,7 +109,17 @@ function discoverChainsFromDirectory(directory: string): {
       const config = fileName.endsWith(".chain.json")
         ? parseJsonChain(filePath, content)
         : parseChain(filePath, content);
-      chains.push(config);
+      const key = config.name.toLowerCase();
+      const existing = byName.get(key);
+      if (
+        existing &&
+        existing.filePath.endsWith(".chain.json") &&
+        filePath.endsWith(".chain.md")
+      ) {
+        // JSON already registered — skip the .md variant silently
+        continue;
+      }
+      byName.set(key, config);
     } catch (e) {
       diagnostics.push({
         filePath,
@@ -113,7 +128,7 @@ function discoverChainsFromDirectory(directory: string): {
     }
   }
 
-  return { chains, diagnostics };
+  return { chains: [...byName.values()], diagnostics };
 }
 
 export function discoverChains(
@@ -160,9 +175,9 @@ export function discoverChains(
 }
 ```
 
-- [ ] **Step 5: Write test for chain discovery**
+- [ ] **Step 5: Write tests for chain discovery**
 
-Add to a new file `tests/chain-discovery.test.ts` (or append to `tests/agents.test.ts` — check existing test patterns):
+Create `tests/chain-discovery.test.ts`:
 
 ```typescript
 import { describe, expect, test } from "vitest";
@@ -172,8 +187,21 @@ import { tmpdir } from "node:os";
 import { discoverChains } from "../src/core/agents.js";
 import type { ResolvedPaths } from "../src/shared/types.js";
 
+const MD_CHAIN = (name: string, desc: string) =>
+  `---\nname: ${name}\ndescription: ${desc}\n---\n\n## scout\n\nscan\n`;
+
+const JSON_CHAIN = (name: string, desc: string) =>
+  JSON.stringify({
+    name,
+    description: desc,
+    chain: [{ agent: "scout", task: "scan" }],
+  });
+
 function makeTmpPaths(): ResolvedPaths & { tmpDir: string } {
-  const tmpDir = join(tmpdir(), `chain-test-${Date.now()}`);
+  const tmpDir = join(
+    tmpdir(),
+    `chain-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  );
   mkdirSync(tmpDir, { recursive: true });
   const userChainsDir = join(tmpDir, "user-chains");
   const bundledChainsDir = join(tmpDir, "bundled-chains");
@@ -196,7 +224,7 @@ describe("discoverChains", () => {
     const paths = makeTmpPaths();
     writeFileSync(
       join(paths.bundledChainsDir, "scout-plan.chain.md"),
-      "---\nname: scout-plan\ndescription: test\n---\n\n## scout\n\nscan\n",
+      MD_CHAIN("scout-plan", "test"),
     );
 
     const result = discoverChains(paths);
@@ -206,15 +234,69 @@ describe("discoverChains", () => {
     rmSync(paths.tmpDir, { recursive: true, force: true });
   });
 
+  test("discovers .chain.json files from bundled dir", () => {
+    const paths = makeTmpPaths();
+    writeFileSync(
+      join(paths.bundledChainsDir, "review.chain.json"),
+      JSON_CHAIN("review", "json chain"),
+    );
+
+    const result = discoverChains(paths);
+    expect(result.chains).toHaveLength(1);
+    expect(result.chains[0]!.name).toBe("review");
+    expect(result.chains[0]!.description).toBe("json chain");
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
+  test("discovers both .chain.md and .chain.json with different names", () => {
+    const paths = makeTmpPaths();
+    writeFileSync(
+      join(paths.bundledChainsDir, "alpha.chain.md"),
+      MD_CHAIN("alpha", "md"),
+    );
+    writeFileSync(
+      join(paths.bundledChainsDir, "beta.chain.json"),
+      JSON_CHAIN("beta", "json"),
+    );
+
+    const result = discoverChains(paths);
+    expect(result.chains).toHaveLength(2);
+    const names = result.chains.map((c) => c.name).sort();
+    expect(names).toEqual(["alpha", "beta"]);
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
+  test(".chain.json wins over .chain.md for same name in same directory", () => {
+    const paths = makeTmpPaths();
+    writeFileSync(
+      join(paths.bundledChainsDir, "test.chain.md"),
+      MD_CHAIN("test", "from-md"),
+    );
+    writeFileSync(
+      join(paths.bundledChainsDir, "test.chain.json"),
+      JSON_CHAIN("test", "from-json"),
+    );
+
+    const result = discoverChains(paths);
+    expect(result.chains).toHaveLength(1);
+    expect(result.chains[0]!.description).toBe("from-json");
+    // No diagnostic for the silent .md skip
+    expect(result.diagnostics).toHaveLength(0);
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
   test("user chains shadow bundled chains", () => {
     const paths = makeTmpPaths();
     writeFileSync(
       join(paths.bundledChainsDir, "test.chain.md"),
-      "---\nname: test\ndescription: bundled\n---\n\n## a\n\ntask\n",
+      MD_CHAIN("test", "bundled"),
     );
     writeFileSync(
       join(paths.userChainsDir, "test.chain.md"),
-      "---\nname: test\ndescription: user\n---\n\n## b\n\ntask\n",
+      MD_CHAIN("test", "user"),
     );
 
     const result = discoverChains(paths);
@@ -226,21 +308,62 @@ describe("discoverChains", () => {
 
   test("project chains shadow user chains", () => {
     const paths = makeTmpPaths();
-    // Create project .pi/chains/ dir
     const projectChainsDir = join(paths.tmpDir, ".pi", "chains");
     mkdirSync(projectChainsDir, { recursive: true });
     writeFileSync(
       join(paths.userChainsDir, "test.chain.md"),
-      "---\nname: test\ndescription: user\n---\n\n## a\n\ntask\n",
+      MD_CHAIN("test", "user"),
     );
     writeFileSync(
       join(projectChainsDir, "test.chain.md"),
-      "---\nname: test\ndescription: project\n---\n\n## b\n\ntask\n",
+      MD_CHAIN("test", "project"),
     );
 
     const result = discoverChains(paths, paths.tmpDir);
     expect(result.chains).toHaveLength(1);
     expect(result.chains[0]!.description).toBe("project");
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
+  test("shadowed chains produce a diagnostic", () => {
+    const paths = makeTmpPaths();
+    writeFileSync(
+      join(paths.bundledChainsDir, "dup.chain.md"),
+      MD_CHAIN("dup", "bundled"),
+    );
+    writeFileSync(
+      join(paths.userChainsDir, "dup.chain.md"),
+      MD_CHAIN("dup", "user"),
+    );
+
+    const result = discoverChains(paths);
+    expect(result.chains).toHaveLength(1);
+    const dupDiag = result.diagnostics.find((d) =>
+      d.error.includes('duplicate chain name "dup"'),
+    );
+    expect(dupDiag).toBeDefined();
+    expect(dupDiag!.filePath).toContain("bundled-chains");
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
+  test("malformed file produces a diagnostic without crashing", () => {
+    const paths = makeTmpPaths();
+    writeFileSync(
+      join(paths.bundledChainsDir, "good.chain.md"),
+      MD_CHAIN("good", "ok"),
+    );
+    writeFileSync(
+      join(paths.bundledChainsDir, "bad.chain.json"),
+      "not valid json {{{",
+    );
+
+    const result = discoverChains(paths);
+    expect(result.chains).toHaveLength(1);
+    expect(result.chains[0]!.name).toBe("good");
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]!.filePath).toContain("bad.chain.json");
 
     rmSync(paths.tmpDir, { recursive: true, force: true });
   });
@@ -252,6 +375,33 @@ describe("discoverChains", () => {
 
     const result = discoverChains(paths);
     expect(result.chains).toHaveLength(0);
+    expect(result.diagnostics).toHaveLength(0);
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
+  test("returns empty when no cwd and directories are empty", () => {
+    const paths = makeTmpPaths();
+    const result = discoverChains(paths);
+    expect(result.chains).toHaveLength(0);
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
+  test("name comparison is case-insensitive", () => {
+    const paths = makeTmpPaths();
+    writeFileSync(
+      join(paths.userChainsDir, "upper.chain.md"),
+      MD_CHAIN("MyChain", "user"),
+    );
+    writeFileSync(
+      join(paths.bundledChainsDir, "lower.chain.md"),
+      MD_CHAIN("mychain", "bundled"),
+    );
+
+    const result = discoverChains(paths);
+    expect(result.chains).toHaveLength(1);
+    expect(result.chains[0]!.description).toBe("user");
 
     rmSync(paths.tmpDir, { recursive: true, force: true });
   });
@@ -272,5 +422,5 @@ Expected: PASS
 
 ```bash
 git add src/shared/types.ts src/core/paths.ts src/core/agents.ts tests/chain-discovery.test.ts
-git commit -m "feat(chain-discovery): discover .chain.md and .chain.json from user/bundled dirs"
+git commit -m "feat(chain-discovery): discover .chain.md and .chain.json from project/user/bundled dirs"
 ```
