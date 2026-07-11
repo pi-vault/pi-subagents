@@ -404,3 +404,108 @@ describe("resume", () => {
     manager.dispose();
   });
 });
+
+describe("spawn limits", () => {
+  it("blocks spawn when limit reached", () => {
+    const manager = new AgentManager(3);
+    manager.setMaxSpawnsPerSession(2);
+    // First two succeed
+    manager.spawn({}, makeAgentDef(), {
+      prompt: "task 1",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    manager.spawn({}, makeAgentDef(), {
+      prompt: "task 2",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    // Third should fail
+    expect(() =>
+      manager.spawn({}, makeAgentDef(), {
+        prompt: "task 3",
+        cwd: "/tmp",
+        isBackground: true,
+      }),
+    ).toThrow(/spawn limit/i);
+    manager.dispose();
+  });
+
+  it("increments spawn counter on each spawn", () => {
+    const manager = new AgentManager(3);
+    expect(manager.getSpawnCount()).toBe(0);
+    manager.spawn({}, makeAgentDef(), {
+      prompt: "task",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    expect(manager.getSpawnCount()).toBe(1);
+    manager.spawn({}, makeAgentDef(), {
+      prompt: "task",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    expect(manager.getSpawnCount()).toBe(2);
+    manager.dispose();
+  });
+
+  it("resetSpawnCounter resets to zero", () => {
+    const manager = new AgentManager(3);
+    manager.spawn({}, makeAgentDef(), {
+      prompt: "task",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    expect(manager.getSpawnCount()).toBe(1);
+    manager.resetSpawnCounter();
+    expect(manager.getSpawnCount()).toBe(0);
+    manager.dispose();
+  });
+
+  it("dispose resets spawn counter", () => {
+    const manager = new AgentManager(3);
+    manager.spawn({}, makeAgentDef(), {
+      prompt: "task",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    expect(manager.getSpawnCount()).toBe(1);
+    manager.dispose();
+    expect(manager.getSpawnCount()).toBe(0);
+  });
+
+  it("spawnAndWait also increments counter", async () => {
+    const manager = new AgentManager(3);
+    await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "task",
+      cwd: "/tmp",
+    });
+    expect(manager.getSpawnCount()).toBe(1);
+    manager.dispose();
+  });
+
+  it("maxSpawnsPerSession = 0 blocks all spawns", () => {
+    const manager = new AgentManager(3);
+    manager.setMaxSpawnsPerSession(0);
+    expect(() =>
+      manager.spawn({}, makeAgentDef(), {
+        prompt: "task",
+        cwd: "/tmp",
+        isBackground: true,
+      }),
+    ).toThrow(/spawn limit/i);
+    manager.dispose();
+  });
+
+  it("resume does not increment spawn counter", async () => {
+    const manager = new AgentManager(3);
+    const { id } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    expect(manager.getSpawnCount()).toBe(1);
+    await manager.resume(id, "continue");
+    expect(manager.getSpawnCount()).toBe(1);
+    manager.dispose();
+  });
+});

@@ -163,6 +163,9 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     widget.update();
   });
 
+  // Apply spawn limit from config
+  manager.setMaxSpawnsPerSession(loadConfig(resolvePaths()).config.maxSpawnsPerSession);
+
   function sendNudge(record: Parameters<typeof formatTaskNotification>[0]): void {
     const notification = formatTaskNotification(record);
     (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
@@ -397,8 +400,9 @@ export function registerSubagentsExtension(
     deps.disposeBatchTracker?.();
   });
 
-  // Clear completed on session switch (keep running ones)
+  // Clear completed on session switch (keep running ones), reset spawn counter
   pi.on("session_before_switch", () => {
+    deps.manager.resetSpawnCounter();
     deps.manager.clearCompleted();
   });
 

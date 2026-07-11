@@ -668,3 +668,35 @@ describe("TUI wiring", () => {
     expect(setWorkingMessageCalls.at(-1)).toBeUndefined();
   });
 });
+
+describe("spawn limit wiring in createRuntimeDeps", () => {
+  test("setMaxSpawnsPerSession is called with config value at startup", () => {
+    const spy = vi.spyOn(AgentManager.prototype, "setMaxSpawnsPerSession");
+    const { pi } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+    // Default config has maxSpawnsPerSession: 40
+    expect(spy).toHaveBeenCalledWith(40);
+    deps.manager.dispose();
+    spy.mockRestore();
+  });
+
+  test("session_before_switch resets spawn counter", () => {
+    const { pi, handlers } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+    registerSubagentsExtension(pi, deps);
+
+    // Spawn an agent to increment the counter
+    deps.manager.spawn({}, makeAgentDef(), {
+      prompt: "task",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    expect(deps.manager.getSpawnCount()).toBe(1);
+
+    // Fire session_before_switch
+    handlers.get("session_before_switch")?.();
+
+    expect(deps.manager.getSpawnCount()).toBe(0);
+    deps.manager.dispose();
+  });
+});

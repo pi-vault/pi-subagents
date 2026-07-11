@@ -114,6 +114,9 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
       const value = Number(raw);
       return Number.isInteger(value) && value >= 0 ? value : undefined;
     },
+    apply: (value, deps) => {
+      deps.manager.setMaxSpawnsPerSession(value as number);
+    },
   },
   {
     key: "widgetMode",

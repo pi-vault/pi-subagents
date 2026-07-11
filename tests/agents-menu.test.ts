@@ -1,6 +1,7 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { SETTINGS_MENU_ITEMS, renderRow } from "../src/tui/agents-menu.js";
 import type { SubagentsConfig } from "../src/shared/types.js";
+import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
 
 function createTheme() {
   const calls: Array<{ method: string; color?: string; text: string }> = [];
@@ -146,6 +147,13 @@ describe("SETTINGS_MENU_ITEMS", () => {
       expect(item?.parse("-1")).toBeUndefined();
       expect(item?.parse("1.5")).toBeUndefined();
       expect(item?.parse("abc")).toBeUndefined();
+    });
+
+    test("apply calls setMaxSpawnsPerSession on manager", () => {
+      const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "maxSpawnsPerSession");
+      const setMaxSpawnsPerSession = vi.fn();
+      item?.apply?.(15, { manager: { setMaxSpawnsPerSession } } as unknown as RuntimeDeps);
+      expect(setMaxSpawnsPerSession).toHaveBeenCalledWith(15);
     });
   });
 });

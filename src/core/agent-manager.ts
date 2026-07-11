@@ -1,6 +1,11 @@
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { runAgent, resumeAgent } from "./agent-runner.js";
+import {
+  DEFAULT_MAX_SPAWNS_PER_SESSION,
+  checkSpawnLimit,
+  resolveMaxSpawns,
+} from "./spawn-guard.js";
 import { createWorktree, cleanupWorktree, pruneWorktrees } from "./worktree.js";
 import type {
   AgentDefinition,
@@ -37,6 +42,8 @@ export class AgentManager {
   private cleanupInterval: ReturnType<typeof setInterval>;
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
+  private spawnCount = 0;
+  private maxSpawnsPerSession = DEFAULT_MAX_SPAWNS_PER_SESSION;
 
   constructor(
     maxDepth = 3,
@@ -85,6 +92,12 @@ export class AgentManager {
       }
     }
 
+    const effectiveMax = resolveMaxSpawns(this.maxSpawnsPerSession);
+    const spawnError = checkSpawnLimit(this.spawnCount, 1, effectiveMax);
+    if (spawnError) {
+      throw new Error(spawnError);
+    }
+
     const id = generateId();
     const record: AgentRecord = {
       id,
@@ -101,6 +114,7 @@ export class AgentManager {
       compactionCount: 0,
     };
     this.agents.set(id, record);
+    this.spawnCount++;
 
     const args: SpawnArgs = { ctx, agentDef, options };
 
@@ -431,6 +445,18 @@ export class AgentManager {
     return this.maxConcurrent;
   }
 
+  setMaxSpawnsPerSession(n: number): void {
+    this.maxSpawnsPerSession = n;
+  }
+
+  getSpawnCount(): number {
+    return this.spawnCount;
+  }
+
+  resetSpawnCounter(): void {
+    this.spawnCount = 0;
+  }
+
   /**
    * Remove old completed/errored agent records.
    */
@@ -453,6 +479,7 @@ export class AgentManager {
     }
     this.queue = [];
     this.agents.clear();
+    this.spawnCount = 0;
     // Prune worktrees for crash recovery
     try {
       pruneWorktrees(process.cwd());
