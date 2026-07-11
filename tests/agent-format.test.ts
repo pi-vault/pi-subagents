@@ -665,6 +665,45 @@ describe("new frontmatter fields", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.agent.extensions).toEqual(["ext-a", "ext-b"]);
   });
+
+  test("parses tool_budget as JSON object", () => {
+    const content =
+      '---\nname: test\ndescription: A test\ntools: read\ntool_budget: {"soft": 5, "hard": 10}\n---\nPrompt\n';
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.agent.toolBudget).toEqual({ soft: 5, hard: 10 });
+    }
+  });
+
+  test("parses tool_budget with block list", () => {
+    const content =
+      '---\nname: test\ndescription: A test\ntools: read\ntool_budget: {"hard": 15, "block": ["read", "grep"]}\n---\nPrompt\n';
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.agent.toolBudget).toEqual({
+        hard: 15,
+        block: ["read", "grep"],
+      });
+    }
+  });
+
+  test("tool_budget is undefined when omitted", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.toolBudget).toBeUndefined();
+  });
+
+  test("returns error for invalid tool_budget JSON", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\ntool_budget: {bad json}\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.diagnostic.reason).toContain("tool_budget");
+  });
 });
 
 describe("round-trip", () => {
