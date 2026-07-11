@@ -22,6 +22,7 @@ subagent_agents:
   - scout
   - researcher
   - worker
+tool_budget: {"soft": 12, "hard": 20}
 disallowed_tools:
 skills:
 ---

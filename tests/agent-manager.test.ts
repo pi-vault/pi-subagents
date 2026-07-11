@@ -227,6 +227,33 @@ describe("maxTurns and graceTurns passthrough", () => {
     );
     spy.mockRestore();
   });
+
+  it("passes toolBudget to runAgent", async () => {
+    const manager = new AgentManager(3);
+    const spy = vi
+      .spyOn(await import("../src/core/agent-runner.js"), "runAgent")
+      .mockResolvedValue({
+        responseText: "done",
+        session: {},
+        aborted: false,
+        steered: false,
+      });
+
+    const budget = { soft: 5, hard: 10, block: ["read"] as string[] };
+    await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: tmpDir,
+      toolBudget: budget,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ toolBudget: budget }),
+      expect.anything(),
+    );
+    spy.mockRestore();
+    manager.dispose();
+  });
 });
 
 describe("steered status", () => {

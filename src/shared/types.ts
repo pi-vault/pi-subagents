@@ -109,6 +109,7 @@ export interface AgentCreationInput {
   isolation?: "worktree";
   extensions?: true | string[] | false;
   disallowedTools?: string[];
+  toolBudget?: ToolBudgetConfig;
 }
 
 export interface SubagentToolInput {

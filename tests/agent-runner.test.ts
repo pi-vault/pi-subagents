@@ -505,6 +505,76 @@ describe("runAgent", () => {
     expect(systemPrompt).toContain("Focus on security.");
     expect(systemPrompt).toContain("<sub_agent_context>");
   });
+
+  describe("tool budget enforcement", () => {
+    const DEFAULT_BLOCK = ["read", "grep", "find", "ls"];
+
+    function mockToolSession(toolNames: string[]) {
+      const s = {
+        subscribe: vi.fn((handler: (e: { type: string; toolName?: string }) => void) => {
+          for (const toolName of toolNames) handler({ type: "tool_execution_start", toolName });
+          return () => {};
+        }),
+        bindExtensions: vi.fn().mockResolvedValue(undefined),
+        prompt: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+        steer: vi.fn().mockResolvedValue(undefined),
+        messages: [],
+      };
+      return s;
+    }
+
+    async function setupSession(toolNames: string[]) {
+      const { createAgentSession } = await import("@earendil-works/pi-coding-agent");
+      const mock = mockToolSession(toolNames);
+      vi.mocked(createAgentSession).mockResolvedValue({
+        session: mock as never,
+        extensionsResult: { extensions: [] } as never,
+      });
+      return mock;
+    }
+
+    it("steers once when soft limit is reached", async () => {
+      const mock = await setupSession(["read", "grep", "bash"]);
+      await runAgent(makeAgentDef(), makeRunOptions({ toolBudget: { soft: 2, hard: 10, block: DEFAULT_BLOCK } }), {});
+
+      expect(mock.steer).toHaveBeenCalledTimes(1);
+      expect(mock.steer.mock.calls[0]?.[0]).toContain("soft");
+      expect(mock.abort).not.toHaveBeenCalled();
+    });
+
+    it("does not steer again for subsequent tool calls past soft limit", async () => {
+      const mock = await setupSession(["read", "grep", "bash", "write", "edit"]);
+      await runAgent(makeAgentDef(), makeRunOptions({ toolBudget: { soft: 2, hard: 20, block: DEFAULT_BLOCK } }), {});
+
+      expect(mock.steer).toHaveBeenCalledTimes(1);
+    });
+
+    it("aborts when a blocked tool is called past the hard limit", async () => {
+      const mock = await setupSession(["bash", "write", "read"]);
+      const result = await runAgent(makeAgentDef(), makeRunOptions({ toolBudget: { hard: 2, block: DEFAULT_BLOCK } }), {});
+
+      expect(mock.steer).toHaveBeenCalledWith(expect.stringContaining("hard"));
+      expect(mock.abort).toHaveBeenCalled();
+      expect(result.aborted).toBe(true);
+    });
+
+    it("does not abort when a non-blocked tool is called past the hard limit", async () => {
+      const mock = await setupSession(["read", "write", "bash"]);
+      const result = await runAgent(makeAgentDef(), makeRunOptions({ toolBudget: { hard: 2, block: DEFAULT_BLOCK } }), {});
+
+      expect(mock.abort).not.toHaveBeenCalled();
+      expect(result.aborted).toBe(false);
+    });
+
+    it("does not enforce budget when toolBudget is not set", async () => {
+      const mock = await setupSession(["read", "grep", "bash"]);
+      await runAgent(makeAgentDef(), makeRunOptions(), {});
+
+      expect(mock.steer).not.toHaveBeenCalled();
+      expect(mock.abort).not.toHaveBeenCalled();
+    });
+  });
 });
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";

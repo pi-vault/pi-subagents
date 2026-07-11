@@ -15,6 +15,7 @@ import type {
   ToolActivity,
 } from "../shared/types.js";
 import { preloadSkills } from "./skill-loader.js";
+import { evaluateToolCall } from "./tool-budget.js";
 
 interface SkillBlock {
   name: string;
@@ -269,6 +270,8 @@ export async function runAgent(
   let turnCount = 0;
   let aborted = false;
   let steered = false;
+  let budgetToolCount = 0;
+  let budgetSoftNudged = false;
 
   const maxTurns = options.maxTurns ?? 0;
   const graceTurns = options.graceTurns ?? 5;
@@ -286,6 +289,23 @@ export async function runAgent(
     }
     if (event.type === "tool_execution_start") {
       options.onToolActivity?.({ type: "start", toolName: event.toolName });
+      if (options.toolBudget) {
+        budgetToolCount++;
+        const budgetResult = evaluateToolCall(
+          options.toolBudget,
+          budgetToolCount,
+          event.toolName,
+        );
+        if (budgetResult.outcome === "soft-reached" && !budgetSoftNudged) {
+          budgetSoftNudged = true;
+          session.steer(budgetResult.message ?? "Tool budget soft limit reached.");
+          steered = true;
+        } else if (budgetResult.outcome === "hard-blocked") {
+          session.steer(budgetResult.message ?? "Tool budget hard limit reached.");
+          aborted = true;
+          session.abort();
+        }
+      }
     }
     if (event.type === "tool_execution_end") {
       options.onToolActivity?.({ type: "end", toolName: event.toolName });

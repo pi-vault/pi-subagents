@@ -3,7 +3,9 @@ import type {
   AgentCreationInput,
   AgentDefinition,
   AgentDiscoveryDiagnostic,
+  ToolBudgetConfig,
 } from "../shared/types.js";
+import { validateToolBudget } from "./tool-budget.js";
 
 type ParseResult =
   | { ok: true; agent: AgentDefinition }
@@ -397,6 +399,44 @@ export function parseAgentContent(
       ? disallowedToolsResult.value
       : undefined;
 
+  // tool_budget (JSON object string in frontmatter)
+  let toolBudget: ToolBudgetConfig | undefined;
+  if (frontmatter.tool_budget !== undefined) {
+    if (typeof frontmatter.tool_budget === "string") {
+      const trimmed = frontmatter.tool_budget.trim();
+      if (trimmed) {
+        try {
+          const parsed = JSON.parse(trimmed) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            toolBudget = parsed as ToolBudgetConfig;
+          }
+        } catch {
+          return {
+            ok: false,
+            diagnostic: {
+              path: filePath,
+              reason: "tool_budget must be a valid JSON object",
+            },
+          };
+        }
+      }
+    } else if (
+      typeof frontmatter.tool_budget === "object" &&
+      !Array.isArray(frontmatter.tool_budget)
+    ) {
+      toolBudget = frontmatter.tool_budget as ToolBudgetConfig;
+    }
+  }
+  if (toolBudget) {
+    const validated = validateToolBudget(toolBudget, "tool_budget");
+    if (validated.error) {
+      return {
+        ok: false,
+        diagnostic: { path: filePath, reason: validated.error },
+      };
+    }
+  }
+
   return {
     ok: true,
     agent: {
@@ -416,6 +456,7 @@ export function parseAgentContent(
       isolation,
       extensions,
       disallowedTools,
+      toolBudget,
       systemPrompt,
       sourcePath: filePath,
     },
@@ -482,6 +523,9 @@ export function serializeAgent(input: AgentCreationInput): string {
   }
   if (input.disallowedTools && input.disallowedTools.length > 0) {
     frontmatter.push(`disallowed_tools: ${input.disallowedTools.join(", ")}`);
+  }
+  if (input.toolBudget) {
+    frontmatter.push(`tool_budget: ${JSON.stringify(input.toolBudget)}`);
   }
   frontmatter.push("---", systemPrompt);
 

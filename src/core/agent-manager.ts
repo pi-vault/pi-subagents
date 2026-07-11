@@ -225,6 +225,7 @@ export class AgentManager {
           }
         },
         onTextDelta: options.onTextDelta,
+        toolBudget: options.toolBudget,
       },
       ctx as { model?: unknown; modelRegistry?: unknown },
     )
