@@ -70,7 +70,7 @@ function createDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     }),
     loadConfig: () => ({
       exists: false,
-      config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultMaxTurns: 0, graceTurns: 5, defaultJoinMode: "smart" as const },
+      config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultMaxTurns: 0, graceTurns: 5, defaultJoinMode: "smart" as const, maxSpawnsPerSession: 40 },
     }),
     discoverAgents: () => createDiscovery([createAgent()]),
     discoverToolNames: () => ["bash", "read"],
