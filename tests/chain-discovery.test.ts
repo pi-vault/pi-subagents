@@ -1,185 +1,3 @@
-# Chain Execution — Phase 5: Chain Discovery
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
-**Goal:** Extend paths and agent discovery to find chain files from project (`.pi/chains/`), user, and bundled directories.
-
-**Architecture:** Add chain directory fields to `ResolvedPaths`, add `discoverChains()` function to `src/core/agents.ts` that scans directories in priority order (project > user > bundled) and returns deduplicated chain configs. Within a single directory, `.chain.json` takes priority over `.chain.md` when both define the same chain name (per spec section 4).
-
-**Tech Stack:** TypeScript, Vitest
-
-**Spec:** `docs/superpowers/specs/2026-07-11-chain-execution-design.md`
-
-**Reference:** `/Users/lanh/Developer/pi-packages/nicobailon-pi-subagents` (source project to port from)
-
-**Parent plan:** `docs/superpowers/plans/2026-07-11-chain-execution.md`
-
-**Prerequisites:** Phase 1 (types), Phase 3 (chain-serializer for `parseChain`/`parseJsonChain`).
-
----
-
-### Task 6: Extend paths and add `discoverChains()`
-
-**Files:**
-
-- Modify: `src/shared/types.ts` (add chain paths to `ResolvedPaths`)
-- Modify: `src/core/paths.ts` (add chain directory resolution)
-- Modify: `src/core/agents.ts` (add `discoverChains()`)
-- Create: `tests/chain-discovery.test.ts`
-
-- [ ] **Step 1: Add chain directory fields to `ResolvedPaths`**
-
-In `src/shared/types.ts`, add to the `ResolvedPaths` interface:
-
-```typescript
-export interface ResolvedPaths {
-  agentDir: string;
-  configPath: string;
-  userAgentsDir: string;
-  bundledAgentsDir: string;
-  sessionsDir: string;
-  // Chain directories
-  userChainsDir: string;
-  bundledChainsDir: string;
-}
-```
-
-Note: Project chain directory (`.pi/chains/` from cwd) is NOT part of `ResolvedPaths` because it depends on the working directory at call time — just like `.pi/skills/` and `.pi/subagents.json`. It's resolved dynamically in `discoverChains()`.
-
-- [ ] **Step 2: Update `src/core/paths.ts`**
-
-Add chain directory resolution:
-
-```typescript
-export function getBundledChainsDir(): string {
-  return resolve(currentDir, "../../chains");
-}
-
-export function resolvePaths(agentDir = getAgentDir()): ResolvedPaths {
-  return {
-    agentDir,
-    configPath: join(agentDir, "extensions", "subagents.json"),
-    userAgentsDir: join(agentDir, "agents"),
-    bundledAgentsDir: getBundledAgentsDir(),
-    sessionsDir: join(agentDir, "sessions"),
-    userChainsDir: join(agentDir, "chains"),
-    bundledChainsDir: getBundledChainsDir(),
-  };
-}
-```
-
-Note: No `chains/` directory exists in the project root yet. `getBundledChainsDir()` will resolve to a non-existent path, which `discoverChainsFromDirectory()` handles gracefully (returns empty). Bundled chain files can be added later.
-
-- [ ] **Step 3: Run typecheck to find any breakage from ResolvedPaths change**
-
-Run: `pnpm typecheck`
-Expected: PASS (or fix any callers that destructure ResolvedPaths — the new fields are additive so should be fine)
-
-- [ ] **Step 4: Add `discoverChains()` to `src/core/agents.ts`**
-
-Add imports at the top of the file (merge into existing import blocks):
-
-```typescript
-import { parseChain, parseJsonChain } from "./chain-serializer.js";
-```
-
-Add `ChainConfig`, `ChainDiscoveryDiagnostic`, and `ChainDiscoveryResult` to the existing `../shared/types.js` import.
-
-Add the following functions at the end of the file:
-
-```typescript
-function discoverChainsFromDirectory(directory: string): {
-  chains: ChainConfig[];
-  diagnostics: ChainDiscoveryDiagnostic[];
-} {
-  if (!existsSync(directory)) return { chains: [], diagnostics: [] };
-
-  const diagnostics: ChainDiscoveryDiagnostic[] = [];
-  const fileNames = readdirSync(directory)
-    .filter((f) => f.endsWith(".chain.md") || f.endsWith(".chain.json"))
-    .sort((a, b) => a.localeCompare(b));
-
-  // Parse all files, dedup by name within directory.
-  // .chain.json wins over .chain.md for the same chain name (spec §4).
-  const byName = new Map<string, ChainConfig>();
-  for (const fileName of fileNames) {
-    const filePath = resolve(directory, fileName);
-    try {
-      const content = readFileSync(filePath, "utf8");
-      const config = fileName.endsWith(".chain.json")
-        ? parseJsonChain(filePath, content)
-        : parseChain(filePath, content);
-      const key = config.name.toLowerCase();
-      const existing = byName.get(key);
-      if (
-        existing &&
-        existing.filePath.endsWith(".chain.json") &&
-        filePath.endsWith(".chain.md")
-      ) {
-        // JSON already registered — skip the .md variant silently
-        continue;
-      }
-      byName.set(key, config);
-    } catch (e) {
-      diagnostics.push({
-        filePath,
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }
-
-  return { chains: [...byName.values()], diagnostics };
-}
-
-export function discoverChains(
-  paths: ResolvedPaths,
-  cwd?: string,
-): ChainDiscoveryResult {
-  // Priority: project > user > bundled (higher priority = inserted first, wins on conflict)
-  const projectChainsDir = cwd ? join(cwd, ".pi", "chains") : undefined;
-  const projectResult = projectChainsDir
-    ? discoverChainsFromDirectory(projectChainsDir)
-    : { chains: [], diagnostics: [] };
-  const userResult = discoverChainsFromDirectory(paths.userChainsDir);
-  const bundledResult = discoverChainsFromDirectory(paths.bundledChainsDir);
-  const chainsByName = new Map<string, ChainConfig>();
-  const diagnostics = [
-    ...projectResult.diagnostics,
-    ...userResult.diagnostics,
-    ...bundledResult.diagnostics,
-  ];
-
-  // Insert in priority order: project first, then user, then bundled
-  const allChains = [
-    ...projectResult.chains,
-    ...userResult.chains,
-    ...bundledResult.chains,
-  ];
-
-  for (const chain of allChains) {
-    const key = chain.name.toLowerCase();
-    if (chainsByName.has(key)) {
-      diagnostics.push({
-        filePath: chain.filePath,
-        error: `duplicate chain name "${chain.name}" skipped; higher-priority scope wins`,
-      });
-      continue;
-    }
-    chainsByName.set(key, chain);
-  }
-
-  return {
-    chains: [...chainsByName.values()],
-    diagnostics,
-  };
-}
-```
-
-- [ ] **Step 5: Write tests for chain discovery**
-
-Create `tests/chain-discovery.test.ts`:
-
-```typescript
 import { describe, expect, test } from "vitest";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -388,6 +206,30 @@ describe("discoverChains", () => {
     rmSync(paths.tmpDir, { recursive: true, force: true });
   });
 
+  test("same-format duplicate in same directory emits diagnostic", () => {
+    const paths = makeTmpPaths();
+    writeFileSync(
+      join(paths.bundledChainsDir, "alpha.chain.md"),
+      MD_CHAIN("deploy", "from-alpha"),
+    );
+    writeFileSync(
+      join(paths.bundledChainsDir, "bravo.chain.md"),
+      MD_CHAIN("deploy", "from-bravo"),
+    );
+
+    const result = discoverChains(paths);
+    expect(result.chains).toHaveLength(1);
+    // Last alphabetically wins (bravo > alpha)
+    expect(result.chains[0]!.description).toBe("from-bravo");
+    // Should produce a diagnostic about the overwrite
+    const dupDiag = result.diagnostics.find((d) =>
+      d.error.includes("deploy"),
+    );
+    expect(dupDiag).toBeDefined();
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
   test("name comparison is case-insensitive", () => {
     const paths = makeTmpPaths();
     writeFileSync(
@@ -406,21 +248,3 @@ describe("discoverChains", () => {
     rmSync(paths.tmpDir, { recursive: true, force: true });
   });
 });
-```
-
-- [ ] **Step 6: Run tests**
-
-Run: `pnpm vitest run tests/chain-discovery.test.ts`
-Expected: PASS
-
-- [ ] **Step 7: Run full check**
-
-Run: `pnpm check`
-Expected: PASS
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add src/shared/types.ts src/core/paths.ts src/core/agents.ts tests/chain-discovery.test.ts
-git commit -m "feat(chain-discovery): discover .chain.md and .chain.json from project/user/bundled dirs"
-```

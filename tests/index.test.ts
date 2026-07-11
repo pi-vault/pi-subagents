@@ -49,6 +49,8 @@ function createPaths(): ResolvedPaths {
     userAgentsDir: "/tmp/pi-agent/agents",
     bundledAgentsDir: "/repo/agents",
     sessionsDir: "/tmp/pi-agent/sessions",
+    userChainsDir: "/tmp/pi-agent/chains",
+    bundledChainsDir: "/repo/chains",
   };
 }
 
@@ -211,12 +213,14 @@ describe("subagents extension", () => {
     const exported: string[] = [];
     const selections = ["Agents (1)", "Scout  [bundled]", "Export to global"];
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-menu-"));
-    const paths = {
+    const paths: ResolvedPaths = {
       agentDir: join(rootDir, "agent"),
       configPath: join(rootDir, "agent", "extensions", "subagents.json"),
       userAgentsDir: join(rootDir, "agent", "agents"),
       bundledAgentsDir: join(rootDir, "bundled-agents"),
       sessionsDir: join(rootDir, "agent", "sessions"),
+      userChainsDir: join(rootDir, "agent", "chains"),
+      bundledChainsDir: join(rootDir, "bundled-chains"),
     };
     mkdirSync(paths.bundledAgentsDir, { recursive: true });
     writeFileSync(

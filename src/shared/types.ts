@@ -45,6 +45,9 @@ export interface ResolvedPaths {
   userAgentsDir: string;
   bundledAgentsDir: string;
   sessionsDir: string;
+  // Chain directories
+  userChainsDir: string;
+  bundledChainsDir: string;
 }
 
 export interface ArtifactPaths {
