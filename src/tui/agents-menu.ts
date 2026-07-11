@@ -28,6 +28,7 @@ type SettingsKey =
   | "defaultMaxTurns"
   | "graceTurns"
   | "defaultJoinMode"
+  | "maxSpawnsPerSession"
   | "widgetMode"
   | "fleetView";
 
@@ -102,6 +103,16 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
       if (deps.defaultJoinMode !== undefined) {
         deps.defaultJoinMode = value as "async" | "group" | "smart";
       }
+    },
+  },
+  {
+    key: "maxSpawnsPerSession",
+    label: "Max Spawns Per Session",
+    promptTitle: "Max Spawns Per Session (0 = block all)",
+    formatValue: (config) => String(config.maxSpawnsPerSession),
+    parse: (raw) => {
+      const value = Number(raw);
+      return Number.isInteger(value) && value >= 0 ? value : undefined;
     },
   },
   {
