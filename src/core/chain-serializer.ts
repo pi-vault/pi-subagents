@@ -312,7 +312,8 @@ export function serializeChain(config: ChainConfig): string {
     if (step.phase) lines.push(`phase: ${step.phase}`);
     if (step.label) lines.push(`label: ${step.label}`);
     if (step.as) lines.push(`as: ${step.as}`);
-    if (step.outputSchema) lines.push(`outputSchema: ${step.outputSchema}`);
+    if (typeof step.outputSchema === "string" && step.outputSchema)
+      lines.push(`outputSchema: ${step.outputSchema}`);
     if (step.outputMode) lines.push(`outputMode: ${step.outputMode}`);
     if (step.reads === false) lines.push("reads: false");
     else if (Array.isArray(step.reads) && step.reads.length > 0)
