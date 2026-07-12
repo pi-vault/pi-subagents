@@ -193,6 +193,7 @@ export class AgentManager {
         prompt: options.prompt,
         cwd: effectiveCwd,
         agentId: id,
+        model: options.model,
         maxTurns: options.maxTurns,
         graceTurns: options.graceTurns,
         inheritContext: options.inheritContext,

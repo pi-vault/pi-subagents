@@ -30,6 +30,7 @@ export interface StepSpawnOptions {
   toolBudget?: ResolvedToolBudget;
   isolation?: "worktree";
   skills?: string[];
+  model?: string;
 }
 
 export interface ChainExecutionParams {
@@ -161,6 +162,7 @@ export async function executeChain(
         if (behavior.skills && behavior.skills.length > 0) {
           parallelOptions.skills = behavior.skills;
         }
+        if (behavior.model) parallelOptions.model = behavior.model;
 
         const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, parallelOptions);
         const output = record.result ?? "";
@@ -264,6 +266,7 @@ export async function executeChain(
         reads: step.parallel.reads,
         progress: step.parallel.progress,
         skills: step.parallel.skills,
+        model: step.parallel.model,
       });
       if (dynBehavior.progress) progressCreated = true;
       const { prefix: dynPrefix, suffix: dynSuffix } = buildChainInstructions(dynBehavior, chainDir, false);
@@ -277,6 +280,7 @@ export async function executeChain(
       if (dynBehavior.skills && dynBehavior.skills.length > 0) {
         dynOptions.skills = dynBehavior.skills;
       }
+      if (dynBehavior.model) dynOptions.model = dynBehavior.model;
 
       const dynamicResults = await Promise.all(
         (items as unknown[]).map(async (item) => {
@@ -372,6 +376,7 @@ export async function executeChain(
       if (behavior.skills && behavior.skills.length > 0) {
         seqOptions.skills = behavior.skills;
       }
+      if (behavior.model) seqOptions.model = behavior.model;
 
       const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, seqOptions);
       const output = record.result ?? "";

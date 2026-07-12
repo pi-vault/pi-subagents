@@ -288,6 +288,7 @@ export interface SpawnOptions {
   currentDepth?: number;
   allowedAgents?: string[];
   isolation?: string;
+  model?: unknown;
   onToolActivity?: (activity: ToolActivity) => void;
   onTextDelta?: (delta: string, fullText: string) => void;
   onTurnEnd?: (turnCount: number) => void;

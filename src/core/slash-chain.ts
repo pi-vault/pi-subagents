@@ -512,9 +512,10 @@ async function executeSlashChain(
       steps: chain,
       task,
       spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
-        const effectiveAgentDef = options?.skills
+        let effectiveAgentDef = options?.skills
           ? { ...agentDef, skills: options.skills }
           : agentDef;
+        if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
         return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
           prompt,
           cwd: stepCwd || ctx.cwd,
