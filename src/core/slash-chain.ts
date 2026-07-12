@@ -28,8 +28,6 @@ export interface InlineConfig {
   phase?: string;
   cwd?: string;
   count?: number;
-  outputSchema?: string;
-  acceptance?: string;
 }
 
 export interface GroupConfig {
@@ -136,12 +134,6 @@ const parseInlineConfig = (raw: string): InlineConfig => {
         if (Number.isInteger(n) && n > 0) config.count = n;
         break;
       }
-      case "outputSchema":
-        config.outputSchema = val || undefined;
-        break;
-      case "acceptance":
-        config.acceptance = val || undefined;
-        break;
     }
   }
   return config;
@@ -677,7 +669,7 @@ export function registerChainCommands(
   // /chain — inline chain expression
   pi.registerCommand("chain", {
     description:
-      'Run agents in sequence: /chain scout "task" -> planner [--bg] [--fork]',
+      'Run agents in sequence: /chain scout "task" -> planner',
     getArgumentCompletions: (prefix) => {
       try {
         const paths = deps.resolvePaths();
@@ -710,7 +702,7 @@ export function registerChainCommands(
   // /run-chain — execute a saved chain file
   pi.registerCommand("run-chain", {
     description:
-      "Run a saved chain: /run-chain chainName -- task [--bg] [--fork]",
+      "Run a saved chain: /run-chain chainName -- task",
     getArgumentCompletions: (prefix) => {
       try {
         const paths = deps.resolvePaths();
@@ -728,7 +720,7 @@ export function registerChainCommands(
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
       const { args: cleanedArgs } = extractExecutionFlags(args);
-      const usage = "Usage: /run-chain <chainName> -- <task> [--bg] [--fork]";
+      const usage = "Usage: /run-chain <chainName> -- <task>";
 
       const delimiterIndex = cleanedArgs.indexOf(" -- ");
       if (delimiterIndex === -1) {
