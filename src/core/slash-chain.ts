@@ -501,6 +501,10 @@ export function buildChainSteps(
 // Command registration
 // ---------------------------------------------------------------------------
 
+/** Public re-export for use by prompt-workflows. Calls the shared chain execution path. */
+export const executeSlashChainPublic = (...args: Parameters<typeof executeSlashChain>) =>
+  executeSlashChain(...args);
+
 /** Execute a chain and send the result. Shared by /chain and /run-chain. */
 async function executeSlashChain(
   pi: ExtensionAPI,

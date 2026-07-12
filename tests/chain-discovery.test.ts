@@ -28,6 +28,8 @@ function makeTmpPaths(): ResolvedPaths & { tmpDir: string } {
   return {
     agentDir: tmpDir,
     configPath: join(tmpDir, "config.json"),
+    userPromptsDir: join(tmpDir, "prompts"),
+    bundledPromptsDir: join(tmpDir, "bundled-prompts"),
     userAgentsDir: join(tmpDir, "user-agents"),
     bundledAgentsDir: join(tmpDir, "bundled-agents"),
     sessionsDir: join(tmpDir, "sessions"),

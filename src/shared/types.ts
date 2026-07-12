@@ -48,6 +48,9 @@ export interface ResolvedPaths {
   // Chain directories
   userChainsDir: string;
   bundledChainsDir: string;
+  // Prompt workflow directories
+  userPromptsDir: string;
+  bundledPromptsDir: string;
 }
 
 export interface ArtifactPaths {

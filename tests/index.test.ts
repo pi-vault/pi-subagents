@@ -51,6 +51,8 @@ function createPaths(): ResolvedPaths {
     sessionsDir: "/tmp/pi-agent/sessions",
     userChainsDir: "/tmp/pi-agent/chains",
     bundledChainsDir: "/repo/chains",
+    userPromptsDir: "/tmp/pi-agent/prompts",
+    bundledPromptsDir: "/repo/prompts",
   };
 }
 
@@ -221,6 +223,8 @@ describe("subagents extension", () => {
       sessionsDir: join(rootDir, "agent", "sessions"),
       userChainsDir: join(rootDir, "agent", "chains"),
       bundledChainsDir: join(rootDir, "bundled-chains"),
+      userPromptsDir: join(rootDir, "agent", "prompts"),
+      bundledPromptsDir: join(rootDir, "bundled-prompts"),
     };
     mkdirSync(paths.bundledAgentsDir, { recursive: true });
     writeFileSync(
