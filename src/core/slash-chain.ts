@@ -525,13 +525,16 @@ async function executeSlashChain(
       },
       cwd: ctx.cwd,
       runId: `chain-${Date.now().toString(36)}`,
+      onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
     });
+    deps.chainWidget?.clear();
     pi.sendMessage({
       customType: "pi-subagent-result",
       content: chainResult.content,
       display: true,
     });
   } catch (error) {
+    deps.chainWidget?.clear();
     const message = error instanceof Error ? error.message : String(error);
     pi.sendMessage({
       customType: "pi-subagent-result",

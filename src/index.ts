@@ -23,6 +23,7 @@ import type { JoinMode, NotificationDetails, WidgetMode } from "./shared/types.j
 import type { AgentActivity } from "./tui/activity.js";
 import { AgentWidget, type UICtx } from "./tui/agent-widget.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
+import { ChainWidget } from "./tui/chain-widget.js";
 import { FleetList, type FleetUICtx } from "./tui/fleet-list.js";
 import { buildNotificationText, renderSubagentMessage } from "./tui/render.js";
 
@@ -191,6 +192,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   let widgetMode: WidgetMode = "background";
   widget = new AgentWidget(manager, agentActivity, () => widgetMode);
   fleet = new FleetList(manager, agentActivity);
+  const chainWidget = new ChainWidget();
 
   function applyWidgetMode(mode: WidgetMode): void {
     widgetMode = mode;
@@ -219,6 +221,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     widget,
     fleet,
     agentActivity,
+    chainWidget,
     ensureTimers: () => {
       widget.ensureTimer();
       fleet.ensureTimer();
@@ -387,6 +390,7 @@ export function registerSubagentsExtension(
   // and age finished agents so they clear from the widget after one turn.
   pi.on("tool_execution_start", (_event, ctx) => {
     deps.widget?.setUICtx(ctx.ui as UICtx);
+    deps.chainWidget?.setUICtx(ctx.ui as UICtx);
     deps.fleet?.setUICtx(ctx.ui as unknown as FleetUICtx);
     deps.widget?.onTurnStart();
   });
@@ -394,6 +398,7 @@ export function registerSubagentsExtension(
   // Cleanup on session shutdown
   pi.on("session_shutdown", () => {
     deps.widget?.dispose();
+    deps.chainWidget?.dispose();
     deps.fleet?.dispose();
     deps.agentActivity?.clear();
     deps.manager.abortAll();

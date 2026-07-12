@@ -242,7 +242,9 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             cwd: effectiveCwd,
             runId: `chain-${Date.now().toString(36)}`,
             signal,
+            onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
           });
+          deps.chainWidget?.clear();
           return {
             content: [{ type: "text", text: chainResult.content }],
             isError: chainResult.isError,
@@ -255,6 +257,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             }),
           };
         } catch (error) {
+          deps.chainWidget?.clear();
           const message = error instanceof Error ? error.message : String(error);
           return {
             content: [{ type: "text", text: message }],

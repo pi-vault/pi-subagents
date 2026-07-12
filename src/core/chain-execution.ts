@@ -18,6 +18,7 @@ import {
   outputEntryFromResult,
 } from "./chain-outputs.js";
 import { consumeChainAppendRequests } from "./chain-append.js";
+import { buildWorkflowGraphSnapshot } from "./workflow-graph.js";
 
 export interface ChainExecutionParams {
   steps: ChainStep[];
@@ -45,7 +46,7 @@ export interface ChainExecutionResult {
 export async function executeChain(
   params: ChainExecutionParams,
 ): Promise<ChainExecutionResult> {
-  const { steps, task, spawnAndWait, findAgent, cwd, runId, signal } = params;
+  const { steps, task, spawnAndWait, findAgent, cwd, runId, signal, onGraphUpdate } = params;
 
   // 1. Validate output bindings
   validateChainOutputBindings(steps);
@@ -62,7 +63,28 @@ export async function executeChain(
   const results: Array<{ agent: string; output: string; status: string }> = [];
   const chainSteps = [...steps];
 
+  // --- Snapshot state ---
+  const stepStatuses: Array<{ status?: string; error?: string }> = [];
+  const finalSnapshot = () =>
+    buildWorkflowGraphSnapshot({ runId, steps: chainSteps, stepStatuses });
+
+  function emitSnapshot(currentStepIndex?: number, currentFlatIndex?: number): void {
+    if (!onGraphUpdate) return;
+    const snapshot = buildWorkflowGraphSnapshot({
+      runId,
+      steps: chainSteps,
+      currentStepIndex,
+      currentFlatIndex,
+      stepStatuses,
+    });
+    onGraphUpdate(snapshot);
+  }
+
+  // Emit initial snapshot (all pending)
+  emitSnapshot(0, 0);
+
   let aborted = false;
+  let flatIndex = 0;
   for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
     if (signal?.aborted) {
       aborted = true;
@@ -76,7 +98,12 @@ export async function executeChain(
       // --- Parallel step ---
       const taskTemplates = template as string[];
 
-      // Execute parallel items concurrently
+      // Mark all parallel items as running
+      for (let i = 0; i < step.parallel.length; i++) {
+        stepStatuses[flatIndex + i] = { status: "running" };
+      }
+      emitSnapshot(stepIndex, flatIndex);
+
       const promises = step.parallel.map(async (item, i) => {
         const agentDef = findAgent(item.agent);
         let taskStr = taskTemplates[i] ?? "{previous}";
@@ -88,6 +115,14 @@ export async function executeChain(
 
         const { record } = await spawnAndWait(agentDef, taskStr, cwd);
         const output = record.result ?? "";
+        const itemFlatIndex = flatIndex + i;
+
+        stepStatuses[itemFlatIndex] = {
+          status: record.status === "error" ? "failed" : "completed",
+          error: record.error,
+        };
+        emitSnapshot(stepIndex, itemFlatIndex);
+
         if (item.as) {
           outputs[item.as] = outputEntryFromResult(
             item.agent,
@@ -104,8 +139,9 @@ export async function executeChain(
       const failed = parallelResults.filter((r) => r.status === "error");
       if (step.failFast && failed.length > 0) {
         return {
-          content: `Chain failed at parallel step ${stepIndex + 1}: ${failed[0]!.output}`,
+          content: `Chain failed at parallel step ${stepIndex + 1}: ${failed[0]?.output}`,
           isError: true,
+          workflowGraph: finalSnapshot(),
         };
       }
 
@@ -113,13 +149,23 @@ export async function executeChain(
       for (const r of parallelResults) {
         results.push({ agent: r.agent, output: r.output, status: r.status });
       }
+      flatIndex += step.parallel.length;
     } else if (isDynamicParallelStep(step)) {
       // --- Dynamic parallel step ---
+      stepStatuses[flatIndex] = { status: "running" };
+      emitSnapshot(stepIndex, flatIndex);
+
       const sourceEntry = outputs[step.expand.from.output];
       if (!sourceEntry?.structured) {
+        stepStatuses[flatIndex] = {
+          status: "failed",
+          error: `no structured output from '${step.expand.from.output}'`,
+        };
+        emitSnapshot(stepIndex, flatIndex);
         return {
           content: `Chain failed at dynamic step ${stepIndex + 1}: no structured output from '${step.expand.from.output}'`,
           isError: true,
+          workflowGraph: finalSnapshot(),
         };
       }
 
@@ -133,16 +179,28 @@ export async function executeChain(
       }
       if (!Array.isArray(items)) {
         if (step.expand.onEmpty === "skip") {
+          stepStatuses[flatIndex] = { status: "skipped" };
+          emitSnapshot(stepIndex, flatIndex);
           prev = "";
+          flatIndex++;
           continue;
         }
+        stepStatuses[flatIndex] = {
+          status: "failed",
+          error: "expanded items is not an array",
+        };
+        emitSnapshot(stepIndex, flatIndex);
         return {
           content: `Chain failed at dynamic step ${stepIndex + 1}: expanded items is not an array`,
           isError: true,
+          workflowGraph: finalSnapshot(),
         };
       }
       if (items.length === 0 && step.expand.onEmpty === "skip") {
+        stepStatuses[flatIndex] = { status: "skipped" };
+        emitSnapshot(stepIndex, flatIndex);
         prev = "";
+        flatIndex++;
         continue;
       }
       if (step.expand.maxItems && items.length > step.expand.maxItems) {
@@ -179,9 +237,12 @@ export async function executeChain(
       // Check for failures (failFast)
       const failed = dynamicResults.filter((r) => r.status === "error");
       if (step.failFast && failed.length > 0) {
+        stepStatuses[flatIndex] = { status: "failed", error: failed[0]?.output };
+        emitSnapshot(stepIndex, flatIndex);
         return {
           content: `Chain failed at dynamic step ${stepIndex + 1}: ${failed[0]?.output}`,
           isError: true,
+          workflowGraph: finalSnapshot(),
         };
       }
 
@@ -194,13 +255,19 @@ export async function executeChain(
         stepIndex,
       );
       prev = collectedOutput;
+      stepStatuses[flatIndex] = { status: "completed" };
+      emitSnapshot(stepIndex, flatIndex);
       for (const r of dynamicResults) {
         results.push({ agent: step.parallel.agent, output: r.output, status: r.status });
       }
+      flatIndex++;
     } else {
       // --- Sequential step ---
       const seqStep = step as SequentialStep;
       const agentDef = findAgent(seqStep.agent);
+
+      stepStatuses[flatIndex] = { status: "running" };
+      emitSnapshot(stepIndex, flatIndex);
 
       let taskStr = (template as string) ?? "{task}";
       taskStr = taskStr
@@ -213,11 +280,17 @@ export async function executeChain(
       const output = record.result ?? "";
 
       if (record.status === "error") {
+        stepStatuses[flatIndex] = { status: "failed", error: record.error };
+        emitSnapshot(stepIndex, flatIndex);
         return {
           content: `Chain failed at step ${stepIndex + 1} (${seqStep.agent}): ${record.error ?? output}`,
           isError: true,
+          workflowGraph: finalSnapshot(),
         };
       }
+
+      stepStatuses[flatIndex] = { status: "completed" };
+      emitSnapshot(stepIndex, flatIndex);
 
       if (seqStep.as) {
         outputs[seqStep.as] = outputEntryFromResult(
@@ -228,6 +301,7 @@ export async function executeChain(
       }
       prev = output;
       results.push({ agent: seqStep.agent, output, status: record.status });
+      flatIndex++;
     }
 
     // Check for appended steps (async chains)
@@ -249,11 +323,13 @@ export async function executeChain(
     return {
       content: `Chain aborted after ${results.length} of ${chainSteps.length} steps.\n\n${summary}`,
       isError: true,
+      workflowGraph: finalSnapshot(),
     };
   }
 
   return {
     content: prev || summary,
     isError: false,
+    workflowGraph: finalSnapshot(),
   };
 }
