@@ -227,11 +227,16 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           const chainResult = await executeChain({
             steps: params.chain as ChainStep[],
             task: params.task ?? "",
-            spawnAndWait: async (agentDef, prompt, stepCwd) => {
-              return deps.manager.spawnAndWait(ctx, agentDef, {
+            spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
+              const effectiveAgentDef = options?.skills
+                ? { ...agentDef, skills: options.skills }
+                : agentDef;
+              return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
                 prompt,
                 cwd: stepCwd || effectiveCwd,
                 maxTurns: loadedConfig.config.defaultMaxTurns,
+                toolBudget: options?.toolBudget,
+                isolation: options?.isolation,
               });
             },
             findAgent: (name) => {

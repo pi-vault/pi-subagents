@@ -8,6 +8,38 @@ import type {
   ParallelStep,
 } from "../src/shared/types.js";
 
+// ---------------------------------------------------------------------------
+// Reusable test helpers
+// ---------------------------------------------------------------------------
+
+function makeRecord(status: "completed" | "error", result: string): AgentRecord {
+  return {
+    id: `agent-${Math.random()}`,
+    type: "mock",
+    description: "mock agent",
+    status,
+    result,
+    error: status === "error" ? result : undefined,
+    toolUses: 0,
+    turnCount: 1,
+    startedAt: Date.now(),
+    completedAt: Date.now(),
+    durationMs: 100,
+    lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+  };
+}
+
+function makeAgentDef(name: string): AgentDefinition {
+  return {
+    name,
+    description: `mock ${name}`,
+    tools: [],
+    subagentAgents: [],
+    systemPrompt: "You are a test agent.",
+    sourcePath: "/mock",
+  };
+}
+
 // Minimal mock deps
 function makeMockDeps(stepResults: Array<{ result: string; status?: string }>) {
   let callIndex = 0;
@@ -81,6 +113,7 @@ describe("executeChain — sequential", () => {
       expect.anything(),
       expect.stringContaining("build auth"),
       expect.anything(),
+      expect.anything(),
     );
 
     // Second step should have {previous} replaced with step 1 output
@@ -88,6 +121,7 @@ describe("executeChain — sequential", () => {
       2,
       expect.anything(),
       expect.stringContaining("step 1 output"),
+      expect.anything(),
       expect.anything(),
     );
   });
@@ -117,6 +151,7 @@ describe("executeChain — sequential", () => {
       2,
       expect.anything(),
       expect.stringContaining("context data"),
+      expect.anything(),
       expect.anything(),
     );
   });
@@ -233,5 +268,195 @@ describe("executeChain — dynamic parallel", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("no structured output");
     expect(result.content).toContain("dynamic step 2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step behavior wiring (Task 11 + 12)
+// ---------------------------------------------------------------------------
+
+describe("executeChain — step behavior wiring", () => {
+  test("prepends read instructions to sequential task prompt", async () => {
+    const prompts: string[] = [];
+
+    await executeChain({
+      steps: [{ agent: "scout", task: "do stuff", reads: ["context.md"] }],
+      task: "original",
+      spawnAndWait: async (_agentDef, prompt, _cwd) => {
+        prompts.push(prompt);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("scout"),
+      cwd: "/tmp",
+      runId: "test-reads",
+    });
+
+    expect(prompts[0]).toContain("[Read from:");
+    expect(prompts[0]).toContain("context.md");
+  });
+
+  test("appends progress instruction to sequential task prompt", async () => {
+    const prompts: string[] = [];
+
+    await executeChain({
+      steps: [{ agent: "worker", task: "implement it", progress: true }],
+      task: "build feature",
+      spawnAndWait: async (_agentDef, prompt, _cwd) => {
+        prompts.push(prompt);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-progress",
+    });
+
+    expect(prompts[0]).toContain("progress");
+  });
+
+  test("passes toolBudget through StepSpawnOptions for sequential step", async () => {
+    const receivedOptions: unknown[] = [];
+
+    await executeChain({
+      steps: [{ agent: "worker", task: "build", toolBudget: { hard: 20, soft: 10 } }],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options?: unknown) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-budget",
+    });
+
+    expect(receivedOptions[0]).toBeDefined();
+    expect((receivedOptions[0] as { toolBudget?: unknown }).toolBudget).toBeDefined();
+  });
+
+  test("passes isolation: worktree for parallel steps with worktree: true", async () => {
+    const receivedOptions: unknown[] = [];
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "a", task: "t1" },
+          { agent: "b", task: "t2" },
+        ],
+        worktree: true,
+      } satisfies ParallelStep,
+    ];
+
+    await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options?: unknown) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: (name) => makeAgentDef(name),
+      cwd: "/tmp",
+      runId: "test-worktree",
+    });
+
+    expect((receivedOptions[0] as { isolation?: string }).isolation).toBe("worktree");
+    expect((receivedOptions[1] as { isolation?: string }).isolation).toBe("worktree");
+  });
+
+  test("passes skills override through StepSpawnOptions for sequential step", async () => {
+    const receivedOptions: unknown[] = [];
+
+    await executeChain({
+      steps: [{ agent: "worker", task: "build", skills: ["tdd", "lint"] }],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options?: unknown) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-skills",
+    });
+
+    expect((receivedOptions[0] as { skills?: unknown }).skills).toEqual(["tdd", "lint"]);
+  });
+
+  test("prepends read instructions for parallel task items", async () => {
+    const prompts: string[] = [];
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "a", task: "task a", reads: ["file.md"] },
+          { agent: "b", task: "task b" },
+        ],
+      } satisfies ParallelStep,
+    ];
+
+    await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: async (_agentDef, prompt, _cwd) => {
+        prompts.push(prompt);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: (name) => makeAgentDef(name),
+      cwd: "/tmp",
+      runId: "test-parallel-reads",
+    });
+
+    // First parallel item has reads, second does not
+    expect(prompts.some((p) => p.includes("[Read from:") && p.includes("file.md"))).toBe(true);
+    expect(prompts.filter((p) => p.includes("[Read from:"))).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chain directory cleanup (Task 13)
+// ---------------------------------------------------------------------------
+
+describe("executeChain — chain directory cleanup", () => {
+  test("removes chain directory after successful execution", async () => {
+    const { existsSync } = await import("node:fs");
+    const capturedPrompts: string[] = [];
+
+    await executeChain({
+      steps: [{ agent: "a", task: "{chain_dir}" }],
+      task: "test",
+      spawnAndWait: async (_agentDef, prompt, _cwd) => {
+        capturedPrompts.push(prompt);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("a"),
+      cwd: "/tmp",
+      runId: `cleanup-test-${Date.now()}`,
+    });
+
+    const chainDir = capturedPrompts[0]?.trim();
+    expect(chainDir).toBeTruthy();
+    expect(existsSync(chainDir!)).toBe(false);
+  });
+
+  test("removes chain directory even when a step fails", async () => {
+    const { existsSync } = await import("node:fs");
+    const capturedPrompts: string[] = [];
+
+    await executeChain({
+      steps: [
+        { agent: "a", task: "{chain_dir}" },
+        { agent: "b", task: "second step" },
+      ],
+      task: "test",
+      spawnAndWait: async (_agentDef, prompt, _cwd) => {
+        capturedPrompts.push(prompt);
+        // First call succeeds (captures chain_dir), second would not be reached anyway
+        return { id: "1", record: makeRecord("error", "boom") };
+      },
+      findAgent: () => makeAgentDef("a"),
+      cwd: "/tmp",
+      runId: `cleanup-fail-${Date.now()}`,
+    });
+
+    const chainDir = capturedPrompts[0]?.trim();
+    expect(chainDir).toBeTruthy();
+    expect(existsSync(chainDir!)).toBe(false);
   });
 });
