@@ -10,7 +10,6 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
-  AgentRecord,
   ChainStep,
   ResolvedToolBudget,
   SubagentExecutionDetails,
@@ -253,10 +252,8 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                 (tui, theme, _kb, done) =>
                   new ChainClarifyComponent(
                     tui,
-                    theme as unknown as import("../tui/agent-widget.js").Theme, // safely cast — Theme is structurally identical
+                    theme as unknown as import("../tui/agent-widget.js").Theme,
                     chainSteps,
-                    discovery.agents,
-                    params.task ?? "",
                     done,
                   ),
               );
@@ -304,38 +301,12 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
 
           // Background chain dispatch — fire and forget
           if (params.run_in_background) {
-            const record: AgentRecord = {
-              id: chainRunId,
-              type: "(chain)",
-              description: `Chain: ${(params.task ?? "").slice(0, 60)}`,
-              status: "running",
-              startedAt: Date.now(),
-              toolUses: 0,
-              turnCount: 0,
-              lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
-              isBackground: true,
-            };
-            deps.manager.registerExternalRecord(chainRunId, record);
-
-            executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) })
-              .then((chainResult) => {
-                record.status = chainResult.isError ? "error" : "completed";
-                record.result = chainResult.content;
-                record.error = chainResult.isError ? chainResult.content : undefined;
-                record.completedAt = Date.now();
-                record.durationMs = record.completedAt - record.startedAt;
-                deps.chainWidget?.clear();
-                deps.manager.notifyComplete(chainRunId);
-              })
-              .catch((error) => {
-                record.status = "error";
-                record.error = error instanceof Error ? error.message : String(error);
-                record.completedAt = Date.now();
-                record.durationMs = record.completedAt - record.startedAt;
-                deps.chainWidget?.clear();
-                deps.manager.notifyComplete(chainRunId);
-              });
-
+            deps.manager.fireAndForgetChain(
+              chainRunId,
+              params.task ?? "",
+              executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+              () => deps.chainWidget?.clear(),
+            );
             return {
               content: [{ type: "text", text: `Chain started in background.\nChain ID: ${chainRunId}` }],
               isError: false,

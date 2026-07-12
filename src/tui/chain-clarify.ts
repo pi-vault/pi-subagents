@@ -37,8 +37,6 @@ export class ChainClarifyComponent implements Component {
     private tui: TUI,
     private theme: Theme,
     private steps: ChainStep[],
-    private _agents: unknown[],
-    private task: string,
     private done: (result: ChainClarifyResult) => void,
   ) {}
 

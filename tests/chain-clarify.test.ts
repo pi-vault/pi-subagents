@@ -23,11 +23,14 @@ function makeComponent(
     mockTui,
     mockTheme,
     steps,
-    [],
-    "test task",
     done ?? ((r) => { result.value = r; }),
   );
   return { component, result };
+}
+
+function clearAndType(component: ChainClarifyComponent, clear: number, text: string): void {
+  for (let i = 0; i < clear; i++) component.handleInput("\x7f");
+  for (const ch of text) component.handleInput(ch);
 }
 
 // ---------------------------------------------------------------------------
@@ -199,26 +202,18 @@ describe("ChainClarifyComponent — edit mode", () => {
 
   test("Enter confirms task edit and applies override", () => {
     const { component, result } = makeComponent([{ agent: "scout", task: "old" }]);
-    component.handleInput("e"); // enter edit-task
-    component.handleInput("\x7f"); // backspace "ol"
-    component.handleInput("\x7f");
-    component.handleInput("\x7f");
-    component.handleInput("n");
     component.handleInput("e");
-    component.handleInput("w");
+    clearAndType(component, 3, "new");
     component.handleInput("\r"); // confirm
-    // Back in list mode — run it
-    component.handleInput("\r");
+    component.handleInput("\r"); // run
     expect(result.value?.action).toBe("run");
     expect(result.value?.steps[0]).toMatchObject({ agent: "scout", task: "new" });
   });
 
   test("Enter confirms model edit and applies override", () => {
     const { component, result } = makeComponent([{ agent: "scout", task: "analyze", model: "old-model" }]);
-    component.handleInput("m"); // enter edit-model
-    // Clear buffer and type new model
-    for (let i = 0; i < "old-model".length; i++) component.handleInput("\x7f");
-    "claude".split("").forEach((c) => component.handleInput(c));
+    component.handleInput("m");
+    clearAndType(component, 9, "claude");
     component.handleInput("\r"); // confirm
     component.handleInput("\r"); // run
     expect(result.value?.steps[0]).toMatchObject({ model: "claude" });
@@ -244,27 +239,17 @@ describe("ChainClarifyComponent — edit mode", () => {
   });
 
   test("applyOverrides includes overrides from multiple steps", () => {
-    const steps = [
+    const { component, result } = makeComponent([
       { agent: "a", task: "task-a" },
       { agent: "b", task: "task-b" },
-    ];
-    const { component, result } = makeComponent(steps);
-    // Edit first step task
+    ]);
     component.handleInput("e");
-    component.handleInput("\x7f"); component.handleInput("\x7f");
-    component.handleInput("\x7f"); component.handleInput("\x7f");
-    component.handleInput("\x7f"); component.handleInput("\x7f");
-    "new-a".split("").forEach((c) => component.handleInput(c));
-    component.handleInput("\r"); // confirm
-    // Navigate to second step and edit
+    clearAndType(component, 6, "new-a");
+    component.handleInput("\r");
     component.handleInput("j");
     component.handleInput("e");
-    component.handleInput("\x7f"); component.handleInput("\x7f");
-    component.handleInput("\x7f"); component.handleInput("\x7f");
-    component.handleInput("\x7f"); component.handleInput("\x7f");
-    "new-b".split("").forEach((c) => component.handleInput(c));
-    component.handleInput("\r"); // confirm
-    // Run
+    clearAndType(component, 6, "new-b");
+    component.handleInput("\r");
     component.handleInput("\r");
     expect(result.value?.steps[0]).toMatchObject({ task: "new-a" });
     expect(result.value?.steps[1]).toMatchObject({ task: "new-b" });

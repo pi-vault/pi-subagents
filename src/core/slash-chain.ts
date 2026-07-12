@@ -501,12 +501,8 @@ export function buildChainSteps(
 // Command registration
 // ---------------------------------------------------------------------------
 
-/** Public re-export for use by prompt-workflows. Calls the shared chain execution path. */
-export const executeSlashChainPublic = (...args: Parameters<typeof executeSlashChain>) =>
-  executeSlashChain(...args);
-
-/** Execute a chain and send the result. Shared by /chain and /run-chain. */
-async function executeSlashChain(
+/** Execute a chain and send the result. Shared by /chain, /run-chain, and prompt-workflows. */
+export async function executeSlashChain(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   deps: RuntimeDeps,
@@ -546,39 +542,13 @@ async function executeSlashChain(
 
   // Background chain path
   if (bg) {
-    const record: import("../shared/types.js").AgentRecord = {
-      id: chainRunId,
-      type: "(chain)",
-      description: `Chain: ${task.slice(0, 60)}`,
-      status: "running",
-      startedAt: Date.now(),
-      toolUses: 0,
-      turnCount: 0,
-      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
-      isBackground: true,
-    };
-    deps.manager.registerExternalRecord(chainRunId, record);
-
     const { executeChain } = await import("./chain-execution.js");
-    executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) })
-      .then((chainResult) => {
-        record.status = chainResult.isError ? "error" : "completed";
-        record.result = chainResult.content;
-        record.error = chainResult.isError ? chainResult.content : undefined;
-        record.completedAt = Date.now();
-        record.durationMs = record.completedAt - record.startedAt;
-        deps.chainWidget?.clear();
-        deps.manager.notifyComplete(chainRunId);
-      })
-      .catch((error) => {
-        record.status = "error";
-        record.error = error instanceof Error ? error.message : String(error);
-        record.completedAt = Date.now();
-        record.durationMs = record.completedAt - record.startedAt;
-        deps.chainWidget?.clear();
-        deps.manager.notifyComplete(chainRunId);
-      });
-
+    deps.manager.fireAndForgetChain(
+      chainRunId,
+      task,
+      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+      () => deps.chainWidget?.clear(),
+    );
     pi.sendMessage({
       customType: "pi-subagent-result",
       content: `Chain started in background.\nChain ID: ${chainRunId}\nYou will be notified when this chain completes.`,

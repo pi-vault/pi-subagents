@@ -145,6 +145,49 @@ export class AgentManager {
   }
 
   /**
+   * Register a background chain and attach lifecycle handlers to the promise.
+   * Returns the registered record.
+   */
+  fireAndForgetChain(
+    id: string,
+    task: string,
+    promise: Promise<{ content: string; isError: boolean }>,
+    onClear?: () => void,
+  ): AgentRecord {
+    const record: AgentRecord = {
+      id,
+      type: "(chain)",
+      description: `Chain: ${task.slice(0, 60)}`,
+      status: "running",
+      startedAt: Date.now(),
+      toolUses: 0,
+      turnCount: 0,
+      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+      isBackground: true,
+    };
+    this.registerExternalRecord(id, record);
+    promise
+      .then((result) => {
+        record.status = result.isError ? "error" : "completed";
+        record.result = result.content;
+        record.error = result.isError ? result.content : undefined;
+        record.completedAt = Date.now();
+        record.durationMs = record.completedAt - record.startedAt;
+        onClear?.();
+        this.notifyComplete(id);
+      })
+      .catch((error) => {
+        record.status = "error";
+        record.error = error instanceof Error ? error.message : String(error);
+        record.completedAt = Date.now();
+        record.durationMs = record.completedAt - record.startedAt;
+        onClear?.();
+        this.notifyComplete(id);
+      });
+    return record;
+  }
+
+  /**
    * Spawn and wait for completion. Returns { id, record }.
    * Backward-compatible with existing code.
    */

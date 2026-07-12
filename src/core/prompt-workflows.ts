@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { ChainStep, SequentialStep, ResolvedPaths } from "../shared/types.js";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
+import { executeSlashChain } from "./slash-chain.js";
 
 export interface PromptWorkflow {
   name: string;
@@ -61,31 +62,18 @@ function loadPromptWorkflow(filePath: string): PromptWorkflow | null {
       name;
 
     const agent = frontmatter["subagent"] ?? "delegate";
-
-    let skills: string[] | false | undefined;
     const skillRaw = frontmatter["skill"];
-    if (skillRaw !== undefined) {
-      if (skillRaw === "false") {
-        skills = false;
-      } else {
-        skills = skillRaw
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-        if (skills.length === 0) skills = undefined;
-      }
-    }
+    const skills: string[] | false | undefined =
+      skillRaw === undefined ? undefined
+        : skillRaw === "false" ? false
+          : (skillRaw.split(",").map((s) => s.trim()).filter(Boolean) || undefined) as string[] | undefined;
 
     return {
-      name,
-      description,
-      agent,
-      body,
-      filePath,
-      ...(frontmatter["model"] ? { model: frontmatter["model"] } : {}),
-      ...(skills !== undefined ? { skills } : {}),
-      ...(frontmatter["cwd"] ? { cwd: frontmatter["cwd"] } : {}),
-      ...(frontmatter["chain"] ? { chain: frontmatter["chain"] } : {}),
+      name, description, agent, body, filePath,
+      model: frontmatter["model"],
+      skills,
+      cwd: frontmatter["cwd"],
+      chain: frontmatter["chain"],
     };
   } catch {
     return null;
@@ -198,25 +186,15 @@ export function parseRuntimeOptions(words: string[]): RuntimeOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Execute a prompt chain via the slash chain machinery
-// ---------------------------------------------------------------------------
-
-async function executePromptChain(
-  pi: ExtensionAPI,
-  ctx: ExtensionCommandContext,
-  deps: RuntimeDeps,
-  chain: ChainStep[],
-  task: string,
-  bg: boolean,
-): Promise<void> {
-  // Defer to the shared executeSlashChain path by dynamic-importing slash-chain
-  const { executeSlashChainPublic } = await import("./slash-chain.js");
-  await executeSlashChainPublic(pi, ctx, deps, chain, task, bg);
-}
-
-// ---------------------------------------------------------------------------
 // Command registration
 // ---------------------------------------------------------------------------
+
+function sendWorkflowList(pi: ExtensionAPI, workflows: PromptWorkflow[]): void {
+  const content = workflows.length === 0
+    ? "No prompt workflows found."
+    : workflows.map((w) => `- ${w.name}: ${w.description}`).join("\n");
+  pi.sendMessage({ customType: "pi-subagent-result", content, display: true });
+}
 
 export function registerPromptWorkflowCommands(
   pi: ExtensionAPI,
@@ -247,11 +225,7 @@ export function registerPromptWorkflowCommands(
       const workflows = discoverPromptWorkflows(paths, ctx.cwd);
 
       if (!name || name === "list") {
-        const list =
-          workflows.length === 0
-            ? "No prompt workflows found."
-            : workflows.map((w) => `- ${w.name}: ${w.description}`).join("\n");
-        pi.sendMessage({ customType: "pi-subagent-result", content: list, display: true });
+        sendWorkflowList(pi, workflows);
         return;
       }
 
@@ -282,25 +256,11 @@ export function registerPromptWorkflowCommands(
               );
             return workflowToChainStep(step, runtime.args);
           });
-          await executePromptChain(
-            pi,
-            ctx,
-            deps,
-            chain,
-            runtime.args.join(" "),
-            runtime.bg ?? false,
-          );
+          await executeSlashChain(pi, ctx, deps, chain, runtime.args.join(" "), runtime.bg ?? false);
           return;
         }
         const step = workflowToChainStep(effectiveWorkflow, runtime.args);
-        await executePromptChain(
-          pi,
-          ctx,
-          deps,
-          [step],
-          step.task ?? "",
-          runtime.bg ?? false,
-        );
+        await executeSlashChain(pi, ctx, deps, [step], step.task ?? "", runtime.bg ?? false);
       } catch (error) {
         ctx.ui.notify(
           error instanceof Error ? error.message : String(error),
@@ -324,11 +284,7 @@ export function registerPromptWorkflowCommands(
       const workflows = discoverPromptWorkflows(paths, ctx.cwd);
 
       if (!declaration || declaration === "list") {
-        const list =
-          workflows.length === 0
-            ? "No prompt workflows found."
-            : workflows.map((w) => `- ${w.name}: ${w.description}`).join("\n");
-        pi.sendMessage({ customType: "pi-subagent-result", content: list, display: true });
+        sendWorkflowList(pi, workflows);
         return;
       }
 
@@ -352,14 +308,7 @@ export function registerPromptWorkflowCommands(
             throw new Error(`Unknown prompt workflow: ${name}`);
           return workflowToChainStep(workflow, runtime.args);
         });
-        await executePromptChain(
-          pi,
-          ctx,
-          deps,
-          chain,
-          runtime.args.join(" "),
-          runtime.bg ?? false,
-        );
+        await executeSlashChain(pi, ctx, deps, chain, runtime.args.join(" "), runtime.bg ?? false);
       } catch (error) {
         ctx.ui.notify(
           error instanceof Error ? error.message : String(error),
