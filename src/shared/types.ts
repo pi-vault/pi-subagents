@@ -116,7 +116,7 @@ export interface AgentCreationInput {
 }
 
 export interface SubagentToolInput {
-  agent: string;
+  agent?: string;
   task: string;
   cwd?: string;
   model?: string;
@@ -128,6 +128,12 @@ export interface SubagentToolInput {
   resume?: string;
   isolation?: string;
   tool_budget?: ToolBudgetConfig;
+  // Chain mode fields (unknown[] because the schema uses optional fields for LLM; cast to ChainStep[] at dispatch)
+  chain?: unknown[];
+  chain_append?: {
+    chain_id: string;
+    steps: unknown[];
+  };
 }
 
 export interface SubagentUsage {
