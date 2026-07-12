@@ -10,21 +10,14 @@ function mockTheme(): Theme {
   };
 }
 
-function mockUICtx(): UICtx & {
-  widgets: Map<string, unknown>;
-  statuses: Map<string, string | undefined>;
-} {
+function mockUICtx(): UICtx & { widgets: Map<string, unknown> } {
   const widgets = new Map<string, unknown>();
-  const statuses = new Map<string, string | undefined>();
   return {
     widgets,
-    statuses,
     setWidget(key, content) {
       widgets.set(key, content);
     },
-    setStatus(key, text) {
-      statuses.set(key, text);
-    },
+    setStatus() {},
   };
 }
 

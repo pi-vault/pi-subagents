@@ -65,6 +65,8 @@ export async function executeChain(
 
   // --- Snapshot state ---
   const stepStatuses: Array<{ status?: string; error?: string }> = [];
+  const finalSnapshot = () =>
+    buildWorkflowGraphSnapshot({ runId, steps: chainSteps, stepStatuses });
 
   function emitSnapshot(currentStepIndex?: number, currentFlatIndex?: number): void {
     if (!onGraphUpdate) return;
@@ -139,7 +141,7 @@ export async function executeChain(
         return {
           content: `Chain failed at parallel step ${stepIndex + 1}: ${failed[0]?.output}`,
           isError: true,
-          workflowGraph: buildWorkflowGraphSnapshot({ runId, steps: chainSteps, stepStatuses }),
+          workflowGraph: finalSnapshot(),
         };
       }
 
@@ -163,7 +165,7 @@ export async function executeChain(
         return {
           content: `Chain failed at dynamic step ${stepIndex + 1}: no structured output from '${step.expand.from.output}'`,
           isError: true,
-          workflowGraph: buildWorkflowGraphSnapshot({ runId, steps: chainSteps, stepStatuses }),
+          workflowGraph: finalSnapshot(),
         };
       }
 
@@ -191,7 +193,7 @@ export async function executeChain(
         return {
           content: `Chain failed at dynamic step ${stepIndex + 1}: expanded items is not an array`,
           isError: true,
-          workflowGraph: buildWorkflowGraphSnapshot({ runId, steps: chainSteps, stepStatuses }),
+          workflowGraph: finalSnapshot(),
         };
       }
       if (items.length === 0 && step.expand.onEmpty === "skip") {
@@ -240,7 +242,7 @@ export async function executeChain(
         return {
           content: `Chain failed at dynamic step ${stepIndex + 1}: ${failed[0]?.output}`,
           isError: true,
-          workflowGraph: buildWorkflowGraphSnapshot({ runId, steps: chainSteps, stepStatuses }),
+          workflowGraph: finalSnapshot(),
         };
       }
 
@@ -283,7 +285,7 @@ export async function executeChain(
         return {
           content: `Chain failed at step ${stepIndex + 1} (${seqStep.agent}): ${record.error ?? output}`,
           isError: true,
-          workflowGraph: buildWorkflowGraphSnapshot({ runId, steps: chainSteps, stepStatuses }),
+          workflowGraph: finalSnapshot(),
         };
       }
 
@@ -317,19 +319,17 @@ export async function executeChain(
     .map((r) => `[${r.agent}] ${r.output.slice(0, 200)}`)
     .join("\n\n");
 
-  const finalGraph = buildWorkflowGraphSnapshot({ runId, steps: chainSteps, stepStatuses });
-
   if (aborted) {
     return {
       content: `Chain aborted after ${results.length} of ${chainSteps.length} steps.\n\n${summary}`,
       isError: true,
-      workflowGraph: finalGraph,
+      workflowGraph: finalSnapshot(),
     };
   }
 
   return {
     content: prev || summary,
     isError: false,
-    workflowGraph: finalGraph,
+    workflowGraph: finalSnapshot(),
   };
 }
