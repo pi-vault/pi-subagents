@@ -8,20 +8,34 @@ import {
 } from "../src/core/slash-chain.js";
 
 describe("stripExecutionFlags", () => {
-  test("strips --bg flag", () => {
-    expect(stripExecutionFlags('scout "task" --bg')).toBe('scout "task"');
+  test("strips --bg flag and reports bg=true", () => {
+    const { args, bg } = stripExecutionFlags('scout "task" --bg');
+    expect(args).toBe('scout "task"');
+    expect(bg).toBe(true);
   });
 
-  test("strips --fork flag", () => {
-    expect(stripExecutionFlags('scout "task" --fork')).toBe('scout "task"');
+  test("strips --fork flag and reports bg=false", () => {
+    const { args, bg } = stripExecutionFlags('scout "task" --fork');
+    expect(args).toBe('scout "task"');
+    expect(bg).toBe(false);
   });
 
-  test("strips both flags", () => {
-    expect(stripExecutionFlags('scout "task" --bg --fork')).toBe('scout "task"');
+  test("strips both flags, bg=true", () => {
+    const { args, bg } = stripExecutionFlags('scout "task" --bg --fork');
+    expect(args).toBe('scout "task"');
+    expect(bg).toBe(true);
   });
 
-  test("returns clean args when no flags", () => {
-    expect(stripExecutionFlags('scout "task"')).toBe('scout "task"');
+  test("returns bg=false when no flags", () => {
+    const { args, bg } = stripExecutionFlags('scout "task"');
+    expect(args).toBe('scout "task"');
+    expect(bg).toBe(false);
+  });
+
+  test("handles lone --bg", () => {
+    const { args, bg } = stripExecutionFlags("--bg");
+    expect(args).toBe("");
+    expect(bg).toBe(true);
   });
 });
 

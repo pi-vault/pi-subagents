@@ -128,6 +128,23 @@ export class AgentManager {
   }
 
   /**
+   * Register an externally-managed record (e.g. a background chain execution).
+   * The caller is responsible for updating the record's lifecycle fields.
+   */
+  registerExternalRecord(id: string, record: AgentRecord): void {
+    this.agents.set(id, record);
+  }
+
+  /**
+   * Trigger completion notification for an externally-managed record.
+   * Call this after updating the record's status/result fields.
+   */
+  notifyComplete(id: string): void {
+    const record = this.agents.get(id);
+    if (record) this.onComplete?.(record);
+  }
+
+  /**
    * Spawn and wait for completion. Returns { id, record }.
    * Backward-compatible with existing code.
    */
