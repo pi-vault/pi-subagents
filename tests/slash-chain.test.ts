@@ -2,39 +2,26 @@ import { describe, expect, test } from "vitest";
 import {
   parseSingleTaskToken,
   parseGroupSegment,
-  hasGroupSyntax,
   parseChainExpression,
-  extractExecutionFlags,
+  stripExecutionFlags,
   SlashParseError,
 } from "../src/core/slash-chain.js";
 
-describe("extractExecutionFlags", () => {
-  test("extracts --bg flag", () => {
-    const result = extractExecutionFlags('scout "task" --bg');
-    expect(result.bg).toBe(true);
-    expect(result.fork).toBe(false);
-    expect(result.args).toBe('scout "task"');
+describe("stripExecutionFlags", () => {
+  test("strips --bg flag", () => {
+    expect(stripExecutionFlags('scout "task" --bg')).toBe('scout "task"');
   });
 
-  test("extracts --fork flag", () => {
-    const result = extractExecutionFlags('scout "task" --fork');
-    expect(result.fork).toBe(true);
-    expect(result.bg).toBe(false);
-    expect(result.args).toBe('scout "task"');
+  test("strips --fork flag", () => {
+    expect(stripExecutionFlags('scout "task" --fork')).toBe('scout "task"');
   });
 
-  test("extracts both flags", () => {
-    const result = extractExecutionFlags('scout "task" --bg --fork');
-    expect(result.bg).toBe(true);
-    expect(result.fork).toBe(true);
-    expect(result.args).toBe('scout "task"');
+  test("strips both flags", () => {
+    expect(stripExecutionFlags('scout "task" --bg --fork')).toBe('scout "task"');
   });
 
   test("returns clean args when no flags", () => {
-    const result = extractExecutionFlags('scout "task"');
-    expect(result.bg).toBe(false);
-    expect(result.fork).toBe(false);
-    expect(result.args).toBe('scout "task"');
+    expect(stripExecutionFlags('scout "task"')).toBe('scout "task"');
   });
 });
 
@@ -153,29 +140,6 @@ describe("parseGroupSegment", () => {
     expect(() =>
       parseGroupSegment('(a "x" | b "y") concurrency=2'),
     ).toThrow(SlashParseError);
-  });
-});
-
-describe("hasGroupSyntax", () => {
-  test("detects parentheses in a step position", () => {
-    expect(hasGroupSyntax("a -> (b | c)")).toBe(true);
-  });
-
-  test("does not treat a bare pipe as group syntax", () => {
-    expect(hasGroupSyntax("a -> b | c")).toBe(false);
-  });
-
-  test("ignores parens inside quotes", () => {
-    expect(hasGroupSyntax('a -> b "with (paren) inside"')).toBe(false);
-  });
-
-  test("returns false for plain chain input", () => {
-    expect(hasGroupSyntax("scout -> reviewer")).toBe(false);
-  });
-
-  test("still detects a group that opens a step", () => {
-    expect(hasGroupSyntax('scout "x" -> (a "y" | b "z")')).toBe(true);
-    expect(hasGroupSyntax('(a "y" | b "z") -> writer')).toBe(true);
   });
 });
 

@@ -1,5 +1,3 @@
-// Pure chain expression parser — no fs, no network, no external imports.
-
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -8,7 +6,6 @@ import type {
   AgentDefinition,
   ChainStep,
   SequentialStep,
-  ParallelTaskItem,
 } from "../shared/types.js";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import { discoverChains } from "./agents.js";
@@ -55,30 +52,17 @@ export type ParsedGroupStep = ParsedStep | ParsedGroup;
 // Flag extraction
 // ---------------------------------------------------------------------------
 
-export function extractExecutionFlags(rawArgs: string): {
-  args: string;
-  bg: boolean;
-  fork: boolean;
-} {
+/** Strip trailing --bg / --fork flags (silently, until wired). */
+export function stripExecutionFlags(rawArgs: string): string {
   let args = rawArgs.trim();
-  let bg = false;
-  let fork = false;
-
-  while (true) {
+  for (;;) {
     if (args.endsWith(" --bg") || args === "--bg") {
-      bg = true;
       args = args === "--bg" ? "" : args.slice(0, -5).trim();
-      continue;
-    }
-    if (args.endsWith(" --fork") || args === "--fork") {
-      fork = true;
+    } else if (args.endsWith(" --fork") || args === "--fork") {
       args = args === "--fork" ? "" : args.slice(0, -7).trim();
-      continue;
-    }
-    break;
+    } else break;
   }
-
-  return { args, bg, fork };
+  return args;
 }
 
 // ---------------------------------------------------------------------------
@@ -374,14 +358,6 @@ export function parseGroupSegment(segment: string): ParsedGroup {
   return { kind: "group", tasks: rawParts.map((part) => parseSingleTaskToken(part)), config };
 }
 
-// True if `input` uses inline parallel-group syntax. A group is a *step* that begins
-// with `(` at the top level, so we split on top-level ` -> ` arrows and look for a
-// segment that opens with `(`. Parentheses appearing inside a task (e.g.
-// `scout -- inspect auth (backend)`) do not count.
-export function hasGroupSyntax(input: string): boolean {
-  return splitOnArrow(input).some((seg) => seg.trim().startsWith("("));
-}
-
 export function parseChainExpression(input: string): { steps: ParsedGroupStep[] } {
   const trimmed = input.trim();
   if (!trimmed.includes(" -> ")) {
@@ -413,151 +389,30 @@ export function parseChainExpression(input: string): { steps: ParsedGroupStep[] 
 // Step object mapping (ParsedStep → ChainStep fields)
 // ---------------------------------------------------------------------------
 
-type ChainStepObject = {
-  agent: string;
-  task?: string;
-  output?: string | false;
-  outputMode?: "inline" | "file-only";
-  reads?: string[] | false;
-  model?: string;
-  skills?: string[] | false;
-  progress?: boolean;
-  as?: string;
-  label?: string;
-  phase?: string;
-  cwd?: string;
-  count?: number;
-};
-
-const mapParsedStepToObject = (
+const mapParsedStep = (
   step: ParsedStep,
   fallbackTask: string | undefined,
   isFirst: boolean,
-  opts: { inGroup: boolean },
-): ChainStepObject => {
-  const { name, config, task: stepTask } = step;
-  return {
-    agent: name,
-    ...(stepTask
-      ? { task: stepTask }
-      : isFirst && fallbackTask
-        ? { task: fallbackTask }
-        : {}),
-    ...(config.output !== undefined ? { output: config.output } : {}),
-    ...(config.outputMode !== undefined
-      ? { outputMode: config.outputMode }
-      : {}),
-    ...(config.reads !== undefined ? { reads: config.reads } : {}),
-    ...(config.model ? { model: config.model } : {}),
-    ...(config.skills !== undefined ? { skills: config.skills } : {}),
-    ...(config.progress !== undefined ? { progress: config.progress } : {}),
-    ...(config.as ? { as: config.as } : {}),
-    ...(config.label ? { label: config.label } : {}),
-    ...(config.phase ? { phase: config.phase } : {}),
-    ...(config.cwd ? { cwd: config.cwd } : {}),
-    ...(opts.inGroup && config.count !== undefined
-      ? { count: config.count }
-      : {}),
-  };
+  inGroup: boolean,
+) => {
+  const obj: { agent: string; [k: string]: unknown } = { agent: step.name };
+  if (step.task) obj.task = step.task;
+  else if (isFirst && fallbackTask) obj.task = fallbackTask;
+  for (const [k, v] of Object.entries(step.config)) {
+    if (v === undefined) continue;
+    if (k === "count" && !inGroup) continue;
+    obj[k] = v;
+  }
+  return obj;
 };
 
 /**
  * Parse a chain expression string, validate agent names, and produce
  * `ChainStep[]` ready for `executeChain()`.
  *
- * Returns `null` and calls `notify` on failure. All errors are reported
- * to the user via `notify` rather than thrown.
+ * Returns `null` and calls `notify` on failure.
  */
 export function buildChainSteps(
-  input: string,
-  agents: Pick<AgentDefinition, "name">[],
-  notify: (message: string) => void,
-): { chain: ChainStep[]; task: string } | null {
-  // If no group syntax, parse as simple linear chain
-  if (!hasGroupSyntax(input)) {
-    return buildLinearChainSteps(input, agents, notify);
-  }
-
-  // Parse full expression with groups
-  let expression: { steps: ParsedGroupStep[] };
-  try {
-    expression = parseChainExpression(input);
-  } catch (error) {
-    notify(error instanceof Error ? error.message : String(error));
-    return null;
-  }
-
-  // Validate all agent names exist
-  const stepAgentNames = expression.steps.flatMap((step) =>
-    step.kind === "group" ? step.tasks.map((t) => t.name) : [step.name],
-  );
-  for (const name of stepAgentNames) {
-    if (!agents.find((a) => a.name.toLowerCase() === name.toLowerCase())) {
-      notify(`Unknown agent: ${name}`);
-      return null;
-    }
-  }
-
-  // Validate every parallel group task has its own task text
-  for (const step of expression.steps) {
-    if (step.kind === "group" && step.tasks.some((t) => !t.task)) {
-      notify(
-        'Each task in a parallel group needs a task: (agent "a" | agent "b")',
-      );
-      return null;
-    }
-  }
-
-  // First step must have a task
-  const firstStep = expression.steps[0]!;
-  const firstHasTask =
-    firstStep.kind === "group"
-      ? firstStep.tasks.some((t) => Boolean(t.task))
-      : Boolean(firstStep.task);
-  if (!firstHasTask) {
-    notify('First step must have a task: /chain agent "task" -> agent2');
-    return null;
-  }
-  const sharedTask =
-    firstStep.kind === "group"
-      ? (firstStep.tasks.find((t) => t.task)?.task ?? "")
-      : (firstStep.task ?? "");
-
-  // Build ChainStep[]
-  let chain: ChainStep[];
-  try {
-    chain = expression.steps.map((step): ChainStep => {
-      if (step.kind === "group") {
-        const parallel: ParallelTaskItem[] = step.tasks.map((t) =>
-          mapParsedStepToObject(t, undefined, false, { inGroup: true }),
-        ) as ParallelTaskItem[];
-        return {
-          parallel,
-          ...(step.config.concurrency !== undefined
-            ? { concurrency: step.config.concurrency }
-            : {}),
-          ...(step.config.failFast !== undefined
-            ? { failFast: step.config.failFast }
-            : {}),
-          ...(step.config.worktree !== undefined
-            ? { worktree: step.config.worktree }
-            : {}),
-        } as ChainStep;
-      }
-      return mapParsedStepToObject(step, sharedTask || undefined, false, {
-        inGroup: false,
-      }) as SequentialStep;
-    });
-  } catch (error) {
-    notify(error instanceof Error ? error.message : String(error));
-    return null;
-  }
-
-  return { chain, task: sharedTask };
-}
-
-/** Handle simple linear chains (no group syntax). */
-function buildLinearChainSteps(
   input: string,
   agents: Pick<AgentDefinition, "name">[],
   notify: (message: string) => void,
@@ -568,45 +423,69 @@ function buildLinearChainSteps(
     return null;
   }
 
-  let steps: ParsedStep[];
-  if (trimmed.includes(" -> ")) {
-    const segments = splitOnArrow(trimmed);
-    steps = [];
-    for (const seg of segments) {
-      const t = seg.trim();
-      if (!t) continue;
-      steps.push(parseSingleTaskToken(t));
-    }
+  // Parse into steps — single-step (no arrow) or multi-step expression
+  let parsedSteps: ParsedGroupStep[];
+  if (!trimmed.includes(" -> ")) {
+    parsedSteps = [parseSingleTaskToken(trimmed)];
   } else {
-    steps = [parseSingleTaskToken(trimmed)];
+    try {
+      parsedSteps = parseChainExpression(trimmed).steps;
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error));
+      return null;
+    }
   }
 
-  if (steps.length === 0) {
-    notify("No steps parsed from chain expression");
-    return null;
+  // Validate all agent names exist
+  for (const step of parsedSteps) {
+    const names = step.kind === "group" ? step.tasks.map((t) => t.name) : [step.name];
+    for (const name of names) {
+      if (!agents.find((a) => a.name.toLowerCase() === name.toLowerCase())) {
+        notify(`Unknown agent: ${name}`);
+        return null;
+      }
+    }
   }
 
-  // Extract shared task from first step that has one
-  const sharedTask = steps.find((s) => s.task)?.task ?? "";
+  // Validate parallel group tasks have task text
+  for (const step of parsedSteps) {
+    if (step.kind === "group" && step.tasks.some((t) => !t.task)) {
+      notify('Each task in a parallel group needs a task: (agent "a" | agent "b")');
+      return null;
+    }
+  }
+
+  // First step must have a task
+  const firstStep = parsedSteps[0]!;
+  const sharedTask =
+    firstStep.kind === "group"
+      ? (firstStep.tasks.find((t) => t.task)?.task ?? "")
+      : (firstStep.task ?? "");
   if (!sharedTask) {
     notify('First step must include a task: /chain agent "task" -> agent2');
     return null;
   }
 
-  // Validate agent names
-  for (const step of steps) {
-    if (!agents.find((a) => a.name.toLowerCase() === step.name.toLowerCase())) {
-      notify(`Unknown agent: ${step.name}`);
-      return null;
-    }
-  }
-
   // Build ChainStep[]
-  const chain: ChainStep[] = steps.map((step, i) =>
-    mapParsedStepToObject(step, sharedTask || undefined, i === 0, {
-      inGroup: false,
-    }) as SequentialStep,
-  );
+  const chain: ChainStep[] = parsedSteps.map((step, i): ChainStep => {
+    if (step.kind === "group") {
+      return {
+        parallel: step.tasks.map((t) =>
+          mapParsedStep(t, undefined, false, true),
+        ),
+        ...(step.config.concurrency !== undefined
+          ? { concurrency: step.config.concurrency }
+          : {}),
+        ...(step.config.failFast !== undefined
+          ? { failFast: step.config.failFast }
+          : {}),
+        ...(step.config.worktree !== undefined
+          ? { worktree: step.config.worktree }
+          : {}),
+      } as ChainStep;
+    }
+    return mapParsedStep(step, sharedTask, i === 0, false) as SequentialStep;
+  });
 
   return { chain, task: sharedTask };
 }
@@ -686,7 +565,7 @@ export function registerChainCommands(
       }
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
-      const { args: cleanedArgs } = extractExecutionFlags(args);
+      const cleanedArgs = stripExecutionFlags(args);
       const paths = deps.resolvePaths();
       const agents = deps.discoverAgents(paths).agents;
 
@@ -719,7 +598,7 @@ export function registerChainCommands(
       }
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
-      const { args: cleanedArgs } = extractExecutionFlags(args);
+      const cleanedArgs = stripExecutionFlags(args);
       const usage = "Usage: /run-chain <chainName> -- <task>";
 
       const delimiterIndex = cleanedArgs.indexOf(" -- ");
