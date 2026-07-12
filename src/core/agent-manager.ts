@@ -254,6 +254,7 @@ export class AgentManager {
         cwd: effectiveCwd,
         agentId: id,
         model: options.model,
+        thinking: options.thinking,
         maxTurns: options.maxTurns,
         graceTurns: options.graceTurns,
         inheritContext: options.inheritContext,

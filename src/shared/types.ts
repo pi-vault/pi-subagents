@@ -283,6 +283,7 @@ export interface SpawnOptions {
   prompt: string;
   cwd: string;
   description?: string;
+  thinking?: string;
   maxTurns?: number;
   graceTurns?: number;
   isolated?: boolean;
