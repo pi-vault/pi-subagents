@@ -52,17 +52,24 @@ export type ParsedGroupStep = ParsedStep | ParsedGroup;
 // Flag extraction
 // ---------------------------------------------------------------------------
 
-/** Strip trailing --bg / --fork flags (silently, until wired). */
-export function stripExecutionFlags(rawArgs: string): string {
+export interface ExecutionFlags {
+  args: string;
+  bg: boolean;
+}
+
+/** Extract and strip trailing --bg / --fork flags. */
+export function stripExecutionFlags(rawArgs: string): ExecutionFlags {
   let args = rawArgs.trim();
+  let bg = false;
   for (;;) {
     if (args.endsWith(" --bg") || args === "--bg") {
       args = args === "--bg" ? "" : args.slice(0, -5).trim();
+      bg = true;
     } else if (args.endsWith(" --fork") || args === "--fork") {
       args = args === "--fork" ? "" : args.slice(0, -7).trim();
     } else break;
   }
-  return args;
+  return { args, bg };
 }
 
 // ---------------------------------------------------------------------------
@@ -494,42 +501,71 @@ export function buildChainSteps(
 // Command registration
 // ---------------------------------------------------------------------------
 
-/** Execute a chain and send the result. Shared by /chain and /run-chain. */
-async function executeSlashChain(
+/** Execute a chain and send the result. Shared by /chain, /run-chain, and prompt-workflows. */
+export async function executeSlashChain(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   deps: RuntimeDeps,
   chain: ChainStep[],
   task: string,
+  bg = false,
 ): Promise<void> {
   const paths = deps.resolvePaths();
   const loadedConfig = deps.loadConfig(paths);
   const discovery = deps.discoverAgents(paths);
+  const chainRunId = `chain-${Date.now().toString(36)}`;
+
+  const spawnAndWait = async (
+    agentDef: AgentDefinition,
+    prompt: string,
+    stepCwd: string,
+    options?: import("./chain-execution.js").StepSpawnOptions,
+  ) => {
+    let effectiveAgentDef = options?.skills
+      ? { ...agentDef, skills: options.skills }
+      : agentDef;
+    if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+    return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
+      prompt,
+      cwd: stepCwd || ctx.cwd,
+      maxTurns: loadedConfig.config.defaultMaxTurns,
+      toolBudget: options?.toolBudget,
+      isolation: options?.isolation,
+    });
+  };
+
+  const findAgent = (name: string) => {
+    const agent = findAgentByName(discovery, name);
+    if (!agent) throw new Error(`Unknown agent: "${name}"`);
+    return agent;
+  };
+
+  // Background chain path
+  if (bg) {
+    const { executeChain } = await import("./chain-execution.js");
+    deps.manager.fireAndForgetChain(
+      chainRunId,
+      task,
+      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+      () => deps.chainWidget?.clear(),
+    );
+    pi.sendMessage({
+      customType: "pi-subagent-result",
+      content: `Chain started in background.\nChain ID: ${chainRunId}\nYou will be notified when this chain completes.`,
+      display: true,
+    });
+    return;
+  }
 
   try {
     const { executeChain } = await import("./chain-execution.js");
     const chainResult = await executeChain({
       steps: chain,
       task,
-      spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
-        const effectiveAgentDef = options?.skills
-          ? { ...agentDef, skills: options.skills }
-          : agentDef;
-        return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
-          prompt,
-          cwd: stepCwd || ctx.cwd,
-          maxTurns: loadedConfig.config.defaultMaxTurns,
-          toolBudget: options?.toolBudget,
-          isolation: options?.isolation,
-        });
-      },
-      findAgent: (name) => {
-        const agent = findAgentByName(discovery, name);
-        if (!agent) throw new Error(`Unknown agent: "${name}"`);
-        return agent;
-      },
+      spawnAndWait,
+      findAgent,
       cwd: ctx.cwd,
-      runId: `chain-${Date.now().toString(36)}`,
+      runId: chainRunId,
       onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
     });
     deps.chainWidget?.clear();
@@ -573,7 +609,7 @@ export function registerChainCommands(
       }
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
-      const cleanedArgs = stripExecutionFlags(args);
+      const { args: cleanedArgs, bg } = stripExecutionFlags(args);
       const paths = deps.resolvePaths();
       const agents = deps.discoverAgents(paths).agents;
 
@@ -582,7 +618,7 @@ export function registerChainCommands(
       );
       if (!built) return;
 
-      await executeSlashChain(pi, ctx, deps, built.chain, built.task);
+      await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg);
     },
   });
 
@@ -606,7 +642,7 @@ export function registerChainCommands(
       }
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
-      const cleanedArgs = stripExecutionFlags(args);
+      const { args: cleanedArgs, bg } = stripExecutionFlags(args);
       const usage = "Usage: /run-chain <chainName> -- <task>";
 
       const delimiterIndex = cleanedArgs.indexOf(" -- ");
@@ -641,6 +677,7 @@ export function registerChainCommands(
         deps,
         chain.steps as ChainStep[],
         task,
+        bg,
       );
     },
   });

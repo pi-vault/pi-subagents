@@ -121,6 +121,12 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
       steps: Type.Array(Type.Any(), { description: "Steps to append" }),
     }),
   ),
+  clarify: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, show chain preview TUI before execution (interactive only).",
+    }),
+  ),
 });
 
 export function findAgentByName(
@@ -223,29 +229,104 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       // --- Chain mode dispatch ---
       if (params.chain) {
         try {
+          // Clarification TUI — show before execution when clarify=true (interactive only)
+          let chainSteps = params.chain as ChainStep[];
+          if (params.clarify && !params.run_in_background) {
+            const customUI = (
+              ctx as {
+                ui?: {
+                  custom?: <T>(
+                    factory: (
+                      tui: import("@earendil-works/pi-tui").TUI,
+                      theme: import("../tui/agent-widget.js").Theme,
+                      kb: unknown,
+                      done: (r: T) => void,
+                    ) => import("@earendil-works/pi-tui").Component,
+                  ) => Promise<T>;
+                };
+              }
+            ).ui;
+            if (customUI?.custom) {
+              const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
+              const result = await customUI.custom<import("../tui/chain-clarify.js").ChainClarifyResult>(
+                (tui, theme, _kb, done) =>
+                  new ChainClarifyComponent(
+                    tui,
+                    theme as unknown as import("../tui/agent-widget.js").Theme,
+                    chainSteps,
+                    done,
+                  ),
+              );
+              if (result.action === "cancel") {
+                return {
+                  content: [{ type: "text", text: "Chain cancelled." }],
+                  isError: false,
+                  details: stubDetails({ agent: "(chain)", task: params.task ?? "", status: "aborted" as const }),
+                };
+              }
+              if (result.action === "bg") {
+                params.run_in_background = true;
+              }
+              chainSteps = result.steps;
+            }
+          }
+
           const { executeChain } = await import("./chain-execution.js");
+          const chainRunId = `chain-${Date.now().toString(36)}`;
+
+          const spawnAndWait = async (
+            agentDef: AgentDefinition,
+            prompt: string,
+            stepCwd: string,
+            options?: import("./chain-execution.js").StepSpawnOptions,
+          ) => {
+            let effectiveAgentDef = options?.skills
+              ? { ...agentDef, skills: options.skills }
+              : agentDef;
+            if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+            return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
+              prompt,
+              cwd: stepCwd || effectiveCwd,
+              maxTurns: loadedConfig.config.defaultMaxTurns,
+              toolBudget: options?.toolBudget,
+              isolation: options?.isolation,
+            });
+          };
+
+          const findAgent = (name: string) => {
+            const agent = findAgentByName(discovery, name);
+            if (!agent) throw new Error(`Unknown agent: "${name}"`);
+            return agent;
+          };
+
+          // Background chain dispatch — fire and forget
+          if (params.run_in_background) {
+            deps.manager.fireAndForgetChain(
+              chainRunId,
+              params.task ?? "",
+              executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+              () => deps.chainWidget?.clear(),
+            );
+            return {
+              content: [{ type: "text", text: `Chain started in background.\nChain ID: ${chainRunId}` }],
+              isError: false,
+              details: stubDetails({
+                status: "success",
+                agent: "(chain)",
+                task: params.task ?? "",
+                stopReason: "completed",
+              }),
+            };
+          }
+
+          // Foreground chain execution
           const chainResult = await executeChain({
-            steps: params.chain as ChainStep[],
+            steps: chainSteps,
             task: params.task ?? "",
-            spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
-              const effectiveAgentDef = options?.skills
-                ? { ...agentDef, skills: options.skills }
-                : agentDef;
-              return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
-                prompt,
-                cwd: stepCwd || effectiveCwd,
-                maxTurns: loadedConfig.config.defaultMaxTurns,
-                toolBudget: options?.toolBudget,
-                isolation: options?.isolation,
-              });
-            },
-            findAgent: (name) => {
-              const agent = findAgentByName(discovery, name);
-              if (!agent) throw new Error(`Unknown agent: "${name}"`);
-              return agent;
-            },
+            spawnAndWait,
+            findAgent,
             cwd: effectiveCwd,
-            runId: `chain-${Date.now().toString(36)}`,
+            runId: chainRunId,
             signal,
             onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
           });

@@ -13,6 +13,10 @@ export function getBundledChainsDir(): string {
   return resolve(currentDir, "../../chains");
 }
 
+export function getBundledPromptsDir(): string {
+  return resolve(currentDir, "../../prompts");
+}
+
 export function resolvePaths(agentDir = getAgentDir()): ResolvedPaths {
   return {
     agentDir,
@@ -22,5 +26,7 @@ export function resolvePaths(agentDir = getAgentDir()): ResolvedPaths {
     sessionsDir: join(agentDir, "sessions"),
     userChainsDir: join(agentDir, "chains"),
     bundledChainsDir: getBundledChainsDir(),
+    userPromptsDir: join(agentDir, "prompts"),
+    bundledPromptsDir: getBundledPromptsDir(),
   };
 }

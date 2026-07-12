@@ -410,6 +410,89 @@ describe("executeChain — step behavior wiring", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Model override (Task 16)
+// ---------------------------------------------------------------------------
+
+describe("executeChain — model override", () => {
+  test("passes model string through StepSpawnOptions for sequential step", async () => {
+    const receivedOptions: unknown[] = [];
+
+    await executeChain({
+      steps: [{ agent: "worker", task: "build", model: "anthropic/claude-sonnet-4-5" }],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-model",
+    });
+
+    expect((receivedOptions[0] as { model?: string }).model).toBe(
+      "anthropic/claude-sonnet-4-5",
+    );
+  });
+
+  test("passes model string through StepSpawnOptions for parallel items", async () => {
+    const receivedOptions: unknown[] = [];
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "a", task: "t1", model: "anthropic/claude-sonnet-4-5" },
+          { agent: "b", task: "t2" },
+        ],
+      } satisfies ParallelStep,
+    ];
+
+    await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: (name) => makeAgentDef(name),
+      cwd: "/tmp",
+      runId: "test-model-parallel",
+    });
+
+    expect((receivedOptions[0] as { model?: string }).model).toBe(
+      "anthropic/claude-sonnet-4-5",
+    );
+    expect((receivedOptions[1] as { model?: string }).model).toBeUndefined();
+  });
+
+  test("does not set model when step has no model field", async () => {
+    const receivedOptions: unknown[] = [];
+
+    await executeChain({
+      steps: [{ agent: "worker", task: "build" }],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-no-model",
+    });
+
+    expect((receivedOptions[0] as { model?: string }).model).toBeUndefined();
+  });
+
+  test("resolveStepBehavior pipes model for dynamic parallel path", async () => {
+    const { resolveStepBehavior } = await import("../src/core/chain-settings.js");
+    const behavior = resolveStepBehavior(
+      { output: false, reads: false, progress: false, skills: false },
+      { model: "anthropic/claude-sonnet-4-5" },
+    );
+    expect(behavior.model).toBe("anthropic/claude-sonnet-4-5");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Chain directory cleanup (Task 13)
 // ---------------------------------------------------------------------------
 

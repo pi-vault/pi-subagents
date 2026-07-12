@@ -536,3 +536,53 @@ describe("spawn limits", () => {
     manager.dispose();
   });
 });
+
+describe("registerExternalRecord / notifyComplete", () => {
+  it("registerExternalRecord makes record visible via getRecord", () => {
+    const manager = new AgentManager();
+    const record = {
+      id: "chain-abc",
+      type: "(chain)",
+      description: "Chain: test",
+      status: "running" as const,
+      startedAt: Date.now(),
+      toolUses: 0,
+      turnCount: 0,
+      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+      isBackground: true,
+    };
+    manager.registerExternalRecord("chain-abc", record);
+    expect(manager.getRecord("chain-abc")).toBe(record);
+    manager.dispose();
+  });
+
+  it("notifyComplete triggers onComplete callback with the record", () => {
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete);
+    const record = {
+      id: "chain-xyz",
+      type: "(chain)",
+      description: "Chain: bg test",
+      status: "completed" as const,
+      startedAt: Date.now(),
+      completedAt: Date.now(),
+      toolUses: 0,
+      turnCount: 0,
+      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+      isBackground: true,
+    };
+    manager.registerExternalRecord("chain-xyz", record);
+    manager.notifyComplete("chain-xyz");
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onComplete.mock.calls[0][0]).toBe(record);
+    manager.dispose();
+  });
+
+  it("notifyComplete is a no-op for unknown id", () => {
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete);
+    manager.notifyComplete("nonexistent");
+    expect(onComplete).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+});

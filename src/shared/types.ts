@@ -48,6 +48,9 @@ export interface ResolvedPaths {
   // Chain directories
   userChainsDir: string;
   bundledChainsDir: string;
+  // Prompt workflow directories
+  userPromptsDir: string;
+  bundledPromptsDir: string;
 }
 
 export interface ArtifactPaths {
@@ -134,6 +137,7 @@ export interface SubagentToolInput {
     chain_id: string;
     steps: unknown[];
   };
+  clarify?: boolean;
 }
 
 export interface SubagentUsage {
@@ -288,6 +292,7 @@ export interface SpawnOptions {
   currentDepth?: number;
   allowedAgents?: string[];
   isolation?: string;
+  model?: unknown;
   onToolActivity?: (activity: ToolActivity) => void;
   onTextDelta?: (delta: string, fullText: string) => void;
   onTurnEnd?: (turnCount: number) => void;

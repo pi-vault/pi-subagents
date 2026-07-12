@@ -56,6 +56,8 @@ export function createDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
       sessionsDir: "/tmp/pi-agent/sessions",
       userChainsDir: "/tmp/pi-agent/chains",
       bundledChainsDir: "/repo/chains",
+      userPromptsDir: "/tmp/pi-agent/prompts",
+      bundledPromptsDir: "/repo/prompts",
     }),
     loadConfig: () => ({
       exists: false,
