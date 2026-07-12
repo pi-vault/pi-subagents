@@ -2,6 +2,7 @@ import type { AgentManager } from "../core/agent-manager.js";
 import type { GroupJoinManager } from "../core/group-join-manager.js";
 import type { AgentActivity } from "../tui/activity.js";
 import type { AgentWidget } from "../tui/agent-widget.js";
+import type { ChainWidget } from "../tui/chain-widget.js";
 import type { FleetList } from "../tui/fleet-list.js";
 import type {
   AgentCreationInput,
@@ -55,4 +56,6 @@ export interface RuntimeDeps {
   agentActivity?: Map<string, AgentActivity>;
   /** Ensure widget and fleet timers are running (call after any agent spawn). */
   ensureTimers?: () => void;
+  /** Chain progress widget — present when TUI is active. */
+  chainWidget?: ChainWidget;
 }
