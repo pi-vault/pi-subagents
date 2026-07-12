@@ -74,6 +74,7 @@ export async function executeChain(
   const templates = resolveChainTemplates(steps);
 
   // 3. Create chain directory
+  const ownedChainDir = !params.chainDir;
   const chainDir = params.chainDir ?? createChainDir(runId);
 
   // 4. Step loop
@@ -255,19 +256,23 @@ export async function executeChain(
         items = items.slice(0, step.expand.maxItems);
       }
 
+      // Resolve behavior once (shared across all dynamic items)
+      const dynAgentDef = findAgent(step.parallel.agent);
+      const dynBehavior = resolveStepBehavior(agentDefaults(dynAgentDef), {
+        output: step.parallel.output,
+        outputMode: step.parallel.outputMode,
+        reads: step.parallel.reads,
+        progress: step.parallel.progress,
+        skills: step.parallel.skills,
+      });
+      if (dynBehavior.progress) progressCreated = true;
+      const { prefix: dynPrefix, suffix: dynSuffix } = buildChainInstructions(dynBehavior, chainDir, false);
+
       const dynamicResults = await Promise.all(
         (items as unknown[]).map(async (item) => {
           const agentDef = findAgent(step.parallel.agent);
 
-          // Resolve step behavior and build instructions
-          const behavior = resolveStepBehavior(agentDefaults(agentDef), {
-            output: step.parallel.output,
-            outputMode: step.parallel.outputMode,
-            reads: step.parallel.reads,
-            progress: step.parallel.progress,
-            skills: step.parallel.skills,
-          });
-          const { prefix, suffix } = buildChainInstructions(behavior, chainDir, false);
+          const { prefix, suffix } = { prefix: dynPrefix, suffix: dynSuffix };
 
           let taskStr = step.parallel.task ?? "{previous}";
           // Replace item template variables
@@ -296,8 +301,8 @@ export async function executeChain(
             const validated = validateToolBudget(step.parallel.toolBudget);
             if (!validated.error && validated.budget) dynOptions.toolBudget = validated.budget;
           }
-          if (behavior.skills && behavior.skills.length > 0) {
-            dynOptions.skills = behavior.skills;
+          if (dynBehavior.skills && dynBehavior.skills.length > 0) {
+            dynOptions.skills = dynBehavior.skills;
           }
 
           const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, dynOptions);
@@ -429,6 +434,6 @@ export async function executeChain(
     workflowGraph: finalSnapshot(),
   };
   } finally {
-    removeChainDir(chainDir);
+    if (ownedChainDir) removeChainDir(chainDir);
   }
 }
