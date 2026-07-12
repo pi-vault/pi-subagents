@@ -2,9 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement the four features deferred from phase 10: per-step model override, async/background chain execution (`--bg`), prompt workflow chains (`/chain-prompts`), and the chain clarification TUI.
-
-**Architecture:** Each feature is self-contained. Model override threads a model string through `SpawnOptions` → `startAgent` → `runAgent`. Background chains use the existing `AgentManager.spawn()` with `isBackground: true`, wrapping the chain loop in a top-level `AgentRecord`. Prompt workflows are a lightweight adapter that discovers markdown templates and converts them to `ChainStep[]`. The clarification TUI is a new `Component` for previewing/editing chains before execution.
+**Goal:** Implement four features deferred from phase 10: per-step model override, async/background chain execution (`--bg`), prompt workflow chains (`/prompt-workflow`, `/chain-prompts`), and the chain clarification TUI.
 
 **Tech Stack:** pnpm, Vitest, TypeScript, `@earendil-works/pi-tui`
 
@@ -12,7 +10,7 @@
 
 **Parent plan:** `docs/superpowers/plans/2026-07-11-chain-execution.md`
 
-**Prerequisites:** Phase 10 complete.
+**Prerequisites:** Phase 10 complete (phases 1-10 are merged to master).
 
 **Reference:** `/Users/lanh/Developer/pi-packages/nicobailon-pi-subagents`
 
@@ -29,7 +27,7 @@
 
 | File | Responsibility |
 | --- | --- |
-| `src/slash/prompt-workflows.ts` | Prompt workflow discovery, `/prompt-workflow` and `/chain-prompts` commands |
+| `src/core/prompt-workflows.ts` | Prompt workflow discovery, `/prompt-workflow` and `/chain-prompts` commands |
 | `src/tui/chain-clarify.ts` | Chain clarification TUI component for previewing/editing chains before execution |
 | `tests/prompt-workflows.test.ts` | Unit tests for prompt workflow parsing, discovery, chain conversion |
 | `tests/chain-clarify.test.ts` | Unit tests for clarification component |
@@ -39,14 +37,14 @@
 
 | File | Changes |
 | --- | --- |
-| `src/shared/types.ts` | Add `model?: string` to `SpawnOptions` |
-| `src/core/agent-manager.ts` | Pipe `options.model` through to `RunOptions` in `startAgent` |
-| `src/core/chain-execution.ts` | Add `StepSpawnOptions.model`; resolve and pass model per step |
-| `src/core/subagent.ts` | Pipe `StepSpawnOptions.model` to `SpawnOptions.model`; add background chain path |
-| `src/core/slash-chain.ts` | Wire `--bg` flag; pipe model; add `clarify` support |
-| `src/core/paths.ts` | Add `userPromptsDir`, `bundledPromptsDir` to `ResolvedPaths` |
-| `src/index.ts` | Register prompt workflow commands |
-| `tests/chain-execution.test.ts` | Add model override tests |
+| `src/shared/types.ts` | Add `model?: unknown` to `SpawnOptions` (line ~278); add `userPromptsDir`, `bundledPromptsDir` to `ResolvedPaths` (line ~42) |
+| `src/core/agent-manager.ts` | Pass `model: options.model` in `startAgent` RunOptions (line ~190); add `registerExternalRecord()`, `notifyComplete()` |
+| `src/core/chain-execution.ts` | Add `model?: string` to `StepSpawnOptions` (line 29); pipe `behavior.model` into spawn options at all 3 branches |
+| `src/core/subagent.ts` | Pipe `options?.model` through `spawnAndWait` callback; add background chain dispatch path before foreground chain |
+| `src/core/slash-chain.ts` | Refactor `stripExecutionFlags` to return `{ args, bg }`; wire `bg` flag through `executeSlashChain` |
+| `src/core/paths.ts` | Add `getBundledPromptsDir()`, add prompt paths to `resolvePaths()` |
+| `src/index.ts` | Import and register prompt workflow commands |
+| `tests/chain-execution.test.ts` | Add model override piping tests |
 
 ---
 
@@ -54,48 +52,29 @@
 
 **Files:**
 
+- Modify: `src/core/chain-execution.ts`
 - Modify: `src/shared/types.ts`
 - Modify: `src/core/agent-manager.ts`
-- Modify: `src/core/chain-execution.ts`
 - Modify: `src/core/subagent.ts`
 - Modify: `src/core/slash-chain.ts`
 - Modify: `tests/chain-execution.test.ts`
 
-The plumbing already exists on the `RunOptions` side (`model?: unknown` at line 250 of `types.ts`). `runAgent` uses `options.model ?? ctx.model` (line 245 of `agent-runner.ts`). The gap is that `SpawnOptions` has no `model` field, and `startAgent` never passes it.
+**Architecture:**
 
-- [ ] **Step 1: Add `model` to `SpawnOptions`**
+The model resolution pipeline already handles most of this:
 
-In `src/shared/types.ts`, add to the `SpawnOptions` interface:
+1. `SequentialStep.model` and `ParallelTaskItem.model` fields exist in `types.ts` (lines 330, 349)
+2. `resolveStepBehavior()` already receives and returns `model` (chain-settings.ts line 108)
+3. `chain-execution.ts` already passes `model: seqStep.model` / `model: item.model` to `resolveStepBehavior` (lines 133-139, 345-351)
+4. `runAgent()` uses `(options.model ?? ctx.model)` at agent-runner.ts line 245
 
-```typescript
-export interface SpawnOptions {
-  // ... existing fields ...
-  model?: unknown; // Model override — opaque pi-ai model object
-}
-```
+The gap: `StepSpawnOptions` has no `model` field, the `spawnAndWait` callbacks don't pipe model through, `SpawnOptions` has no `model` field, and `startAgent` doesn't pass `model` in `RunOptions`.
 
-- [ ] **Step 2: Wire `model` through `startAgent` in `agent-manager.ts`**
+**SDK limitation:** The current SDK provides no `getModelById(string)` API. `ctx.model` is an opaque object, `modelRegistry.listModels()` returns metadata only. For now, we thread the model string through `agentDef.model` so `runAgent` can use it for informational display. Actual model switching will require SDK support for model-by-id lookup. This is acceptable — the plumbing is the valuable work, and it will "just work" once the SDK adds the API.
 
-In `src/core/agent-manager.ts`, in the `startAgent` method, add `model` to the `RunOptions` object passed to `runAgent()` (~line 190):
+- [ ] **Step 1: Add `model` to `StepSpawnOptions`**
 
-```typescript
-const promise = runAgent(
-  agentDef,
-  {
-    prompt: options.prompt,
-    cwd: effectiveCwd,
-    agentId: id,
-    model: options.model, // <-- add this line
-    maxTurns: options.maxTurns,
-    // ... rest unchanged
-  },
-  ctx as { model?: unknown; modelRegistry?: unknown },
-);
-```
-
-- [ ] **Step 3: Add `model` to `StepSpawnOptions` in `chain-execution.ts`**
-
-Extend the interface (added in phase 10):
+In `src/core/chain-execution.ts` (line 29-33), add model:
 
 ```typescript
 export interface StepSpawnOptions {
@@ -106,64 +85,82 @@ export interface StepSpawnOptions {
 }
 ```
 
-- [ ] **Step 4: Resolve and pass model per step in `chain-execution.ts`**
+- [ ] **Step 2: Pipe `behavior.model` into spawn options in all 3 branches**
 
-Add model resolution to `ChainExecutionParams`:
+In `src/core/chain-execution.ts`, after `resolveStepBehavior` in each branch, set the model on spawn options if present:
+
+**Sequential branch** (after line 374, where `seqOptions` is built):
 
 ```typescript
-export interface ChainExecutionParams {
+if (behavior.model) seqOptions.model = behavior.model;
+```
+
+**Parallel branch** (after line 163, where `parallelOptions` is built):
+
+```typescript
+if (behavior.model) parallelOptions.model = behavior.model;
+```
+
+**Dynamic parallel branch** (after line 279, where `dynOptions` is built — also add `model` to `resolveStepBehavior` call at line 261 which is currently missing it):
+
+```typescript
+const dynBehavior = resolveStepBehavior(agentDefaults(dynAgentDef), {
+  output: step.parallel.output,
+  outputMode: step.parallel.outputMode,
+  reads: step.parallel.reads,
+  progress: step.parallel.progress,
+  skills: step.parallel.skills,
+  model: step.parallel.model, // <-- ADD THIS (currently missing)
+});
+```
+
+Then after `dynOptions` construction:
+
+```typescript
+if (dynBehavior.model) dynOptions.model = dynBehavior.model;
+```
+
+- [ ] **Step 3: Add `model` to `SpawnOptions`**
+
+In `src/shared/types.ts` (line 278-301), add to `SpawnOptions`:
+
+```typescript
+export interface SpawnOptions {
   // ... existing fields ...
-  resolveModel?: (modelString: string) => unknown | undefined;
+  model?: unknown; // Opaque model object from pi-ai
+  toolBudget?: ResolvedToolBudget;
 }
 ```
 
-In the sequential step branch, after calling `resolveStepBehavior`:
+- [ ] **Step 4: Pass `model` through `startAgent` in `agent-manager.ts`**
+
+In `src/core/agent-manager.ts`, in `startAgent` (line ~190), add `model` to the RunOptions passed to `runAgent()`:
 
 ```typescript
-if (behavior.model && params.resolveModel) {
-  const resolved = params.resolveModel(behavior.model);
-  if (resolved) stepOptions.model = resolved;
-}
+const promise = runAgent(
+  agentDef,
+  {
+    prompt: options.prompt,
+    cwd: effectiveCwd,
+    agentId: id,
+    model: options.model, // <-- ADD THIS
+    maxTurns: options.maxTurns,
+    // ... rest unchanged
+  },
+  ctx as { model?: unknown; modelRegistry?: unknown },
+)
 ```
 
-Same pattern for parallel and dynamic parallel branches — if `item.model` or `step.parallel.model` is set, resolve and pass it.
+- [ ] **Step 5: Pipe model through `spawnAndWait` callbacks**
 
-Note: `behavior.model` is a string like `"anthropic/claude-sonnet-4-5"`. The `resolveModel` callback converts it to the opaque model object that `runAgent` expects. The callback is optional — when absent, model override is silently skipped (safe default).
-
-- [ ] **Step 5: Provide `resolveModel` callback in `subagent.ts`**
-
-In the chain dispatch block, add the `resolveModel` callback using the existing `resolveModel` import and `ctx.modelRegistry`:
-
-```typescript
-resolveModel: (modelString) => {
-  const registry = (ctx as { modelRegistry?: { listModels?: () => Array<{ id: string; provider: string; name?: string }> } }).modelRegistry;
-  if (!registry?.listModels) return undefined;
-  const match = resolveModel(modelString, registry.listModels());
-  return match ? (ctx as { model?: unknown }).model : undefined;
-  // Note: model instances aren't selectable by string alone in the current SDK.
-  // This returns the parent model if the string validates. Full model switching
-  // requires SDK support for model-by-id lookup — defer to a follow-up.
-},
-```
-
-**Important limitation:** The current SDK provides `ctx.model` (the parent's model instance) but no `ctx.modelRegistry.getModelById(string)` API. We can validate the string, but can't obtain a different model instance. For now, the callback validates the model string exists and logs a warning if not — actual model switching is deferred until the SDK supports it.
-
-A simpler pragmatic approach: skip `resolveModel` for now. Just pass the model string through `StepSpawnOptions.model` and let `startAgent` use it. The `agentDef.model` field (which is a string) will be read by `runAgent`, which already falls back to `ctx.model`. The string is informational until the SDK supports model-by-id lookup.
-
-- [ ] **Step 6: Provide `resolveModel` callback in `slash-chain.ts`**
-
-Same pattern as step 5 — mirror the callback or omit it (matching the pragmatic approach).
-
-- [ ] **Step 7: Pipe `StepSpawnOptions.model` in callers**
-
-In both `subagent.ts` and `slash-chain.ts`, update the `spawnAndWait` callback to forward model:
+In `src/core/subagent.ts` (line 230-241), update the `spawnAndWait` callback to forward model. The model string needs to override `agentDef.model` so it reaches `runAgent`:
 
 ```typescript
 spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
   const effectiveAgentDef = options?.skills
     ? { ...agentDef, skills: options.skills }
     : agentDef;
-  // If step specifies a model string, override the agentDef.model
+  // Override agentDef.model if step specifies a model string
   const withModel = options?.model
     ? { ...effectiveAgentDef, model: options.model }
     : effectiveAgentDef;
@@ -177,30 +174,87 @@ spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
 },
 ```
 
-This overrides `agentDef.model` which `runAgent` reads at line 251 (`options.thinking ?? agentDef.thinking`). Since `runAgent` uses `(options.model ?? ctx.model)` for the actual model instance, and `agentDef.model` is only used for informational display, the full model switching requires the approach in step 5 — but this at least threads the string through for future SDK support.
+Apply the same change in `src/core/slash-chain.ts` `executeSlashChain` function (line 514-525).
 
-- [ ] **Step 8: Add tests**
+Note: `agentDef.model` is a string used for informational display. `options.model` in `SpawnOptions` is the opaque model object. Since we can't convert string → object without SDK support, we override `agentDef.model` (string) for now. When the SDK adds `getModelById()`, we can also pass the resolved object through `SpawnOptions.model`.
+
+- [ ] **Step 6: Add tests**
+
+In `tests/chain-execution.test.ts`, add:
 
 ```typescript
-test("passes model string through StepSpawnOptions", async () => {
-  const agentDefs: AgentDefinition[] = [];
-  await executeChain({
-    steps: [{ agent: "worker", task: "build", model: "anthropic/claude-sonnet-4-5" }],
-    task: "test",
-    spawnAndWait: async (agentDef, prompt, cwd, options) => {
-      agentDefs.push(agentDef);
-      return { id: "1", record: makeRecord("completed", "done") };
-    },
-    findAgent: () => makeAgentDef("worker"),
-    cwd: "/tmp",
-    runId: "test-model",
+describe("executeChain — model override", () => {
+  test("passes model string through StepSpawnOptions for sequential step", async () => {
+    const receivedOptions: unknown[] = [];
+
+    await executeChain({
+      steps: [{ agent: "worker", task: "build", model: "anthropic/claude-sonnet-4-5" }],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options?: unknown) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-model",
+    });
+
+    expect((receivedOptions[0] as { model?: string }).model).toBe(
+      "anthropic/claude-sonnet-4-5",
+    );
   });
-  // Model string should be threaded through
-  expect(agentDefs[0]).toBeDefined();
+
+  test("passes model string through StepSpawnOptions for parallel items", async () => {
+    const receivedOptions: unknown[] = [];
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "a", task: "t1", model: "anthropic/claude-sonnet-4-5" },
+          { agent: "b", task: "t2" },
+        ],
+      } satisfies ParallelStep,
+    ];
+
+    await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options?: unknown) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: (name) => makeAgentDef(name),
+      cwd: "/tmp",
+      runId: "test-model-parallel",
+    });
+
+    expect((receivedOptions[0] as { model?: string }).model).toBe(
+      "anthropic/claude-sonnet-4-5",
+    );
+    expect((receivedOptions[1] as { model?: string }).model).toBeUndefined();
+  });
+
+  test("does not set model when step has no model field", async () => {
+    const receivedOptions: unknown[] = [];
+
+    await executeChain({
+      steps: [{ agent: "worker", task: "build" }],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options?: unknown) => {
+        receivedOptions.push(options);
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-no-model",
+    });
+
+    expect((receivedOptions[0] as { model?: string }).model).toBeUndefined();
+  });
 });
 ```
 
-- [ ] **Step 9: Run check and commit**
+- [ ] **Step 7: Run check and commit**
 
 Run: `pnpm check`
 Expected: PASS
@@ -212,53 +266,94 @@ git commit -m "feat(chain-execution): add per-step model override plumbing"
 
 ---
 
-### Task 17: Background chain execution — in-process model
+### Task 17: Background chain execution
 
 **Files:**
 
-- Modify: `src/core/chain-execution.ts`
+- Modify: `src/core/agent-manager.ts`
 - Modify: `src/core/subagent.ts`
 - Modify: `src/core/slash-chain.ts`
 - Modify: `tests/chain-execution.test.ts`
 
-The spec calls for in-process background chains (not detached processes like the reference). When `--bg` or `run_in_background: true` is set with a chain, the chain loop runs as a background Promise tracked by a top-level `AgentRecord`. The caller gets an ID immediately.
-
 **Design:**
 
-The chain is already a single `executeChain()` call that returns a Promise. For background execution:
-1. Create a synthetic `AgentRecord` for the chain (with `status: "running"`)
-2. Start `executeChain()` as a fire-and-forget Promise
-3. On completion, update the record's `status`, `result`, `durationMs`
-4. Return the chain ID immediately to the caller
-5. The chain widget updates as usual via `onGraphUpdate`
+When `run_in_background: true` is set with a chain, the chain loop runs as a background Promise tracked by a top-level `AgentRecord`. The caller gets a chain ID immediately.
 
-We do NOT use `AgentManager.spawn()` because that expects an `AgentDefinition` and calls `runAgent()`. Instead, the chain dispatch block in `subagent.ts` creates a record directly and manages the lifecycle.
+The chain is a single `executeChain()` call that returns a Promise. For background execution:
+1. Create a proper `AgentRecord` for the chain (with required fields `type` and `description`)
+2. Register it with `AgentManager` via new `registerExternalRecord()` method
+3. Start `executeChain()` as a fire-and-forget Promise
+4. On completion, update the record's status and call `notifyComplete()` so the LLM gets notified
+5. Return the chain ID immediately
 
-- [ ] **Step 1: Add chain record management to `AgentManager`**
+We do NOT use `AgentManager.spawn()` because that expects an `AgentDefinition` and calls `runAgent()`. Instead, the chain dispatch block creates a record directly and manages the lifecycle.
 
-Add a method to register an external record:
+- [ ] **Step 1: Add `registerExternalRecord` and `notifyComplete` to `AgentManager`**
+
+In `src/core/agent-manager.ts`, add after `spawnAndWait` (after line 148):
 
 ```typescript
+/**
+ * Register an externally-managed record (e.g. chain execution).
+ * The caller is responsible for updating the record's lifecycle fields.
+ */
 registerExternalRecord(id: string, record: AgentRecord): void {
   this.agents.set(id, record);
 }
-```
 
-This allows the chain dispatch to create its own record and register it for tracking. The chain ID appears in fleet-list and can be queried via `get_subagent_result`.
+/**
+ * Trigger completion notification for an externally-managed record.
+ * Call this after updating the record's status/result fields.
+ */
+notifyComplete(id: string): void {
+  const record = this.agents.get(id);
+  if (record) this.onComplete?.(record);
+}
+```
 
 - [ ] **Step 2: Add background chain dispatch path in `subagent.ts`**
 
-In the chain dispatch block, before the existing foreground chain execution, add a background path:
+In `src/core/subagent.ts`, within the chain dispatch block (line 224), add a background path BEFORE the existing foreground path. First, extract the `spawnAndWait` and `findAgent` callbacks into shared local variables:
 
 ```typescript
+// --- Chain mode dispatch ---
 if (params.chain) {
   const chainRunId = `chain-${Date.now().toString(36)}`;
 
+  // Shared callbacks for both foreground and background paths
+  const chainSpawnAndWait = async (
+    agentDef: AgentDefinition,
+    prompt: string,
+    stepCwd: string,
+    options?: StepSpawnOptions,
+  ) => {
+    const effectiveAgentDef = options?.skills
+      ? { ...agentDef, skills: options.skills }
+      : agentDef;
+    const withModel = options?.model
+      ? { ...effectiveAgentDef, model: options.model }
+      : effectiveAgentDef;
+    return deps.manager.spawnAndWait(ctx, withModel, {
+      prompt,
+      cwd: stepCwd || effectiveCwd,
+      maxTurns: loadedConfig.config.defaultMaxTurns,
+      toolBudget: options?.toolBudget,
+      isolation: options?.isolation,
+    });
+  };
+
+  const chainFindAgent = (name: string) => {
+    const agent = findAgentByName(discovery, name);
+    if (!agent) throw new Error(`Unknown agent: "${name}"`);
+    return agent;
+  };
+
+  // Background chain path
   if (params.run_in_background) {
-    // Background chain — fire and forget
     const record: AgentRecord = {
       id: chainRunId,
-      name: "(chain)",
+      type: "(chain)",
+      description: `Chain: ${params.task?.slice(0, 60) ?? ""}`,
       status: "running",
       startedAt: Date.now(),
       toolUses: 0,
@@ -269,35 +364,40 @@ if (params.chain) {
     deps.manager.registerExternalRecord(chainRunId, record);
 
     // Fire the chain Promise (don't await)
+    const { executeChain } = await import("./chain-execution.js");
     executeChain({
       steps: params.chain as ChainStep[],
       task: params.task ?? "",
-      spawnAndWait: /* ... same callback as foreground ... */,
-      findAgent: /* ... same callback as foreground ... */,
+      spawnAndWait: chainSpawnAndWait,
+      findAgent: chainFindAgent,
       cwd: effectiveCwd,
       runId: chainRunId,
       signal,
       onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
-    }).then((result) => {
-      record.status = result.isError ? "error" : "completed";
-      record.result = result.content;
-      record.error = result.isError ? result.content : undefined;
+    }).then((chainResult) => {
+      record.status = chainResult.isError ? "error" : "completed";
+      record.result = chainResult.content;
+      record.error = chainResult.isError ? chainResult.content : undefined;
       record.completedAt = Date.now();
       record.durationMs = record.completedAt - record.startedAt;
       deps.chainWidget?.clear();
+      deps.manager.notifyComplete(chainRunId);
     }).catch((error) => {
       record.status = "error";
       record.error = error instanceof Error ? error.message : String(error);
       record.completedAt = Date.now();
       record.durationMs = record.completedAt - record.startedAt;
       deps.chainWidget?.clear();
+      deps.manager.notifyComplete(chainRunId);
     });
 
     return {
       content: [{ type: "text", text:
-        `Chain started in background.\nChain ID: ${chainRunId}\n` +
+        `Chain started in background.\n` +
+        `Chain ID: ${chainRunId}\n` +
         `You will be notified when this chain completes.\n` +
-        `Use get_subagent_result to retrieve full results.` }],
+        `Use get_subagent_result to retrieve full results.`,
+      }],
       isError: false,
       details: stubDetails({
         status: "background" as const,
@@ -308,60 +408,105 @@ if (params.chain) {
     };
   }
 
-  // ... existing foreground chain path below ...
+  // Foreground chain path (existing code, updated to use shared callbacks)
+  try {
+    const { executeChain } = await import("./chain-execution.js");
+    const chainResult = await executeChain({
+      steps: params.chain as ChainStep[],
+      task: params.task ?? "",
+      spawnAndWait: chainSpawnAndWait,
+      findAgent: chainFindAgent,
+      cwd: effectiveCwd,
+      runId: chainRunId,
+      signal,
+      onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
+    });
+    // ... rest unchanged ...
+  }
 }
 ```
 
-Extract the `spawnAndWait` and `findAgent` callbacks into shared local variables so both background and foreground paths use the same logic.
-
-- [ ] **Step 3: Wire `--bg` flag in slash commands**
-
-In `src/core/slash-chain.ts`, the parser already strips `--bg` via `stripExecutionFlags()`. Currently the flag is discarded. Wire it through:
-
-In `registerChainCommands`, for both `/chain` and `/run-chain`:
+Import `StepSpawnOptions` type at the top of `subagent.ts`:
 
 ```typescript
-const flags = stripExecutionFlags(rawArgs);
-// flags.bg is already parsed (check the return type)
+import type { StepSpawnOptions } from "./chain-execution.js";
 ```
 
-If `stripExecutionFlags` returns a string (just the cleaned args), update it to return `{ args: string; bg: boolean }` so the execution function knows to set `run_in_background`.
+- [ ] **Step 3: Refactor `stripExecutionFlags` and wire `--bg` in slash commands**
 
-In the shared `executeChainInContext` function, when `bg` is true, use the existing `deps.manager` background spawn path instead of awaiting the chain.
-
-Alternatively, if the slash command calls the subagent tool internally, pass `run_in_background: true` through the tool params.
-
-- [ ] **Step 4: Completion notification**
-
-When the background chain completes, the `AgentManager.onComplete` callback fires (if registered). Ensure the chain record goes through the same completion notification path as background agents — this is how the LLM gets notified.
-
-Check: does `onComplete?.(record)` fire for external records? If `registerExternalRecord` just does `this.agents.set(id, record)`, completion won't trigger automatically since the Promise is managed externally. The `.then()` handler needs to call `this.onComplete?.(record)` explicitly.
-
-Solution: expose `notifyComplete(id: string)` on AgentManager:
+In `src/core/slash-chain.ts`, refactor `stripExecutionFlags` (line 56-66) to return parsed flags:
 
 ```typescript
-notifyComplete(id: string): void {
-  const record = this.agents.get(id);
-  if (record) this.onComplete?.(record);
+export interface ExecutionFlags {
+  args: string;
+  bg: boolean;
+}
+
+/** Extract and strip trailing --bg / --fork flags. */
+export function stripExecutionFlags(rawArgs: string): ExecutionFlags {
+  let args = rawArgs.trim();
+  let bg = false;
+  for (;;) {
+    if (args.endsWith(" --bg") || args === "--bg") {
+      args = args === "--bg" ? "" : args.slice(0, -5).trim();
+      bg = true;
+    } else if (args.endsWith(" --fork") || args === "--fork") {
+      args = args === "--fork" ? "" : args.slice(0, -7).trim();
+      // fork not wired yet
+    } else break;
+  }
+  return { args, bg };
 }
 ```
 
-Call it from the `.then()` handler after updating the record.
-
-- [ ] **Step 5: Add tests**
+Update all callers (lines 576, 609) to destructure:
 
 ```typescript
-test("background chain returns immediately with chain ID", async () => {
-  // Use a mock manager that captures registerExternalRecord calls
-  // Verify the response includes the chain ID and "background" status
-});
+const { args: cleanedArgs, bg } = stripExecutionFlags(args);
+```
 
-test("background chain updates record on completion", async () => {
-  // Verify record.status transitions from "running" to "completed"
+Update `executeSlashChain` signature (line 498) to accept `bg`:
+
+```typescript
+async function executeSlashChain(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  deps: RuntimeDeps,
+  chain: ChainStep[],
+  task: string,
+  bg = false,
+): Promise<void> {
+```
+
+Inside `executeSlashChain`, add background path before the existing foreground path, following the same pattern as the subagent tool (create a record, fire-and-forget, return immediately via `pi.sendMessage`).
+
+Pass `bg` through from both `/chain` and `/run-chain` handlers:
+
+```typescript
+await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg);
+```
+
+Update `tests/slash-chain.test.ts` (if it tests `stripExecutionFlags`) for the new return type.
+
+- [ ] **Step 4: Add tests**
+
+In `tests/chain-execution.test.ts`:
+
+```typescript
+describe("background chain execution", () => {
+  test("registerExternalRecord makes record visible via getRecord", () => {
+    // Test AgentManager.registerExternalRecord directly
+  });
+
+  test("notifyComplete triggers onComplete callback", () => {
+    // Test AgentManager.notifyComplete directly
+  });
 });
 ```
 
-- [ ] **Step 6: Run check and commit**
+Integration testing of background chain dispatch is best done via the `subagent.ts` execute path in `tests/subagent-chain.test.ts`.
+
+- [ ] **Step 5: Run check and commit**
 
 Run: `pnpm check`
 Expected: PASS
@@ -377,7 +522,7 @@ git commit -m "feat(chain-execution): add background chain execution via --bg fl
 
 **Files:**
 
-- Create: `src/slash/prompt-workflows.ts`
+- Create: `src/core/prompt-workflows.ts`
 - Modify: `src/core/paths.ts`
 - Modify: `src/shared/types.ts` (add to `ResolvedPaths`)
 - Modify: `src/index.ts`
@@ -387,19 +532,28 @@ Prompt workflows are markdown files with YAML frontmatter that define reusable p
 
 Reference: `nicobailon-pi-subagents/src/slash/prompt-workflows.ts`
 
+Note: This project uses `src/core/` for all slash command code (see `slash-chain.ts`), not `src/slash/`. Follow the existing convention.
+
 - [ ] **Step 1: Add prompt paths to `ResolvedPaths`**
 
-In `src/shared/types.ts`:
+In `src/shared/types.ts` (line 42-51):
 
 ```typescript
 export interface ResolvedPaths {
-  // ... existing fields ...
+  agentDir: string;
+  configPath: string;
+  userAgentsDir: string;
+  bundledAgentsDir: string;
+  sessionsDir: string;
+  userChainsDir: string;
+  bundledChainsDir: string;
+  // Prompt workflow directories
   userPromptsDir: string;
   bundledPromptsDir: string;
 }
 ```
 
-In `src/core/paths.ts`:
+In `src/core/paths.ts`, add the helper and update `resolvePaths`:
 
 ```typescript
 export function getBundledPromptsDir(): string {
@@ -415,70 +569,108 @@ export function resolvePaths(agentDir = getAgentDir()): ResolvedPaths {
 }
 ```
 
-- [ ] **Step 2: Define `PromptWorkflow` interface**
+The `currentDir` variable already exists at line 6 (`const currentDir = dirname(fileURLToPath(import.meta.url))`), following the same pattern as `getBundledAgentsDir` and `getBundledChainsDir`.
 
-In `src/slash/prompt-workflows.ts`:
+- [ ] **Step 2: Create `src/core/prompt-workflows.ts` with types and frontmatter parser**
 
 ```typescript
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ChainStep, ResolvedPaths } from "../shared/types.js";
+import type { RuntimeDeps } from "../shared/runtime-deps.js";
+
 export interface PromptWorkflow {
-  name: string;            // filename without extension
-  description: string;     // from frontmatter or first line
+  name: string;            // filename without .md extension
+  description: string;     // from frontmatter or first non-empty body line
   agent: string;           // from frontmatter "subagent" field, default "delegate"
   body: string;            // prompt body (after frontmatter)
   filePath: string;        // source file path
   model?: string;
   skills?: string[] | false;
   cwd?: string;
-  worktree?: boolean;
-  fork?: boolean;
-  fresh?: boolean;
   chain?: string;          // chain declaration (e.g. "analyze -> fix")
 }
+
+// Reserved names that can't be used as workflow names
+const RESERVED_NAMES = new Set([
+  "chain-prompts", "prompt-workflow", "chain", "run-chain",
+]);
+
+type Frontmatter = Record<string, string>;
 ```
+
+Reuse the same simple frontmatter parser pattern from `chain-serializer.ts` (line 18-29) — `---\n...\n---` delimited YAML-like key-value pairs.
 
 - [ ] **Step 3: Implement prompt workflow discovery**
 
 ```typescript
-export function discoverPromptWorkflows(paths: ResolvedPaths, cwd?: string): PromptWorkflow[] {
-  const projectDir = cwd ? join(cwd, ".pi", "prompts") : undefined;
-  // Scan each directory for *.md files
-  // Parse frontmatter + body
-  // Project overrides user overrides bundled (by name)
-  // Return merged list
+function readPromptDir(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith(".md"))
+      .map((e) => join(dir, e.name));
+  } catch {
+    return [];
+  }
+}
+
+export function discoverPromptWorkflows(
+  paths: ResolvedPaths,
+  cwd?: string,
+): PromptWorkflow[] {
+  const workflows = new Map<string, PromptWorkflow>();
+
+  // Scan directories in priority order: bundled < user < project
+  // Later entries override earlier ones by name
+  const dirs = [
+    paths.bundledPromptsDir,
+    paths.userPromptsDir,
+    ...(cwd ? [join(cwd, ".pi", "prompts")] : []),
+  ];
+
+  for (const dir of dirs) {
+    for (const filePath of readPromptDir(dir)) {
+      const workflow = loadPromptWorkflow(filePath);
+      if (workflow) workflows.set(workflow.name, workflow);
+    }
+  }
+
+  return [...workflows.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 ```
 
-Parse frontmatter fields:
-- `description` → string
-- `subagent` → maps to `agent` (default: `"delegate"`)
-- `model` → string
-- `skill` → comma-separated string or `"false"` → `string[] | false`
-- `cwd` → string
-- `worktree` → boolean
-- `fork` / `inheritContext` → boolean
-- `fresh` → boolean
-- `chain` → string (chain declaration)
+`loadPromptWorkflow` parses frontmatter fields:
+- `description` -> string
+- `subagent` -> maps to `agent` (default: `"delegate"`)
+- `model` -> string
+- `skill` -> `"false"` | comma-separated names -> `string[] | false`
+- `cwd` -> string
+- `chain` -> string (chain declaration)
+
+Filter out reserved names via `RESERVED_NAMES.has(name)`.
 
 - [ ] **Step 4: Implement argument substitution**
 
 ```typescript
-function substituteArgs(body: string, args: string[]): string {
-  let result = body;
-  result = result.replace(/\$ARGUMENTS|\$@/g, args.join(" "));
-  // Replace $1, $2, etc.
-  result = result.replace(/\$(\d+)/g, (_, n) => args[parseInt(n) - 1] ?? "");
-  // Replace ${N:-fallback}
-  result = result.replace(/\$\{(\d+):-([^}]*)\}/g, (_, n, fallback) =>
-    args[parseInt(n) - 1] ?? fallback,
-  );
-  return result;
+export function substituteArgs(body: string, args: string[]): string {
+  return body
+    .replace(/\$ARGUMENTS|\$@/g, args.join(" "))
+    .replace(
+      /\$\{(\d+):-([^}]*)\}/g,
+      (_, n: string, fallback: string) => args[parseInt(n) - 1] ?? fallback,
+    )
+    .replace(/\$(\d+)/g, (_, n: string) => args[parseInt(n) - 1] ?? "");
 }
 ```
 
-- [ ] **Step 5: Implement chain step conversion**
+- [ ] **Step 5: Implement chain step conversion and runtime option parsing**
 
 ```typescript
-function workflowToChainStep(workflow: PromptWorkflow, args: string[]): ChainStep {
+function workflowToChainStep(
+  workflow: PromptWorkflow,
+  args: string[],
+): ChainStep {
   const task = substituteArgs(workflow.body, args).trim();
   return {
     agent: workflow.agent,
@@ -488,39 +680,32 @@ function workflowToChainStep(workflow: PromptWorkflow, args: string[]): ChainSte
     ...(workflow.cwd ? { cwd: workflow.cwd } : {}),
   };
 }
-```
 
-- [ ] **Step 6: Implement runtime option parsing**
-
-```typescript
 interface RuntimeOptions {
   args: string[];
   agentOverride?: string;
-  fork?: boolean;
-  fresh?: boolean;
-  worktree?: boolean;
   bg?: boolean;
 }
 
 function parseRuntimeOptions(words: string[]): RuntimeOptions {
   const args: string[] = [];
   let agentOverride: string | undefined;
-  let fork = false, fresh = false, worktree = false, bg = false;
+  let bg = false;
   for (let i = 0; i < words.length; i++) {
     const w = words[i]!;
-    if (w === "--fork") fork = true;
-    else if (w === "--fresh") fresh = true;
-    else if (w === "--worktree") worktree = true;
-    else if (w === "--bg" || w === "--async") bg = true;
-    else if (w === "--subagent" && i + 1 < words.length) agentOverride = words[++i];
-    else if (w.startsWith("--subagent=")) agentOverride = w.slice("--subagent=".length);
-    else args.push(w);
+    if (w === "--bg" || w === "--async") { bg = true; continue; }
+    if (w === "--subagent" && i + 1 < words.length) { agentOverride = words[++i]; continue; }
+    const eq = w.match(/^--subagent[=:](.+)$/);
+    if (eq) { agentOverride = eq[1]; continue; }
+    args.push(w);
   }
-  return { args, agentOverride, fork, fresh, worktree, bg };
+  return { args, agentOverride, bg };
 }
 ```
 
-- [ ] **Step 7: Register `/prompt-workflow` command**
+Also implement `shellWords(input: string): string[]` for tokenizing raw args (same pattern as reference — quote-aware word splitting).
+
+- [ ] **Step 6: Register `/prompt-workflow` command**
 
 ```typescript
 export function registerPromptWorkflowCommands(
@@ -530,76 +715,149 @@ export function registerPromptWorkflowCommands(
   pi.registerCommand("prompt-workflow", {
     description: "Run a prompt template: /prompt-workflow <name> [args]",
     getArgumentCompletions: (prefix) => {
-      const paths = deps.resolvePaths();
-      const workflows = discoverPromptWorkflows(paths);
-      return workflows
-        .filter((w) => w.name.toLowerCase().startsWith(prefix.toLowerCase()))
-        .map((w) => ({ value: w.name, description: w.description }));
+      try {
+        const paths = deps.resolvePaths();
+        const workflows = discoverPromptWorkflows(paths);
+        const lower = prefix.toLowerCase();
+        const matches = workflows.filter((w) =>
+          w.name.toLowerCase().startsWith(lower),
+        );
+        return matches.length > 0
+          ? matches.map((w) => ({ value: w.name, label: w.name }))
+          : null;
+      } catch {
+        return null;
+      }
     },
-    handler: async (ctx, rawArgs) => {
+    handler: async (rawArgs, ctx: ExtensionCommandContext) => {
+      const words = shellWords(rawArgs);
+      const name = words.shift();
       const paths = deps.resolvePaths();
       const workflows = discoverPromptWorkflows(paths, ctx.cwd);
-      // Parse args, find workflow, execute as single or chain
-      // If workflow has chain field, split by -> and build chain steps
-      // Otherwise run as single subagent
+
+      if (!name || name === "list") {
+        const list = workflows.length === 0
+          ? "No prompt workflows found."
+          : workflows.map((w) => `- ${w.name}: ${w.description}`).join("\n");
+        pi.sendMessage({ content: list, display: true });
+        return;
+      }
+
+      const workflow = workflows.find((w) => w.name === name);
+      if (!workflow) {
+        ctx.ui.notify(`Unknown prompt workflow: ${name}`, "error");
+        return;
+      }
+
+      const runtime = parseRuntimeOptions(words);
+
+      try {
+        if (workflow.chain) {
+          // Chain mode — split chain declaration and build steps
+          const chainNames = workflow.chain.split(" -> ").map((s) => s.trim()).filter(Boolean);
+          const chain = chainNames.map((stepName) => {
+            const step = workflows.find((w) => w.name === stepName);
+            if (!step) throw new Error(`Unknown workflow in chain '${workflow.name}': ${stepName}`);
+            return workflowToChainStep(step, runtime.args);
+          });
+          // Execute as chain using the shared executeSlashChain pattern
+          await executePromptChain(pi, ctx, deps, chain, runtime.args.join(" "));
+          return;
+        }
+        // Single workflow — execute as single-step chain
+        const step = workflowToChainStep(workflow, runtime.args);
+        await executePromptChain(pi, ctx, deps, [step], step.task);
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+```
+
+- [ ] **Step 7: Register `/chain-prompts` command**
+
+```typescript
+  pi.registerCommand("chain-prompts", {
+    description: "Chain prompt templates: /chain-prompts analyze -> fix -- args",
+    handler: async (rawArgs, ctx: ExtensionCommandContext) => {
+      const delimiterIdx = rawArgs.indexOf(" -- ");
+      const declaration = delimiterIdx === -1 ? rawArgs.trim() : rawArgs.slice(0, delimiterIdx).trim();
+      const argsText = delimiterIdx === -1 ? "" : rawArgs.slice(delimiterIdx + 4).trim();
+
+      const paths = deps.resolvePaths();
+      const workflows = discoverPromptWorkflows(paths, ctx.cwd);
+
+      if (!declaration || declaration === "list") {
+        const list = workflows.length === 0
+          ? "No prompt workflows found."
+          : workflows.map((w) => `- ${w.name}: ${w.description}`).join("\n");
+        pi.sendMessage({ content: list, display: true });
+        return;
+      }
+
+      const runtime = parseRuntimeOptions(shellWords(argsText));
+      const names = declaration.split(" -> ").map((s) => s.trim()).filter(Boolean);
+      if (names.length === 0) {
+        ctx.ui.notify("Usage: /chain-prompts prompt-a -> prompt-b -- args", "error");
+        return;
+      }
+
+      try {
+        const chain = names.map((name) => {
+          const workflow = workflows.find((w) => w.name === name);
+          if (!workflow) throw new Error(`Unknown prompt workflow: ${name}`);
+          return workflowToChainStep(workflow, runtime.args);
+        });
+        await executePromptChain(pi, ctx, deps, chain, runtime.args.join(" "));
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
     },
   });
 }
 ```
 
-- [ ] **Step 8: Register `/chain-prompts` command**
+The `executePromptChain` helper follows the same pattern as `executeSlashChain` in `slash-chain.ts` (line 498-550) — load config, discover agents, call `executeChain`, send result via `pi.sendMessage`.
+
+- [ ] **Step 8: Register commands in `src/index.ts`**
+
+Add import and registration following the existing pattern (line 20, 273):
 
 ```typescript
-pi.registerCommand("chain-prompts", {
-  description: "Chain prompt templates: /chain-prompts analyze -> fix -- args",
-  handler: async (ctx, rawArgs) => {
-    // Split by " -- " to separate declaration from args
-    // Split declaration by " -> " to get workflow names
-    // Convert each to chain step via workflowToChainStep
-    // Execute chain via the shared executeChainInContext function
-  },
-});
-```
+import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
 
-- [ ] **Step 9: Register commands in `src/index.ts`**
-
-```typescript
-import { registerPromptWorkflowCommands } from "./slash/prompt-workflows.js";
-// In the activate function:
+// In registerSubagentsExtension(), after registerChainCommands:
 registerPromptWorkflowCommands(pi, deps);
 ```
 
-- [ ] **Step 10: Write tests**
+- [ ] **Step 9: Write tests**
+
+Create `tests/prompt-workflows.test.ts`:
 
 ```typescript
 describe("discoverPromptWorkflows", () => {
   test("discovers .md files from directory");
-  test("parses frontmatter fields");
-  test("project workflows override user workflows");
-  test("returns empty for nonexistent directories");
+  test("parses frontmatter fields correctly");
+  test("project workflows override user workflows by name");
+  test("returns empty array for nonexistent directories");
+  test("filters out reserved command names");
 });
 
 describe("substituteArgs", () => {
   test("replaces $1 with first arg");
-  test("replaces $ARGUMENTS with all args");
+  test("replaces $ARGUMENTS with all args joined");
   test("replaces ${N:-fallback} with arg or fallback");
-});
-
-describe("workflowToChainStep", () => {
-  test("creates step with agent and substituted task");
-  test("includes model when specified");
-  test("includes skills when specified");
+  test("leaves unmatched $N as empty string");
 });
 
 describe("parseRuntimeOptions", () => {
   test("extracts --bg flag");
-  test("extracts --fork flag");
   test("extracts --subagent override");
   test("passes through remaining args");
 });
 ```
 
-- [ ] **Step 11: Run check and commit**
+- [ ] **Step 10: Run check and commit**
 
 Run: `pnpm check`
 Expected: PASS
@@ -620,49 +878,66 @@ git commit -m "feat(prompt-workflows): add /prompt-workflow and /chain-prompts c
 - Modify: `src/core/slash-chain.ts`
 - Create: `tests/chain-clarify.test.ts`
 
-The clarification TUI shows a preview of chain steps and lets the user edit them before execution. It's triggered when `clarify: true` is set on the subagent tool call (default behavior for interactive sessions in the reference).
+The clarification TUI shows a preview of chain steps and lets the user edit them before execution. The reference implementation (`nicobailon-pi-subagents/src/runs/foreground/chain-clarify.ts`) is a full Component with model selection, skill toggling, and behavior overrides.
 
 Reference: `nicobailon-pi-subagents/src/runs/foreground/chain-clarify.ts`
 
-- [ ] **Step 1: Define result interface**
+- [ ] **Step 1: Define result interface and types**
+
+In `src/tui/chain-clarify.ts`:
 
 ```typescript
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { ChainStep, AgentDefinition, SequentialStep } from "../shared/types.js";
+import type { ResolvedStepBehavior } from "../core/chain-settings.js";
+import type { Theme } from "./agent-widget.js";
+
 export interface ChainClarifyResult {
-  action: "run" | "cancel" | "bg";      // Run, cancel, or switch to background
-  steps: ChainStep[];                    // Potentially modified steps
-  behaviorOverrides: BehaviorOverride[]; // Per-step overrides from user edits
+  action: "run" | "cancel" | "bg";
+  steps: ChainStep[];
 }
 
 export interface BehaviorOverride {
   task?: string;
   model?: string;
-  skills?: string[] | false;
-  output?: string | false;
-  reads?: string[] | false;
-  progress?: boolean;
 }
+
+type EditMode = "list" | "edit-task" | "edit-model";
 ```
 
 - [ ] **Step 2: Implement `ChainClarifyComponent`**
 
-Create `src/tui/chain-clarify.ts` implementing the `Component` interface from `@earendil-works/pi-tui`:
+The component implements the `Component` interface from `@earendil-works/pi-tui`, which requires:
+- `handleInput(data: string): void`
+- `render(width: number): string[]`
+
+Results are communicated via a `done` callback (same pattern as `ConversationViewer`).
 
 ```typescript
-export class ChainClarifyComponent implements Component<ChainClarifyResult> {
-  // State
-  private steps: ChainStep[];
-  private overrides: BehaviorOverride[];
-  private selectedIndex: number = 0;
-  private mode: "list" | "edit-task" | "edit-model" | "edit-skills" = "list";
+export class ChainClarifyComponent implements Component {
+  private selectedIndex = 0;
+  private mode: EditMode = "list";
+  private overrides: Map<number, BehaviorOverride> = new Map();
 
   constructor(
-    steps: ChainStep[],
-    agents: AgentDefinition[],
-    task: string,
-  ) { /* ... */ }
+    private tui: TUI,
+    private theme: Theme,
+    private steps: ChainStep[],
+    private agents: AgentDefinition[],
+    private task: string,
+    private done: (result: ChainClarifyResult) => void,
+  ) {}
 
-  render(width: number, height: number): string[] { /* ... */ }
-  handleKey(key: string): void { /* ... */ }
+  handleInput(data: string): void {
+    // Key handling based on mode
+    // list mode: Up/Down navigate, Enter runs, b backgrounds, Esc cancels, e edits task, m edits model
+    // edit-task mode: text input, Enter confirms, Esc cancels
+    // edit-model mode: text input for model string, Enter confirms, Esc cancels
+  }
+
+  render(width: number): string[] {
+    // Render step list with current selection, overrides, and keybind hints
+  }
 }
 ```
 
@@ -670,91 +945,196 @@ export class ChainClarifyComponent implements Component<ChainClarifyResult> {
 
 ```
 Chain Preview (3 steps)                    [Enter] Run  [b] Background  [Esc] Cancel
-─────────────────────────────────────────────────────────────────────────────────────
+-----
   > [1] scout                    Context
       Task: Analyze the codebase for {task}
-      Model: (inherit)  Skills: (inherit)  Output: context.md
+      Model: (inherit)
 
     [2] planner                  Planning
       Task: Create plan based on {outputs.context}
-      Model: (inherit)  Skills: (inherit)  Progress: on
+      Model: (inherit)
 
     [3] worker                   Implementation
       Task: Implement {outputs.plan}
-      Model: (inherit)  Skills: (inherit)  Progress: on
-─────────────────────────────────────────────────────────────────────────────────────
-  [e] Edit task  [m] Model  [s] Skills  [o] Output  [r] Reads  [p] Progress
+      Model: (inherit)
+-----
+  [e] Edit task  [m] Model
 ```
 
 Key bindings:
 - `Up`/`Down` or `j`/`k`: Navigate steps
-- `Enter`: Run chain
-- `b`: Switch to background execution
-- `Esc` or `q`: Cancel
+- `Enter`: Run chain (`action: "run"`)
+- `b`: Switch to background (`action: "bg"`)
+- `Esc` or `q`: Cancel (`action: "cancel"`)
 - `e`: Edit task template for selected step
-- `m`: Select model for selected step
-- `s`: Toggle/select skills
-- `o`: Edit output path
-- `r`: Edit reads list
-- `p`: Toggle progress
+- `m`: Edit model override for selected step
+
+Start with this minimal MVP. The reference has full rich editors for skills, output paths, reads, and progress toggles — these can be added incrementally after the basic component works.
 
 - [ ] **Step 3: Implement edit modes**
 
-Each edit mode (`edit-task`, `edit-model`, `edit-skills`) replaces the main view with an inline editor:
+Each edit mode replaces the step list with a single-line text input:
 
-- **edit-task**: Multi-line text input (similar to existing text input components)
-- **edit-model**: List of available models with search/filter
-- **edit-skills**: Checkbox list of discovered skills
+- **edit-task**: Shows current task text, user types replacement, Enter confirms, Esc cancels
+- **edit-model**: Shows current model (or "(inherit)"), user types model string, Enter confirms, Esc cancels
 
-These can be simple initially — a single-line text input that replaces the current value. The reference has full rich editors but a minimal MVP is sufficient.
+On confirm, store the override in `this.overrides` map keyed by step index. On render, show overridden values with a marker (e.g. `*` prefix).
 
-- [ ] **Step 4: Wire clarification into chain dispatch**
-
-In `src/core/subagent.ts`, before the chain execution block, add clarification:
+When `done` is called with `action: "run"` or `"bg"`, apply overrides to produce the final `steps` array:
 
 ```typescript
-if (params.chain) {
-  // If clarify is true and we have UI, show the clarification TUI
-  if (params.clarify !== false && ctx.ui?.custom) {
-    const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
-    const result = await ctx.ui.custom<ChainClarifyResult>(
-      (tui, theme, _kb, done) =>
-        new ChainClarifyComponent(
-          params.chain as ChainStep[],
-          discovery.agents,
-          params.task ?? "",
-          done,
-        ),
-    );
-    if (result.action === "cancel") {
-      return { content: [{ type: "text", text: "Chain cancelled." }], isError: false, details: stubDetails({ agent: "(chain)", task: params.task ?? "" }) };
-    }
-    if (result.action === "bg") {
-      params.run_in_background = true;
-    }
-    // Apply overrides to steps
-    params.chain = result.steps;
-  }
-  // ... continue to execution ...
+private applyOverrides(): ChainStep[] {
+  return this.steps.map((step, i) => {
+    const override = this.overrides.get(i);
+    if (!override) return step;
+    const seq = step as SequentialStep;
+    return {
+      ...seq,
+      ...(override.task !== undefined ? { task: override.task } : {}),
+      ...(override.model !== undefined ? { model: override.model } : {}),
+    };
+  });
 }
 ```
 
-- [ ] **Step 5: Write tests**
+- [ ] **Step 4: Add `clarify` parameter to subagent tool schema**
+
+In `src/core/subagent.ts`, add to `SUBAGENT_TOOL_PARAMETERS` (after `chain_append`, around line 118):
 
 ```typescript
+clarify: Type.Optional(
+  Type.Boolean({
+    description: "If true, show chain preview TUI before execution (interactive only)",
+  }),
+),
+```
+
+Add `clarify?: boolean` to the `SubagentToolInput` interface in `src/shared/types.ts`.
+
+- [ ] **Step 5: Wire clarification into chain dispatch**
+
+In `src/core/subagent.ts`, inside the chain dispatch block, before the background check, add clarification:
+
+```typescript
+if (params.chain) {
+  // ... shared callbacks ...
+
+  // Clarification TUI (interactive foreground only)
+  if (params.clarify && !params.run_in_background) {
+    const customUI = (ctx as { ui?: { custom?: unknown } }).ui as
+      | { custom?: <T>(factory: (tui: TUI, theme: Theme, kb: unknown, done: (r: T) => void) => Component) => Promise<T> }
+      | undefined;
+
+    if (customUI?.custom) {
+      const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
+      const result = await customUI.custom<ChainClarifyResult>(
+        (tui, theme, _kb, done) =>
+          new ChainClarifyComponent(tui, theme, params.chain as ChainStep[], discovery.agents, params.task ?? "", done),
+      );
+      if (result.action === "cancel") {
+        return {
+          content: [{ type: "text", text: "Chain cancelled." }],
+          isError: false,
+          details: stubDetails({ agent: "(chain)", task: params.task ?? "", status: "aborted" as const }),
+        };
+      }
+      if (result.action === "bg") {
+        params.run_in_background = true;
+      }
+      // Apply user edits
+      (params as { chain: unknown[] }).chain = result.steps;
+    }
+  }
+
+  // ... background path ...
+  // ... foreground path ...
+}
+```
+
+Note: The `ctx.ui.custom` API availability needs to be verified at runtime. If `custom` is not available (e.g. non-interactive mode), clarification is silently skipped and the chain runs directly. The type cast is defensive — the actual API shape depends on the `@earendil-works/pi-tui` version.
+
+- [ ] **Step 6: Write tests**
+
+Create `tests/chain-clarify.test.ts`:
+
+```typescript
+import { describe, expect, test, vi } from "vitest";
+import { ChainClarifyComponent } from "../src/tui/chain-clarify.js";
+
+// Mock TUI and theme
+const mockTui = { requestRender: vi.fn() } as any;
+const mockTheme = { /* minimal theme fields */ } as any;
+
 describe("ChainClarifyComponent", () => {
-  test("renders step list with agent names and phases");
-  test("navigation changes selected index");
-  test("returns 'run' action on Enter");
-  test("returns 'cancel' action on Escape");
-  test("returns 'bg' action on b key");
-  test("edit mode updates step task");
+  test("renders step list with agent names", () => {
+    const steps = [
+      { agent: "scout", task: "analyze" },
+      { agent: "planner", task: "plan" },
+    ];
+    let result: any;
+    const component = new ChainClarifyComponent(
+      mockTui, mockTheme, steps, [], "test task",
+      (r) => { result = r; },
+    );
+    const lines = component.render(80);
+    expect(lines.some((l) => l.includes("scout"))).toBe(true);
+    expect(lines.some((l) => l.includes("planner"))).toBe(true);
+  });
+
+  test("Enter key returns run action", () => {
+    const steps = [{ agent: "scout", task: "analyze" }];
+    let result: any;
+    const component = new ChainClarifyComponent(
+      mockTui, mockTheme, steps, [], "test",
+      (r) => { result = r; },
+    );
+    component.handleInput("\r"); // Enter
+    expect(result.action).toBe("run");
+    expect(result.steps).toEqual(steps);
+  });
+
+  test("Escape key returns cancel action", () => {
+    const steps = [{ agent: "scout", task: "analyze" }];
+    let result: any;
+    const component = new ChainClarifyComponent(
+      mockTui, mockTheme, steps, [], "test",
+      (r) => { result = r; },
+    );
+    component.handleInput("\x1b"); // Escape
+    expect(result.action).toBe("cancel");
+  });
+
+  test("b key returns bg action", () => {
+    const steps = [{ agent: "scout", task: "analyze" }];
+    let result: any;
+    const component = new ChainClarifyComponent(
+      mockTui, mockTheme, steps, [], "test",
+      (r) => { result = r; },
+    );
+    component.handleInput("b");
+    expect(result.action).toBe("bg");
+  });
+
+  test("navigation changes selected index", () => {
+    const steps = [
+      { agent: "scout", task: "analyze" },
+      { agent: "planner", task: "plan" },
+    ];
+    let result: any;
+    const component = new ChainClarifyComponent(
+      mockTui, mockTheme, steps, [], "test",
+      (r) => { result = r; },
+    );
+    // Move down then run — verify selected step context
+    component.handleInput("j"); // down
+    const lines = component.render(80);
+    // Second step should be selected (indicated by cursor marker)
+    expect(lines.some((l) => l.includes(">") && l.includes("planner"))).toBe(true);
+  });
 });
 ```
 
-Focus on unit-testing the render output and key handling, not full integration.
-
-- [ ] **Step 6: Run check and commit**
+- [ ] **Step 7: Run check and commit**
 
 Run: `pnpm check`
 Expected: PASS
