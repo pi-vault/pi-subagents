@@ -11,7 +11,6 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Theme, UICtx } from "./agent-widget.js";
 import type {
-  WorkflowGraphNode,
   WorkflowGraphSnapshot,
   WorkflowNodeStatus,
 } from "../shared/types.js";

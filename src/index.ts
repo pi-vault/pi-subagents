@@ -398,6 +398,7 @@ export function registerSubagentsExtension(
   // Cleanup on session shutdown
   pi.on("session_shutdown", () => {
     deps.widget?.dispose();
+    deps.chainWidget?.dispose();
     deps.fleet?.dispose();
     deps.agentActivity?.clear();
     deps.manager.abortAll();

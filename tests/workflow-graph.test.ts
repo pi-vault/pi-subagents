@@ -2,10 +2,7 @@ import { describe, expect, test } from "vitest";
 import { buildWorkflowGraphSnapshot } from "../src/core/workflow-graph.js";
 import type {
   ChainStep,
-  SequentialStep,
-  ParallelStep,
   DynamicParallelStep,
-  WorkflowNodeStatus,
 } from "../src/shared/types.js";
 
 describe("buildWorkflowGraphSnapshot", () => {
@@ -177,5 +174,41 @@ describe("buildWorkflowGraphSnapshot", () => {
 
     expect(snapshot.nodes[0]!.status).toBe("failed");
     expect(snapshot.nodes[0]!.error).toBe("timeout");
+  });
+
+  test("correct status for step after dynamic-parallel step", () => {
+    const steps: ChainStep[] = [
+      {
+        expand: { from: { output: "items", path: "/list" } },
+        parallel: { agent: "processor", task: "handle {item}" },
+        collect: { as: "results" },
+      } as DynamicParallelStep,
+      { agent: "reviewer", task: "review" },
+    ];
+    const snapshot = buildWorkflowGraphSnapshot({
+      runId: "r1",
+      steps,
+      stepStatuses: [{ status: "completed" }, { status: "running" }],
+    });
+
+    expect(snapshot.nodes[0]!.status).toBe("completed");
+    expect(snapshot.nodes[1]!.status).toBe("running");
+  });
+
+  test("dynamic-parallel group uses stepStatuses for status", () => {
+    const steps: ChainStep[] = [
+      {
+        expand: { from: { output: "items", path: "/list" } },
+        parallel: { agent: "processor", task: "handle {item}" },
+        collect: { as: "results" },
+      } as DynamicParallelStep,
+    ];
+    const snapshot = buildWorkflowGraphSnapshot({
+      runId: "r1",
+      steps,
+      stepStatuses: [{ status: "failed", error: "no items" }],
+    });
+
+    expect(snapshot.nodes[0]!.status).toBe("failed");
   });
 });

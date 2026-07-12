@@ -136,9 +136,14 @@ export function buildWorkflowGraphSnapshot(
 
     if (isDynamicParallelStep(step)) {
       const groupId = `step-${stepIndex}`;
+      const resolved = nodeStatus(input, flatIndex);
       const groupStatus: WorkflowNodeStatus =
-        input.currentStepIndex === stepIndex ? "running" : "pending";
-      if (input.currentStepIndex === stepIndex) currentNodeId = groupId;
+        resolved !== "pending"
+          ? resolved
+          : input.currentStepIndex === stepIndex
+            ? "running"
+            : "pending";
+      if (groupStatus === "running") currentNodeId = groupId;
 
       nodes.push({
         id: groupId,
@@ -159,6 +164,7 @@ export function buildWorkflowGraphSnapshot(
         },
         children: [],
       });
+      flatIndex++;
       continue;
     }
 
@@ -182,8 +188,10 @@ export function buildWorkflowGraphSnapshot(
     pushPhase(phases, seq.phase, id);
     if (
       status === "running" ||
-      input.currentFlatIndex === flatIndex ||
-      input.currentStepIndex === stepIndex
+      ((input.currentFlatIndex === flatIndex ||
+        input.currentStepIndex === stepIndex) &&
+        status !== "completed" &&
+        status !== "failed")
     )
       currentNodeId = id;
     flatIndex++;
