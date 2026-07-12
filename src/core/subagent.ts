@@ -121,6 +121,12 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
       steps: Type.Array(Type.Any(), { description: "Steps to append" }),
     }),
   ),
+  clarify: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, show chain preview TUI before execution (interactive only).",
+    }),
+  ),
 });
 
 export function findAgentByName(
@@ -223,9 +229,53 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       // --- Chain mode dispatch ---
       if (params.chain) {
         try {
+          // Clarification TUI — show before execution when clarify=true (interactive only)
+          let chainSteps = params.chain as ChainStep[];
+          if (params.clarify && !params.run_in_background) {
+            const customUI = (
+              ctx as {
+                ui?: {
+                  custom?: <T>(
+                    factory: (
+                      tui: import("@earendil-works/pi-tui").TUI,
+                      theme: import("../tui/agent-widget.js").Theme,
+                      kb: unknown,
+                      done: (r: T) => void,
+                    ) => import("@earendil-works/pi-tui").Component,
+                  ) => Promise<T>;
+                };
+              }
+            ).ui;
+            if (customUI?.custom) {
+              const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
+              const result = await customUI.custom<import("../tui/chain-clarify.js").ChainClarifyResult>(
+                (tui, theme, _kb, done) =>
+                  new ChainClarifyComponent(
+                    tui,
+                    theme as unknown as import("../tui/agent-widget.js").Theme, // safely cast — Theme is structurally identical
+                    chainSteps,
+                    discovery.agents,
+                    params.task ?? "",
+                    done,
+                  ),
+              );
+              if (result.action === "cancel") {
+                return {
+                  content: [{ type: "text", text: "Chain cancelled." }],
+                  isError: false,
+                  details: stubDetails({ agent: "(chain)", task: params.task ?? "", status: "aborted" as const }),
+                };
+              }
+              if (result.action === "bg") {
+                params.run_in_background = true;
+              }
+              chainSteps = result.steps;
+            }
+          }
+
           const { executeChain } = await import("./chain-execution.js");
           const chainResult = await executeChain({
-            steps: params.chain as ChainStep[],
+            steps: chainSteps,
             task: params.task ?? "",
             spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
               let effectiveAgentDef = options?.skills

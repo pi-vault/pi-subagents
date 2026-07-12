@@ -137,6 +137,7 @@ export interface SubagentToolInput {
     chain_id: string;
     steps: unknown[];
   };
+  clarify?: boolean;
 }
 
 export interface SubagentUsage {
