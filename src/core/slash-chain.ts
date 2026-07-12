@@ -511,11 +511,16 @@ async function executeSlashChain(
     const chainResult = await executeChain({
       steps: chain,
       task,
-      spawnAndWait: async (agentDef, prompt, stepCwd) => {
-        return deps.manager.spawnAndWait(ctx, agentDef, {
+      spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
+        const effectiveAgentDef = options?.skills
+          ? { ...agentDef, skills: options.skills }
+          : agentDef;
+        return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
           prompt,
           cwd: stepCwd || ctx.cwd,
           maxTurns: loadedConfig.config.defaultMaxTurns,
+          toolBudget: options?.toolBudget,
+          isolation: options?.isolation,
         });
       },
       findAgent: (name) => {

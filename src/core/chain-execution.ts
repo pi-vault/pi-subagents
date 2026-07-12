@@ -3,6 +3,7 @@ import type {
   AgentRecord,
   ChainStep,
   ChainOutputMap,
+  ResolvedToolBudget,
   SequentialStep,
   WorkflowGraphSnapshot,
 } from "../shared/types.js";
@@ -11,6 +12,10 @@ import {
   isDynamicParallelStep,
   resolveChainTemplates,
   createChainDir,
+  removeChainDir,
+  resolveStepBehavior,
+  buildChainInstructions,
+  type AgentBehaviorDefaults,
 } from "./chain-settings.js";
 import {
   validateChainOutputBindings,
@@ -19,6 +24,13 @@ import {
 } from "./chain-outputs.js";
 import { consumeChainAppendRequests } from "./chain-append.js";
 import { buildWorkflowGraphSnapshot } from "./workflow-graph.js";
+import { validateToolBudget } from "./tool-budget.js";
+
+export interface StepSpawnOptions {
+  toolBudget?: ResolvedToolBudget;
+  isolation?: "worktree";
+  skills?: string[];
+}
 
 export interface ChainExecutionParams {
   steps: ChainStep[];
@@ -27,6 +39,7 @@ export interface ChainExecutionParams {
     agentDef: AgentDefinition,
     prompt: string,
     cwd: string,
+    options?: StepSpawnOptions,
   ) => Promise<{ id: string; record: AgentRecord }>;
   findAgent: (name: string) => AgentDefinition;
   cwd: string;
@@ -43,6 +56,12 @@ export interface ChainExecutionResult {
   workflowGraph?: WorkflowGraphSnapshot;
 }
 
+function agentDefaults(agentDef: AgentDefinition): AgentBehaviorDefaults {
+  return {
+    skills: Array.isArray(agentDef.skills) ? agentDef.skills : undefined,
+  };
+}
+
 export async function executeChain(
   params: ChainExecutionParams,
 ): Promise<ChainExecutionResult> {
@@ -55,6 +74,7 @@ export async function executeChain(
   const templates = resolveChainTemplates(steps);
 
   // 3. Create chain directory
+  const ownedChainDir = !params.chainDir;
   const chainDir = params.chainDir ?? createChainDir(runId);
 
   // 4. Step loop
@@ -85,6 +105,8 @@ export async function executeChain(
 
   let aborted = false;
   let flatIndex = 0;
+  let progressCreated = false;
+  try {
   for (let stepIndex = 0; stepIndex < chainSteps.length; stepIndex++) {
     if (signal?.aborted) {
       aborted = true;
@@ -106,6 +128,20 @@ export async function executeChain(
 
       const promises = step.parallel.map(async (item, i) => {
         const agentDef = findAgent(item.agent);
+
+        // Resolve step behavior and build instructions
+        const behavior = resolveStepBehavior(agentDefaults(agentDef), {
+          output: item.output,
+          outputMode: item.outputMode,
+          reads: item.reads,
+          progress: item.progress,
+          skills: item.skills,
+          model: item.model,
+        });
+        const isFirstProgress = behavior.progress && !progressCreated;
+        if (isFirstProgress) progressCreated = true;
+        const { prefix, suffix } = buildChainInstructions(behavior, chainDir, isFirstProgress);
+
         let taskStr = taskTemplates[i] ?? "{previous}";
         taskStr = taskStr
           .replace(/\{task\}/g, task)
@@ -113,7 +149,20 @@ export async function executeChain(
           .replace(/\{chain_dir\}/g, chainDir);
         taskStr = resolveOutputReferences(taskStr, outputs);
 
-        const { record } = await spawnAndWait(agentDef, taskStr, cwd);
+        const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
+
+        // Build spawn options
+        const parallelOptions: StepSpawnOptions = {};
+        if (item.toolBudget) {
+          const validated = validateToolBudget(item.toolBudget);
+          if (!validated.error && validated.budget) parallelOptions.toolBudget = validated.budget;
+        }
+        if (step.worktree) parallelOptions.isolation = "worktree";
+        if (behavior.skills && behavior.skills.length > 0) {
+          parallelOptions.skills = behavior.skills;
+        }
+
+        const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, parallelOptions);
         const output = record.result ?? "";
         const itemFlatIndex = flatIndex + i;
 
@@ -207,9 +256,30 @@ export async function executeChain(
         items = items.slice(0, step.expand.maxItems);
       }
 
+      // Resolve behavior once (shared across all dynamic items)
+      const dynAgentDef = findAgent(step.parallel.agent);
+      const dynBehavior = resolveStepBehavior(agentDefaults(dynAgentDef), {
+        output: step.parallel.output,
+        outputMode: step.parallel.outputMode,
+        reads: step.parallel.reads,
+        progress: step.parallel.progress,
+        skills: step.parallel.skills,
+      });
+      if (dynBehavior.progress) progressCreated = true;
+      const { prefix: dynPrefix, suffix: dynSuffix } = buildChainInstructions(dynBehavior, chainDir, false);
+
+      // Build spawn options (shared across all dynamic items)
+      const dynOptions: StepSpawnOptions = {};
+      if (step.parallel.toolBudget) {
+        const validated = validateToolBudget(step.parallel.toolBudget);
+        if (!validated.error && validated.budget) dynOptions.toolBudget = validated.budget;
+      }
+      if (dynBehavior.skills && dynBehavior.skills.length > 0) {
+        dynOptions.skills = dynBehavior.skills;
+      }
+
       const dynamicResults = await Promise.all(
         (items as unknown[]).map(async (item) => {
-          const agentDef = findAgent(step.parallel.agent);
           let taskStr = step.parallel.task ?? "{previous}";
           // Replace item template variables
           const itemName = step.expand.item ?? "item";
@@ -229,7 +299,9 @@ export async function executeChain(
             .replace(/\{chain_dir\}/g, chainDir);
           taskStr = resolveOutputReferences(taskStr, outputs);
 
-          const { record } = await spawnAndWait(agentDef, taskStr, cwd);
+          const fullPrompt = [dynPrefix, taskStr, dynSuffix].filter(Boolean).join("\n\n");
+
+          const { record } = await spawnAndWait(dynAgentDef, fullPrompt, cwd, dynOptions);
           return { output: record.result ?? "", status: record.status };
         }),
       );
@@ -269,6 +341,19 @@ export async function executeChain(
       stepStatuses[flatIndex] = { status: "running" };
       emitSnapshot(stepIndex, flatIndex);
 
+      // Resolve step behavior and build instructions
+      const behavior = resolveStepBehavior(agentDefaults(agentDef), {
+        output: seqStep.output,
+        outputMode: seqStep.outputMode,
+        reads: seqStep.reads,
+        progress: seqStep.progress,
+        skills: seqStep.skills,
+        model: seqStep.model,
+      });
+      const isFirstProgress = behavior.progress && !progressCreated;
+      if (isFirstProgress) progressCreated = true;
+      const { prefix, suffix } = buildChainInstructions(behavior, chainDir, isFirstProgress);
+
       let taskStr = (template as string) ?? "{task}";
       taskStr = taskStr
         .replace(/\{task\}/g, task)
@@ -276,7 +361,19 @@ export async function executeChain(
         .replace(/\{chain_dir\}/g, chainDir);
       taskStr = resolveOutputReferences(taskStr, outputs);
 
-      const { record } = await spawnAndWait(agentDef, taskStr, cwd);
+      const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
+
+      // Build spawn options
+      const seqOptions: StepSpawnOptions = {};
+      if (seqStep.toolBudget) {
+        const validated = validateToolBudget(seqStep.toolBudget);
+        if (!validated.error && validated.budget) seqOptions.toolBudget = validated.budget;
+      }
+      if (behavior.skills && behavior.skills.length > 0) {
+        seqOptions.skills = behavior.skills;
+      }
+
+      const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, seqOptions);
       const output = record.result ?? "";
 
       if (record.status === "error") {
@@ -332,4 +429,7 @@ export async function executeChain(
     isError: false,
     workflowGraph: finalSnapshot(),
   };
+  } finally {
+    if (ownedChainDir) removeChainDir(chainDir);
+  }
 }
