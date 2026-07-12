@@ -17,6 +17,7 @@ import { resolvePaths } from "./core/paths.js";
 import { applySettings, loadSettings } from "./core/settings.js";
 import { SmartBatchTracker } from "./core/smart-batch-tracker.js";
 import { registerAgentCommand, registerSubagentTool } from "./core/subagent.js";
+import { registerRpcHandlers } from "./core/rpc.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
@@ -388,6 +389,20 @@ export function registerSubagentsExtension(
     },
   });
 
+  // Captured from ExtensionContext during tool execution for RPC model resolution
+  let capturedModelRegistry: {
+    getAll: () => Array<{ id: string; provider: string; name?: string }>;
+    find: (provider: string, id: string) => { id: string; provider: string } | undefined;
+  } | undefined;
+
+  // RPC handlers for cross-extension communication
+  const rpcDispose = registerRpcHandlers(
+    pi,
+    deps.manager,
+    deps,
+    () => capturedModelRegistry,
+  );
+
   // Acquire TUI context on each tool execution: set UI context on widget and fleet,
   // and age finished agents so they clear from the widget after one turn.
   pi.on("tool_execution_start", (_event, ctx) => {
@@ -395,10 +410,12 @@ export function registerSubagentsExtension(
     deps.chainWidget?.setUICtx(ctx.ui as UICtx);
     deps.fleet?.setUICtx(ctx.ui as unknown as FleetUICtx);
     deps.widget?.onTurnStart();
+    capturedModelRegistry = (ctx as { modelRegistry?: typeof capturedModelRegistry }).modelRegistry;
   });
 
   // Cleanup on session shutdown
   pi.on("session_shutdown", () => {
+    rpcDispose.dispose();
     deps.widget?.dispose();
     deps.chainWidget?.dispose();
     deps.fleet?.dispose();

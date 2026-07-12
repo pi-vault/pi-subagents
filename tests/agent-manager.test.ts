@@ -202,6 +202,34 @@ describe("AgentManager", () => {
   });
 });
 
+describe("thinking passthrough", () => {
+  it("passes thinking to runAgent when provided in SpawnOptions", async () => {
+    const manager = new AgentManager(3);
+    const spy = vi
+      .spyOn(await import("../src/core/agent-runner.js"), "runAgent")
+      .mockResolvedValue({
+        responseText: "done",
+        session: {},
+        aborted: false,
+        steered: false,
+      });
+
+    await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: tmpDir,
+      thinking: "high",
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ thinking: "high" }),
+      expect.anything(),
+    );
+    spy.mockRestore();
+    manager.dispose();
+  });
+});
+
 describe("maxTurns and graceTurns passthrough", () => {
   it("passes maxTurns and graceTurns to runAgent", async () => {
     const manager = new AgentManager(3);

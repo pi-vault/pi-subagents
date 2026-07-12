@@ -65,6 +65,10 @@ function createPi(
     on(event: string, handler: (...args: unknown[]) => unknown) {
       onRegister?.(event, handler);
     },
+    events: {
+      on(_channel: string, _handler: unknown) { return () => {}; },
+      emit(_channel: string, _data: unknown) {},
+    },
     registerTool() {},
     registerCommand(name: string, command: RegisteredCommand) {
       registerCommand?.(name, command);
@@ -163,6 +167,10 @@ describe("subagents extension", () => {
     const registeredTools: string[] = [];
     const pi = {
       on() {},
+      events: {
+        on(_channel: string, _handler: unknown) { return () => {}; },
+        emit(_channel: string, _data: unknown) {},
+      },
       registerTool(def: { name: string }) {
         registeredTools.push(def.name);
       },
@@ -496,6 +504,10 @@ function createPiWithEventCapture() {
       registeredEvents.push(event);
       handlers.set(event, handler);
     },
+    events: {
+      on(_channel: string, _handler: unknown) { return () => {}; },
+      emit(_channel: string, _data: unknown) {},
+    },
     registerTool() {},
     registerCommand() {},
     registerMessageRenderer() {},
@@ -619,6 +631,10 @@ describe("TUI wiring", () => {
 
     const pi = {
       on() {},
+      events: {
+        on(_channel: string, _handler: unknown) { return () => {}; },
+        emit(_channel: string, _data: unknown) {},
+      },
       registerTool(def: { name: string; execute: typeof subagentExecute }) {
         if (def.name === "subagent") subagentExecute = def.execute;
       },
