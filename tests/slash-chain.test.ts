@@ -235,3 +235,144 @@ describe("parseChainExpression", () => {
     ).toThrow(SlashParseError);
   });
 });
+
+import { buildChainSteps } from "../src/core/slash-chain.js";
+import type { AgentDefinition } from "../src/shared/types.js";
+
+// Minimal agent stubs for testing
+const stubAgent = (name: string): AgentDefinition =>
+  ({
+    name,
+    description: name,
+    sourcePath: `/fake/${name}.md`,
+    scope: "project" as const,
+    systemPrompt: "",
+  }) as unknown as AgentDefinition;
+
+const AGENTS = [stubAgent("scout"), stubAgent("reviewer"), stubAgent("writer")];
+
+describe("buildChainSteps", () => {
+  test("builds a linear chain with per-step tasks", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout "scan" -> reviewer "review"',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).not.toBeNull();
+    expect(notifications).toEqual([]);
+    expect(result!.chain).toHaveLength(2);
+    expect(result!.chain[0]).toHaveProperty("agent", "scout");
+    expect(result!.chain[1]).toHaveProperty("agent", "reviewer");
+    expect(result!.task).toBe("scan");
+  });
+
+  test("builds a chain with a parallel group", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout "scan" -> (reviewer "A" | reviewer "B") -> writer "fix"',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).not.toBeNull();
+    expect(notifications).toEqual([]);
+    expect(result!.chain).toHaveLength(3);
+    const group = result!.chain[1]!;
+    expect(group).toHaveProperty("parallel");
+    if ("parallel" in group) {
+      expect(group.parallel).toHaveLength(2);
+    }
+  });
+
+  test("rejects unknown agent", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'ghost "scan" -> reviewer "review"',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).toBeNull();
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatch(/ghost/i);
+  });
+
+  test("rejects chain where first step has no task", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      "scout -> reviewer",
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).toBeNull();
+    expect(notifications.some((m) => /task/i.test(m))).toBe(true);
+  });
+
+  test("rejects parallel group tasks without individual tasks", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout "scan" -> (reviewer | writer)',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).toBeNull();
+    expect(notifications).toHaveLength(1);
+  });
+
+  test("propagates inline metadata onto chain steps", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout[as=ctx,label=Scan,phase=recon] "scan" -> reviewer "review"',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).not.toBeNull();
+    expect(notifications).toEqual([]);
+    const first = result!.chain[0] as unknown as Record<string, unknown>;
+    expect(first.as).toBe("ctx");
+    expect(first.label).toBe("Scan");
+    expect(first.phase).toBe("recon");
+  });
+
+  test("applies count only inside a parallel group", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout[count=2] "scan" -> (reviewer[count=3] "A" | writer "B")',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).not.toBeNull();
+    expect(notifications).toEqual([]);
+    // sequential first step: count not applied
+    expect((result!.chain[0] as unknown as Record<string, unknown>).count).toBeUndefined();
+    const parallel = (result!.chain[1] as unknown as { parallel: Array<Record<string, unknown>> }).parallel;
+    expect(parallel[0]?.count).toBe(3);
+    expect(parallel[1]?.count).toBeUndefined();
+  });
+
+  test("propagates group-level options onto the parallel step", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout "scan" -> (reviewer "A" | writer "B")[concurrency=2,failFast]',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).not.toBeNull();
+    expect(notifications).toEqual([]);
+    const group = result!.chain[1] as unknown as Record<string, unknown>;
+    expect(group.concurrency).toBe(2);
+    expect(group.failFast).toBe(true);
+    expect(group.worktree).toBeUndefined();
+  });
+
+  test("handles single-step parse error gracefully", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout "scan" -> (reviewer "A")',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).toBeNull();
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatch(/at least two/i);
+  });
+});

@@ -17,6 +17,7 @@ import { resolvePaths } from "./core/paths.js";
 import { applySettings, loadSettings } from "./core/settings.js";
 import { SmartBatchTracker } from "./core/smart-batch-tracker.js";
 import { registerAgentCommand, registerSubagentTool } from "./core/subagent.js";
+import { registerChainCommands } from "./core/slash-chain.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import type { JoinMode, NotificationDetails, WidgetMode } from "./shared/types.js";
 import type { AgentActivity } from "./tui/activity.js";
@@ -266,6 +267,7 @@ export function registerSubagentsExtension(
 
   registerSubagentTool(pi, deps);
   registerAgentCommand(pi, deps);
+  registerChainCommands(pi, deps);
 
   // get_subagent_result tool
   pi.registerTool({
