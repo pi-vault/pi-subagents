@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import {
   discoverPromptWorkflows,
   substituteArgs,
+  shellWords,
+  parseRuntimeOptions,
 } from "../src/core/prompt-workflows.js";
 import type { ResolvedPaths } from "../src/shared/types.js";
 
@@ -149,5 +151,78 @@ describe("substituteArgs", () => {
 
   test("handles body with no substitutions", () => {
     expect(substituteArgs("No substitutions here", [])).toBe("No substitutions here");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// shellWords
+// ---------------------------------------------------------------------------
+
+describe("shellWords", () => {
+  test("splits simple words", () => {
+    expect(shellWords("hello world")).toEqual(["hello", "world"]);
+  });
+
+  test("preserves double-quoted strings", () => {
+    expect(shellWords('fix "the bug" now')).toEqual(["fix", "the bug", "now"]);
+  });
+
+  test("preserves single-quoted strings", () => {
+    expect(shellWords("run 'my task' done")).toEqual(["run", "my task", "done"]);
+  });
+
+  test("handles empty input", () => {
+    expect(shellWords("")).toEqual([]);
+  });
+
+  test("collapses multiple spaces", () => {
+    expect(shellWords("a   b    c")).toEqual(["a", "b", "c"]);
+  });
+
+  test("handles mixed quotes", () => {
+    expect(shellWords(`"hello world" 'foo bar'`)).toEqual(["hello world", "foo bar"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseRuntimeOptions
+// ---------------------------------------------------------------------------
+
+describe("parseRuntimeOptions", () => {
+  test("extracts --bg flag", () => {
+    const { args, bg } = parseRuntimeOptions(["task", "--bg"]);
+    expect(args).toEqual(["task"]);
+    expect(bg).toBe(true);
+  });
+
+  test("extracts --async flag", () => {
+    const { bg } = parseRuntimeOptions(["--async"]);
+    expect(bg).toBe(true);
+  });
+
+  test("extracts --subagent override with space", () => {
+    const { args, agentOverride } = parseRuntimeOptions(["task", "--subagent", "myagent"]);
+    expect(args).toEqual(["task"]);
+    expect(agentOverride).toBe("myagent");
+  });
+
+  test("extracts --subagent= override", () => {
+    const { agentOverride } = parseRuntimeOptions(["--subagent=myagent"]);
+    expect(agentOverride).toBe("myagent");
+  });
+
+  test("extracts --subagent: override", () => {
+    const { agentOverride } = parseRuntimeOptions(["--subagent:myagent"]);
+    expect(agentOverride).toBe("myagent");
+  });
+
+  test("passes through remaining args", () => {
+    const { args } = parseRuntimeOptions(["a", "b", "c"]);
+    expect(args).toEqual(["a", "b", "c"]);
+  });
+
+  test("returns defaults when no flags", () => {
+    const result = parseRuntimeOptions([]);
+    expect(result).toEqual({ args: [], agentOverride: undefined, bg: false });
   });
 });

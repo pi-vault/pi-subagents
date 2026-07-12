@@ -10,6 +10,7 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
+  AgentRecord,
   ChainStep,
   ResolvedToolBudget,
   SubagentExecutionDetails,
@@ -274,29 +275,87 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           }
 
           const { executeChain } = await import("./chain-execution.js");
+          const chainRunId = `chain-${Date.now().toString(36)}`;
+
+          const spawnAndWait = async (
+            agentDef: AgentDefinition,
+            prompt: string,
+            stepCwd: string,
+            options?: import("./chain-execution.js").StepSpawnOptions,
+          ) => {
+            let effectiveAgentDef = options?.skills
+              ? { ...agentDef, skills: options.skills }
+              : agentDef;
+            if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+            return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
+              prompt,
+              cwd: stepCwd || effectiveCwd,
+              maxTurns: loadedConfig.config.defaultMaxTurns,
+              toolBudget: options?.toolBudget,
+              isolation: options?.isolation,
+            });
+          };
+
+          const findAgent = (name: string) => {
+            const agent = findAgentByName(discovery, name);
+            if (!agent) throw new Error(`Unknown agent: "${name}"`);
+            return agent;
+          };
+
+          // Background chain dispatch — fire and forget
+          if (params.run_in_background) {
+            const record: AgentRecord = {
+              id: chainRunId,
+              type: "(chain)",
+              description: `Chain: ${(params.task ?? "").slice(0, 60)}`,
+              status: "running",
+              startedAt: Date.now(),
+              toolUses: 0,
+              turnCount: 0,
+              lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+              isBackground: true,
+            };
+            deps.manager.registerExternalRecord(chainRunId, record);
+
+            executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) })
+              .then((chainResult) => {
+                record.status = chainResult.isError ? "error" : "completed";
+                record.result = chainResult.content;
+                record.error = chainResult.isError ? chainResult.content : undefined;
+                record.completedAt = Date.now();
+                record.durationMs = record.completedAt - record.startedAt;
+                deps.chainWidget?.clear();
+                deps.manager.notifyComplete(chainRunId);
+              })
+              .catch((error) => {
+                record.status = "error";
+                record.error = error instanceof Error ? error.message : String(error);
+                record.completedAt = Date.now();
+                record.durationMs = record.completedAt - record.startedAt;
+                deps.chainWidget?.clear();
+                deps.manager.notifyComplete(chainRunId);
+              });
+
+            return {
+              content: [{ type: "text", text: `Chain started in background.\nChain ID: ${chainRunId}` }],
+              isError: false,
+              details: stubDetails({
+                status: "success",
+                agent: "(chain)",
+                task: params.task ?? "",
+                stopReason: "completed",
+              }),
+            };
+          }
+
+          // Foreground chain execution
           const chainResult = await executeChain({
             steps: chainSteps,
             task: params.task ?? "",
-            spawnAndWait: async (agentDef, prompt, stepCwd, options) => {
-              let effectiveAgentDef = options?.skills
-                ? { ...agentDef, skills: options.skills }
-                : agentDef;
-              if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
-              return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
-                prompt,
-                cwd: stepCwd || effectiveCwd,
-                maxTurns: loadedConfig.config.defaultMaxTurns,
-                toolBudget: options?.toolBudget,
-                isolation: options?.isolation,
-              });
-            },
-            findAgent: (name) => {
-              const agent = findAgentByName(discovery, name);
-              if (!agent) throw new Error(`Unknown agent: "${name}"`);
-              return agent;
-            },
+            spawnAndWait,
+            findAgent,
             cwd: effectiveCwd,
-            runId: `chain-${Date.now().toString(36)}`,
+            runId: chainRunId,
             signal,
             onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
           });

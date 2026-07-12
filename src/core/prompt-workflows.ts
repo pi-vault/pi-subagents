@@ -263,9 +263,14 @@ export function registerPromptWorkflowCommands(
 
       const runtime = parseRuntimeOptions(words);
 
+      // Apply --subagent override if provided
+      const effectiveWorkflow = runtime.agentOverride
+        ? { ...workflow, agent: runtime.agentOverride }
+        : workflow;
+
       try {
-        if (workflow.chain) {
-          const chainNames = workflow.chain
+        if (effectiveWorkflow.chain) {
+          const chainNames = effectiveWorkflow.chain
             .split("->")
             .map((s) => s.trim())
             .filter(Boolean);
@@ -273,7 +278,7 @@ export function registerPromptWorkflowCommands(
             const step = workflows.find((w) => w.name === stepName);
             if (!step)
               throw new Error(
-                `Unknown workflow in chain '${workflow.name}': ${stepName}`,
+                `Unknown workflow in chain '${effectiveWorkflow.name}': ${stepName}`,
               );
             return workflowToChainStep(step, runtime.args);
           });
@@ -287,13 +292,13 @@ export function registerPromptWorkflowCommands(
           );
           return;
         }
-        const step = workflowToChainStep(workflow, runtime.args);
+        const step = workflowToChainStep(effectiveWorkflow, runtime.args);
         await executePromptChain(
           pi,
           ctx,
           deps,
           [step],
-          step.task ?? workflow.body,
+          step.task ?? "",
           runtime.bg ?? false,
         );
       } catch (error) {

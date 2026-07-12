@@ -181,9 +181,14 @@ export class ChainClarifyComponent implements Component {
   private renderEditMode(width: number): string[] {
     const th = this.theme;
     const label = this.mode === "edit-task" ? "Task" : "Model";
+    const maxBuf = Math.max(width - 4, 10);
+    const display =
+      this.editBuffer.length > maxBuf
+        ? `…${this.editBuffer.slice(-(maxBuf - 1))}`
+        : this.editBuffer;
     return [
       `${th.fg("accent", `Edit ${label}`)}  ${th.fg("dim", "[Enter] Confirm  [Esc] Cancel")}`,
-      `> ${this.editBuffer}_`,
+      `> ${display}_`,
     ];
   }
 
