@@ -268,12 +268,18 @@ export async function executeChain(
       if (dynBehavior.progress) progressCreated = true;
       const { prefix: dynPrefix, suffix: dynSuffix } = buildChainInstructions(dynBehavior, chainDir, false);
 
+      // Build spawn options (shared across all dynamic items)
+      const dynOptions: StepSpawnOptions = {};
+      if (step.parallel.toolBudget) {
+        const validated = validateToolBudget(step.parallel.toolBudget);
+        if (!validated.error && validated.budget) dynOptions.toolBudget = validated.budget;
+      }
+      if (dynBehavior.skills && dynBehavior.skills.length > 0) {
+        dynOptions.skills = dynBehavior.skills;
+      }
+
       const dynamicResults = await Promise.all(
         (items as unknown[]).map(async (item) => {
-          const agentDef = findAgent(step.parallel.agent);
-
-          const { prefix, suffix } = { prefix: dynPrefix, suffix: dynSuffix };
-
           let taskStr = step.parallel.task ?? "{previous}";
           // Replace item template variables
           const itemName = step.expand.item ?? "item";
@@ -293,19 +299,9 @@ export async function executeChain(
             .replace(/\{chain_dir\}/g, chainDir);
           taskStr = resolveOutputReferences(taskStr, outputs);
 
-          const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
+          const fullPrompt = [dynPrefix, taskStr, dynSuffix].filter(Boolean).join("\n\n");
 
-          // Build spawn options
-          const dynOptions: StepSpawnOptions = {};
-          if (step.parallel.toolBudget) {
-            const validated = validateToolBudget(step.parallel.toolBudget);
-            if (!validated.error && validated.budget) dynOptions.toolBudget = validated.budget;
-          }
-          if (dynBehavior.skills && dynBehavior.skills.length > 0) {
-            dynOptions.skills = dynBehavior.skills;
-          }
-
-          const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, dynOptions);
+          const { record } = await spawnAndWait(dynAgentDef, fullPrompt, cwd, dynOptions);
           return { output: record.result ?? "", status: record.status };
         }),
       );
