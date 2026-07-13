@@ -4,23 +4,39 @@
 
 **Goal:** Validate that resolved agent models are within allowed scope before spawning, preventing unauthorized model use and enforcing organizational policies.
 
-**Architecture:** A pure module `src/core/model-scope.ts` with no side effects. Called in `subagent.ts` after `resolveModel()` succeeds, before `manager.spawn()`. Reads allowlists from `subagents.json` settings and pi's `SettingsManager.getEnabledModels()`.
+**Architecture:** A pure module `src/core/model-scope.ts` with no side effects. Called in `subagent.ts` after `resolveModel()` succeeds, before `manager.spawn()`. Reads allowlists from `subagents.json` settings only (our own `modelScope.allow` patterns). Does NOT depend on pi's `SettingsManager` (which is not available to extensions).
 
-**Tech Stack:** TypeScript, Vitest, TypeBox
+**Tech Stack:** TypeScript, Vitest
 
 **Spec:** `docs/superpowers/specs/2026-07-12-security-memory-intercom-watchdog-design.md` (Phase 2 section)
+
+**Reference:** Aligned with nicobailon-pi-subagents `src/runs/shared/model-scope.ts` approach (pure allowlist, no external settings dependency).
+
+---
+
+## Design Decisions
+
+1. **Self-contained allowlist only** — `modelScope.allow` patterns in our own `subagents.json`. We do NOT read pi's `enabledModels` because `ctx.settingsManager` is not available to extensions, and reading pi's settings files directly adds fragile coupling. Users who want pi's enabled models as the allowlist can duplicate them in `modelScope.allow`.
+
+2. **Source determination** — Explicit vs inherited is based on which layer of `resolveInvocationConfig` the model came from:
+   - If `agentDef.model` is set → it won (priority 1) → `"inherited"` (human-authored frontmatter)
+   - Else if `params.model` is set → it won (priority 2) → `"explicit"` (LLM runtime choice)
+   - Else → defaults or undefined → `"inherited"`
+
+3. **Resolved model ID** — Scope check uses the canonicalized `provider/id` from the model registry when available, falling back to `resolved.model` as-is when no registry exists.
+
+4. **Chain mode coverage** — Scope check applies both to single-agent and chain execution paths. Chain step model overrides from tool params are treated as `"explicit"` (LLM-generated chain definitions).
 
 ---
 
 ## File Map
 
-| File                        | Action | Responsibility                                                                      |
-| --------------------------- | ------ | ----------------------------------------------------------------------------------- |
-| `src/core/model-scope.ts`   | Create | `matchesPattern`, `checkModelScope`, `parseModelScopeConfig`, `readPiEnabledModels` |
-| `tests/model-scope.test.ts` | Create | Unit tests for all functions                                                        |
-| `src/core/settings.ts`      | Modify | Add `modelScope` to `SubagentsSettings` schema                                      |
-| `src/core/subagent.ts`      | Modify | Call `checkModelScope` after model resolution                                       |
-| `src/shared/types.ts`       | Modify | Add `ModelScopeConfig` interface                                                    |
+| File                        | Action | Responsibility                                              |
+| --------------------------- | ------ | ----------------------------------------------------------- |
+| `src/core/model-scope.ts`   | Create | `matchesPattern`, `checkModelScope`, `parseModelScopeConfig` |
+| `tests/model-scope.test.ts` | Create | Unit tests for all functions                                |
+| `src/core/settings.ts`      | Modify | Add `modelScope` to `SubagentsSettings` schema              |
+| `src/core/subagent.ts`      | Modify | Call `checkModelScope` in single-agent and chain paths      |
 
 ---
 
@@ -110,8 +126,7 @@ export function matchesPattern(model: string, pattern: string): boolean {
 
   // Convert glob pattern to regex: escape regex chars, replace * with .*
   const escaped = p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-  const regex = new RegExp(`^${escaped}$`);
-  return regex.test(m);
+  return new RegExp(`^${escaped}$`).test(m);
 }
 ```
 
@@ -280,15 +295,13 @@ describe("checkModelScope", () => {
   };
 
   it("returns undefined (pass) when scope is undefined", () => {
-    expect(
-      checkModelScope("anything", undefined, undefined, "explicit"),
-    ).toBeUndefined();
+    expect(checkModelScope("anything", undefined, "explicit")).toBeUndefined();
   });
 
   it("returns undefined (pass) when enforce is false", () => {
     const noEnforce: ModelScopeConfig = { enforce: false, allow: [] };
     expect(
-      checkModelScope("anything", noEnforce, undefined, "explicit"),
+      checkModelScope("anything", noEnforce, "explicit"),
     ).toBeUndefined();
   });
 
@@ -297,19 +310,11 @@ describe("checkModelScope", () => {
       checkModelScope(
         "anthropic/claude-sonnet-4-20250514",
         scope,
-        undefined,
         "explicit",
       ),
     ).toBeUndefined();
     expect(
-      checkModelScope("openai/gpt-5-turbo", scope, undefined, "explicit"),
-    ).toBeUndefined();
-  });
-
-  it("passes when model is in piEnabledModels set", () => {
-    const piModels = new Set(["deepseek/deepseek-r1"]);
-    expect(
-      checkModelScope("deepseek/deepseek-r1", scope, piModels, "explicit"),
+      checkModelScope("openai/gpt-5-turbo", scope, "explicit"),
     ).toBeUndefined();
   });
 
@@ -317,7 +322,6 @@ describe("checkModelScope", () => {
     const violation = checkModelScope(
       "google/gemini-pro",
       scope,
-      undefined,
       "explicit",
     );
     expect(violation).toBeDefined();
@@ -333,7 +337,6 @@ describe("checkModelScope", () => {
     const violation = checkModelScope(
       "google/gemini-pro",
       scope,
-      undefined,
       "inherited",
     );
     expect(violation).toBeDefined();
@@ -345,17 +348,20 @@ describe("checkModelScope", () => {
       checkModelScope(
         "Anthropic/Claude-Sonnet-4-20250514:thinking",
         scope,
-        undefined,
         "explicit",
       ),
     ).toBeUndefined();
   });
 
-  it("matches pi enabled models case-insensitively", () => {
-    const piModels = new Set(["deepseek/deepseek-r1"]);
-    expect(
-      checkModelScope("DeepSeek/DeepSeek-R1", scope, piModels, "explicit"),
-    ).toBeUndefined();
+  it("returns error when allow list is empty and enforce is true", () => {
+    const emptyScope: ModelScopeConfig = { enforce: true, allow: [] };
+    const violation = checkModelScope(
+      "anthropic/claude-sonnet-4-20250514",
+      emptyScope,
+      "explicit",
+    );
+    expect(violation).toBeDefined();
+    expect(violation!.severity).toBe("error");
   });
 });
 ```
@@ -373,11 +379,14 @@ Add to `src/core/model-scope.ts`:
 /**
  * Pure check: does model pass scope? Returns undefined if allowed,
  * or a ModelScopeViolation if blocked.
+ *
+ * Unlike the original design, this does NOT consult pi's enabledModels
+ * (SettingsManager is not available to extensions). Scope is entirely
+ * defined by our own modelScope.allow patterns.
  */
 export function checkModelScope(
   model: string,
   scope: ModelScopeConfig | undefined,
-  piEnabledModels: Set<string> | undefined,
   source: ModelSource,
 ): ModelScopeViolation | undefined {
   if (!scope || !scope.enforce) return undefined;
@@ -385,16 +394,9 @@ export function checkModelScope(
   // Normalize: lowercase, strip :thinking suffix
   const normalized = model.toLowerCase().replace(/:thinking$/, "");
 
-  // Check our allow patterns
+  // Check allow patterns
   for (const pattern of scope.allow) {
     if (matchesPattern(normalized, pattern)) return undefined;
-  }
-
-  // Check pi's enabledModels (case-insensitive exact match)
-  if (piEnabledModels) {
-    for (const enabled of piEnabledModels) {
-      if (enabled.toLowerCase() === normalized) return undefined;
-    }
   }
 
   // Violation
@@ -403,7 +405,7 @@ export function checkModelScope(
     model,
     severity,
     allowedPatterns: scope.allow,
-    message: `Model "${model}" is not in the allowed scope. Allowed patterns: ${scope.allow.join(", ") || "(none)"}${piEnabledModels?.size ? ` + ${piEnabledModels.size} pi-enabled models` : ""}`,
+    message: `Model "${model}" is not in the allowed scope. Allowed: ${scope.allow.join(", ") || "(none)"}`,
   };
 }
 ```
@@ -422,134 +424,20 @@ git commit -m "feat(model-scope): add checkModelScope enforcement logic"
 
 ---
 
-### Task 4: Implement `readPiEnabledModels`
-
-**Files:**
-
-- Modify: `src/core/model-scope.ts`
-- Modify: `tests/model-scope.test.ts`
-
-- [ ] **Step 1: Write the failing tests**
-
-Add to `tests/model-scope.test.ts`:
-
-```typescript
-import { readPiEnabledModels } from "../src/core/model-scope.js";
-
-describe("readPiEnabledModels", () => {
-  it("returns undefined when settingsManager returns undefined", () => {
-    const mockSM = { getEnabledModels: () => undefined };
-    expect(readPiEnabledModels(mockSM as any, "/tmp")).toBeUndefined();
-  });
-
-  it("returns Set from settingsManager enabledModels", () => {
-    const mockSM = {
-      getEnabledModels: () => [
-        "anthropic/claude-sonnet-4-20250514",
-        "openai/gpt-5",
-      ],
-    };
-    const result = readPiEnabledModels(mockSM as any, "/tmp");
-    expect(result).toBeInstanceOf(Set);
-    expect(result!.has("anthropic/claude-sonnet-4-20250514")).toBe(true);
-    expect(result!.has("openai/gpt-5")).toBe(true);
-  });
-
-  it("strips :thinking suffix and lowercases entries", () => {
-    const mockSM = {
-      getEnabledModels: () => ["Anthropic/Claude-Sonnet-4:thinking"],
-    };
-    const result = readPiEnabledModels(mockSM as any, "/tmp");
-    expect(result!.has("anthropic/claude-sonnet-4")).toBe(true);
-  });
-
-  it("filters out entries without provider/id format", () => {
-    const mockSM = {
-      getEnabledModels: () => ["anthropic/*", "openai/gpt-5", "sonnet"],
-    };
-    const result = readPiEnabledModels(mockSM as any, "/tmp");
-    // Glob patterns and bare names are excluded — only exact provider/id kept
-    expect(result!.has("openai/gpt-5")).toBe(true);
-    expect(result!.size).toBe(1);
-  });
-
-  it("returns undefined when settingsManager is undefined (fallback disabled)", () => {
-    expect(readPiEnabledModels(undefined, "/tmp")).toBeUndefined();
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pnpm test -- tests/model-scope.test.ts`
-Expected: FAIL — `readPiEnabledModels` not exported
-
-- [ ] **Step 3: Implement `readPiEnabledModels`**
-
-Add to `src/core/model-scope.ts`:
-
-```typescript
-interface SettingsManagerLike {
-  getEnabledModels(): string[] | undefined;
-}
-
-/**
- * Read pi's enabledModels via SettingsManager (preferred) or return undefined.
- * Filters to exact provider/modelId entries only (no glob patterns).
- * Strips :thinking suffixes and lowercases.
- */
-export function readPiEnabledModels(
-  settingsManager: SettingsManagerLike | undefined,
-  _cwd: string,
-): Set<string> | undefined {
-  if (!settingsManager) return undefined;
-
-  const raw = settingsManager.getEnabledModels();
-  if (!raw || raw.length === 0) return undefined;
-
-  const set = new Set<string>();
-  for (const entry of raw) {
-    // Only keep exact provider/modelId entries (must contain exactly one /)
-    const slashIdx = entry.indexOf("/");
-    if (slashIdx <= 0 || slashIdx === entry.length - 1) continue;
-    // Reject glob patterns (contain *)
-    if (entry.includes("*")) continue;
-    // Normalize: lowercase, strip :thinking
-    const normalized = entry.toLowerCase().replace(/:thinking$/, "");
-    set.add(normalized);
-  }
-
-  return set.size > 0 ? set : undefined;
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `pnpm test -- tests/model-scope.test.ts`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/core/model-scope.ts tests/model-scope.test.ts
-git commit -m "feat(model-scope): add readPiEnabledModels with SettingsManager API"
-```
-
----
-
-### Task 5: Add `modelScope` to settings schema
+### Task 4: Add `modelScope` to settings schema
 
 **Files:**
 
 - Modify: `src/core/settings.ts`
 - Modify: `tests/settings.test.ts`
 
-- [ ] **Step 1: Add modelScope to SubagentsSettings interface**
+- [ ] **Step 1: Add modelScope to SubagentsSettings interface and sanitize**
 
-In `src/core/settings.ts`, add to the `SubagentsSettings` interface:
+In `src/core/settings.ts`:
 
 ```typescript
 import type { ModelScopeConfig } from "./model-scope.js";
+import { parseModelScopeConfig } from "./model-scope.js";
 
 export interface SubagentsSettings {
   maxConcurrent?: number;
@@ -560,118 +448,301 @@ export interface SubagentsSettings {
 }
 ```
 
-- [ ] **Step 2: Add sanitization for modelScope in `sanitize` function**
-
-Add to the `sanitize` function in `src/core/settings.ts`:
+Add to the `sanitize` function, after the `fleetView` check:
 
 ```typescript
-import { parseModelScopeConfig } from "./model-scope.js";
-
-// Inside sanitize(), after existing checks:
 if (r.modelScope !== undefined) {
   const parsed = parseModelScopeConfig(r.modelScope);
   if (parsed) out.modelScope = parsed;
 }
 ```
 
-- [ ] **Step 3: Run existing settings tests**
+- [ ] **Step 2: Add tests for modelScope in settings**
+
+Add to `tests/settings.test.ts`:
+
+```typescript
+it("sanitize preserves valid modelScope", () => {
+  writeFileSync(join(piDir, "subagents.json"), JSON.stringify({
+    modelScope: { enforce: true, allow: ["anthropic/*"] },
+  }));
+  const settings = loadSettings(projectDir);
+  expect(settings.modelScope).toEqual({ enforce: true, allow: ["anthropic/*"] });
+});
+
+it("sanitize strips invalid modelScope", () => {
+  writeFileSync(join(piDir, "subagents.json"), JSON.stringify({
+    modelScope: { enforce: "yes", allow: [] },
+  }));
+  const settings = loadSettings(projectDir);
+  expect(settings.modelScope).toBeUndefined();
+});
+
+it("sanitize strips non-object modelScope", () => {
+  writeFileSync(join(piDir, "subagents.json"), JSON.stringify({
+    modelScope: "invalid",
+  }));
+  const settings = loadSettings(projectDir);
+  expect(settings.modelScope).toBeUndefined();
+});
+```
+
+- [ ] **Step 3: Run settings tests**
 
 Run: `pnpm test -- tests/settings.test.ts`
-Expected: All existing tests still pass
+Expected: All tests pass (existing + new)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/settings.ts
+git add src/core/settings.ts tests/settings.test.ts
 git commit -m "feat(model-scope): add modelScope to subagents settings"
 ```
 
 ---
 
-### Task 6: Integrate model scope check into subagent.ts
+### Task 5: Integrate model scope check into single-agent path
+
+**Files:**
+
+- Modify: `src/core/subagent.ts`
+- Modify: `tests/model-scope.test.ts`
+
+- [ ] **Step 1: Add imports to subagent.ts**
+
+Add at the top of `src/core/subagent.ts`:
+
+```typescript
+import { checkModelScope } from "./model-scope.js";
+import { loadSettings } from "./settings.js";
+```
+
+- [ ] **Step 2: Add model scope check after registry validation**
+
+In the single-agent path of `execute()`, after the existing model registry validation block (after line 458), add the scope check. The key insight: capture the resolved model ID from the registry match, and determine source based on which config layer provided the model.
+
+Replace the existing model validation block (lines 411-458) with an expanded version that:
+1. Captures the resolved `provider/id` when available
+2. Adds scope enforcement after validation passes
+
+```typescript
+// Validate model string against registry (if available)
+let resolvedModelId = resolved.model; // fallback: use as-is
+if (resolved.model) {
+  const registry = (
+    ctx as {
+      modelRegistry?: {
+        listModels?: () => Array<{
+          id: string;
+          provider: string;
+          name?: string;
+        }>;
+      };
+    }
+  ).modelRegistry;
+  if (registry?.listModels) {
+    const match = resolveModel(resolved.model, registry.listModels());
+    if (!match) {
+      const available = registry
+        .listModels()
+        .map((m) => `${m.provider}/${m.id}`)
+        .join(", ");
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Unknown model: "${resolved.model}". Available models: ${available}`,
+          },
+        ],
+        isError: true,
+        details: {
+          status: "error" as const,
+          agent: params.agent,
+          task: params.task,
+          sourcePath: "",
+          cwd: effectiveCwd,
+          maxTurns: 0,
+          durationMs: 0,
+          childSessionDir: "",
+          childSessionPath: "",
+          model: resolved.model,
+          stopReason: "error",
+          exitCode: null,
+          stderr: `Unknown model: "${resolved.model}". Available models: ${available}`,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+          recentToolActivity: [],
+        },
+      };
+    }
+    // Capture canonical provider/id for scope checking
+    resolvedModelId = `${match.provider}/${match.id}`;
+  }
+}
+
+// Model scope enforcement
+if (resolvedModelId) {
+  const settings = loadSettings(effectiveCwd);
+  if (settings.modelScope) {
+    // Determine source: did the model come from tool params (LLM choice) or config?
+    // resolveInvocationConfig priority: agentDef.model > params.model > defaults.model
+    const source = agentDef.model
+      ? "inherited" as const
+      : params.model
+        ? "explicit" as const
+        : "inherited" as const;
+    const violation = checkModelScope(resolvedModelId, settings.modelScope, source);
+    if (violation && violation.severity === "error") {
+      return {
+        content: [{ type: "text", text: violation.message }],
+        isError: true,
+        details: stubDetails({
+          status: "error",
+          agent: agentDef.name,
+          task: params.task,
+          model: resolved.model,
+          stopReason: "error",
+          stderr: violation.message,
+        }),
+      };
+    }
+    if (violation && violation.severity === "warn") {
+      pi.sendMessage({
+        customType: "model_scope_warning",
+        content: violation.message,
+        display: true,
+      });
+    }
+  }
+}
+```
+
+Note: `pi` is available via closure from `registerSubagentTool(pi, deps)`.
+
+- [ ] **Step 3: Write integration tests**
+
+Add to `tests/model-scope.test.ts`:
+
+```typescript
+describe("integration: model scope source determination", () => {
+  it("explicit source: model from tool params when no agent model", () => {
+    // When agentDef.model is undefined and params.model is set,
+    // source should be "explicit" → violation is "error"
+    const violation = checkModelScope(
+      "google/gemini-pro",
+      { enforce: true, allow: ["anthropic/*"] },
+      "explicit",
+    );
+    expect(violation?.severity).toBe("error");
+  });
+
+  it("inherited source: model from agent frontmatter", () => {
+    // When agentDef.model is set (takes priority),
+    // source should be "inherited" → violation is "warn"
+    const violation = checkModelScope(
+      "google/gemini-pro",
+      { enforce: true, allow: ["anthropic/*"] },
+      "inherited",
+    );
+    expect(violation?.severity).toBe("warn");
+  });
+
+  it("no violation when model matches scope", () => {
+    expect(
+      checkModelScope(
+        "anthropic/claude-sonnet-4-20250514",
+        { enforce: true, allow: ["anthropic/*"] },
+        "explicit",
+      ),
+    ).toBeUndefined();
+  });
+});
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `pnpm test -- tests/model-scope.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core/subagent.ts tests/model-scope.test.ts
+git commit -m "feat(model-scope): enforce model scope in single-agent path"
+```
+
+---
+
+### Task 6: Integrate model scope check into chain execution path
 
 **Files:**
 
 - Modify: `src/core/subagent.ts`
 
-- [ ] **Step 1: Add model scope check after resolveModel**
+- [ ] **Step 1: Add scope check in chain's spawnAndWait closure**
 
-In `src/core/subagent.ts`, after the model is resolved (around where `resolveModel` is called), add:
+In `subagent.ts`, the chain mode `spawnAndWait` closure (around lines 277-293) needs a scope check before calling `deps.manager.spawnAndWait`. The model in chain steps comes from `options?.model` (step-level override) or `agentDef.model` (agent frontmatter).
 
-```typescript
-import { checkModelScope, readPiEnabledModels } from "./model-scope.js";
-import { loadSettings } from "./settings.js";
-
-// After resolveModel() succeeds and before manager.spawn():
-const settings = loadSettings(effectiveCwd);
-if (settings.modelScope) {
-  const piModels = readPiEnabledModels(
-    (ctx as any).session?.settingsManager,
-    effectiveCwd,
-  );
-  const source = params.model ? "explicit" : "inherited";
-  const violation = checkModelScope(
-    resolvedModelId, // the provider/id string after resolution
-    settings.modelScope,
-    piModels,
-    source as any,
-  );
-  if (violation && violation.severity === "error") {
-    return {
-      content: [{ type: "text", text: violation.message }],
-      isError: true,
-      details: stubDetails({ status: "error", agent: agentDef?.name ?? "" }),
-    };
-  }
-  if (violation && violation.severity === "warn") {
-    pi.sendMessage({
-      customType: "model_scope_warning",
-      content: violation.message,
-      display: true,
-    });
-  }
-}
-```
-
-Note: The exact location depends on where the model string is available. Find the point after `resolveModel()` returns a `provider/id` string and before `deps.manager.spawnAndWait()` or `deps.manager.spawnBackground()` is called.
-
-- [ ] **Step 2: Write integration test**
-
-Add to `tests/model-scope.test.ts`:
+Modify the `spawnAndWait` closure inside the chain mode block:
 
 ```typescript
-describe("integration: subagent model scope rejection", () => {
-  it("blocks explicit out-of-scope model with error", () => {
-    // This is validated by the unit tests on checkModelScope returning "error"
-    // and the subagent.ts code path returning isError: true.
-    // Full integration requires mocking the tool execution — covered by
-    // the existing subagent.test.ts patterns if needed.
-    const violation = checkModelScope(
-      "google/gemini-pro",
-      { enforce: true, allow: ["anthropic/*"] },
-      undefined,
-      "explicit",
-    );
-    expect(violation?.severity).toBe("error");
+const spawnAndWait = async (
+  agentDef: AgentDefinition,
+  prompt: string,
+  stepCwd: string,
+  options?: import("./chain-execution.js").StepSpawnOptions,
+) => {
+  let effectiveAgentDef = options?.skills
+    ? { ...agentDef, skills: options.skills }
+    : agentDef;
+  if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+
+  // Model scope enforcement for chain steps
+  const stepModel = options?.model ?? agentDef.model;
+  if (stepModel) {
+    const settings = loadSettings(effectiveCwd);
+    if (settings.modelScope) {
+      // Chain step model overrides from tool params are LLM-generated → "explicit"
+      // Agent frontmatter models are human-configured → "inherited"
+      const source = options?.model ? "explicit" as const : "inherited" as const;
+      const violation = checkModelScope(stepModel, settings.modelScope, source);
+      if (violation && violation.severity === "error") {
+        throw new Error(violation.message);
+      }
+      if (violation && violation.severity === "warn") {
+        pi.sendMessage({
+          customType: "model_scope_warning",
+          content: `[chain step] ${violation.message}`,
+          display: true,
+        });
+      }
+    }
+  }
+
+  return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
+    prompt,
+    cwd: stepCwd || effectiveCwd,
+    maxTurns: loadedConfig.config.defaultMaxTurns,
+    toolBudget: options?.toolBudget,
+    isolation: options?.isolation,
   });
-});
+};
 ```
 
-- [ ] **Step 3: Run full test suite**
+- [ ] **Step 2: Run full test suite**
 
 Run: `pnpm test`
 Expected: All tests pass
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src/core/subagent.ts tests/model-scope.test.ts
-git commit -m "feat(model-scope): enforce model scope in subagent tool"
+git add src/core/subagent.ts
+git commit -m "feat(model-scope): enforce model scope in chain execution path"
 ```
 
 ---
 
-### Task 7: Typecheck and lint
+### Task 7: Typecheck, lint, and final verification
 
 - [ ] **Step 1: Run typecheck**
 
@@ -681,16 +752,30 @@ Expected: No errors
 - [ ] **Step 2: Run lint and format**
 
 Run: `pnpm lint`
-Expected: No errors
+Expected: No errors (fix any issues)
 
 - [ ] **Step 3: Run full check**
 
 Run: `pnpm check`
 Expected: All pass
 
-- [ ] **Step 4: Final commit (if any fixes)**
+- [ ] **Step 4: Final commit (if any fixes needed)**
 
 ```bash
 git add -A
 git commit -m "chore: fix lint/type issues from model-scope integration"
 ```
+
+---
+
+## Differences from Original Plan
+
+| Aspect | Original | Revised | Reason |
+|--------|----------|---------|--------|
+| Pi enabledModels | `readPiEnabledModels` via `settingsManager` | Removed entirely | `ctx.settingsManager` not available to extensions |
+| `checkModelScope` signature | 4 params (model, scope, piModels, source) | 3 params (model, scope, source) | No piModels needed |
+| Source determination | `params.model ? "explicit" : "inherited"` | Checks `agentDef.model` first | `resolveInvocationConfig` priority: frontmatter > params |
+| Resolved model ID | Assumed `resolvedModelId` exists | Captured from registry match | Variable didn't exist; now explicitly created |
+| Chain enforcement | Not addressed | Task 6 adds scope check in chain path | Gap in original plan |
+| `src/shared/types.ts` | Listed in file map but never modified | Removed from file map | Types live in `model-scope.ts` |
+| Task count | 7 tasks | 7 tasks | Reorganized: Task 4 removed (readPiEnabledModels), replaced with chain integration |

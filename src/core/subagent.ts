@@ -16,6 +16,8 @@ import type {
   SubagentToolInput,
 } from "../shared/types.js";
 import { validateToolBudget } from "./tool-budget.js";
+import { checkModelScope, type ModelSource } from "./model-scope.js";
+import { loadSettings } from "./settings.js";
 import {
   renderSubagentCall,
   renderSubagentResult,
@@ -273,6 +275,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
 
           const { executeChain } = await import("./chain-execution.js");
           const chainRunId = `chain-${Date.now().toString(36)}`;
+          const chainSettings = loadSettings(effectiveCwd);
 
           const spawnAndWait = async (
             agentDef: AgentDefinition,
@@ -284,6 +287,26 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               ? { ...agentDef, skills: options.skills }
               : agentDef;
             if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+
+            // Model scope enforcement for chain steps
+            // Note: uses raw model string; chain steps don't canonicalize through
+            // ctx.modelRegistry (registry resolution happens inside spawnAndWait).
+            const stepModel = options?.model ?? agentDef.model;
+            if (stepModel && chainSettings.modelScope) {
+              const source: ModelSource = options?.model ? "explicit" : "inherited";
+              const violation = checkModelScope(stepModel, chainSettings.modelScope, source);
+              if (violation && violation.severity === "error") {
+                throw new Error(violation.message);
+              }
+              if (violation && violation.severity === "warn") {
+                pi.sendMessage({
+                  customType: "model_scope_warning",
+                  content: `[chain step] ${violation.message}`,
+                  display: true,
+                });
+              }
+            }
+
             return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
               prompt,
               cwd: stepCwd || effectiveCwd,
@@ -409,6 +432,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
         );
 
         // Validate model string against registry (if available)
+        let resolvedModelId = resolved.model;
         if (resolved.model) {
           const registry = (
             ctx as {
@@ -454,6 +478,41 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                   recentToolActivity: [],
                 },
               };
+            }
+            resolvedModelId = `${match.provider}/${match.id}`;
+          }
+        }
+
+        // Model scope enforcement
+        if (resolvedModelId) {
+          const settings = loadSettings(effectiveCwd);
+          if (settings.modelScope) {
+            const source: ModelSource = agentDef.model
+              ? "inherited"
+              : params.model
+                ? "explicit"
+                : "inherited";
+            const violation = checkModelScope(resolvedModelId, settings.modelScope, source);
+            if (violation && violation.severity === "error") {
+              return {
+                content: [{ type: "text", text: violation.message }],
+                isError: true,
+                details: stubDetails({
+                  status: "error",
+                  agent: agentDef.name,
+                  task: params.task,
+                  model: resolved.model,
+                  stopReason: "error",
+                  stderr: violation.message,
+                }),
+              };
+            }
+            if (violation && violation.severity === "warn") {
+              pi.sendMessage({
+                customType: "model_scope_warning",
+                content: violation.message,
+                display: true,
+              });
             }
           }
         }

@@ -143,4 +143,28 @@ describe("settings", () => {
     applySettings({ maxConcurrent: 4 }, appliers);
     expect(called).toBe(false);
   });
+
+  it("sanitize preserves valid modelScope", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({
+      modelScope: { enforce: true, allow: ["anthropic/*"] },
+    }));
+    const settings = loadSettings(projectDir);
+    expect(settings.modelScope).toEqual({ enforce: true, allow: ["anthropic/*"] });
+  });
+
+  it("sanitize strips invalid modelScope (enforce not boolean)", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({
+      modelScope: { enforce: "yes", allow: [] },
+    }));
+    const settings = loadSettings(projectDir);
+    expect(settings.modelScope).toBeUndefined();
+  });
+
+  it("sanitize strips non-object modelScope", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({
+      modelScope: "invalid",
+    }));
+    const settings = loadSettings(projectDir);
+    expect(settings.modelScope).toBeUndefined();
+  });
 });

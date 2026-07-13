@@ -2,12 +2,15 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { JoinMode, WidgetMode } from "../shared/types.js";
+import type { ModelScopeConfig } from "./model-scope.js";
+import { parseModelScopeConfig } from "./model-scope.js";
 
 export interface SubagentsSettings {
   maxConcurrent?: number;
   defaultJoinMode?: JoinMode;
   widgetMode?: WidgetMode;
   fleetView?: boolean;
+  modelScope?: ModelScopeConfig;
 }
 
 export interface SettingsAppliers {
@@ -40,6 +43,10 @@ function sanitize(raw: unknown): SubagentsSettings {
   }
   if (typeof r.fleetView === "boolean") {
     out.fleetView = r.fleetView;
+  }
+  if (r.modelScope !== undefined) {
+    const parsed = parseModelScopeConfig(r.modelScope);
+    if (parsed) out.modelScope = parsed;
   }
   return out;
 }
