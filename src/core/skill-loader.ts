@@ -1,8 +1,9 @@
 import type { Dirent } from "node:fs";
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { isSymlink, isUnsafeName, safeReadFile } from "./safe-fs.js";
 
 export interface PreloadedSkill {
   name: string;
@@ -34,31 +35,7 @@ function getSearchRoots(cwd: string): string[] {
   ];
 }
 
-function isUnsafeName(name: string): boolean {
-  if (!name || name.length > 128) return true;
-  if (name.startsWith(".")) return true;
-  if (/[/\\]/.test(name)) return true;
-  if (name.includes("..")) return true;
-  if (/\s/.test(name)) return true;
-  return false;
-}
 
-function isSymlink(filePath: string): boolean {
-  try {
-    return lstatSync(filePath).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-function safeReadFile(filePath: string): string | undefined {
-  if (isSymlink(filePath)) return undefined;
-  try {
-    return readFileSync(filePath, "utf-8");
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * BFS walk over a skill root directory. Visits flat .md files at the root level,
