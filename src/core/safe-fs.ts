@@ -1,3 +1,14 @@
+/**
+ * Safe filesystem helpers for protecting agent/chain/skill discovery from
+ * path traversal and symlink attacks.
+ *
+ * TOCTOU note: Both safeReadFile and resolveContained perform check-then-use
+ * sequences (lstat → read, exists → lstat). A local attacker with precise
+ * timing could swap a regular file for a symlink between checks. This is an
+ * accepted limitation — the same pattern is used by all reference
+ * implementations, and full mitigation requires platform-specific fd-level
+ * APIs (O_NOFOLLOW) that are out of scope for this module.
+ */
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 

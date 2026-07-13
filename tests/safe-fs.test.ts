@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import {
@@ -114,6 +114,11 @@ describe("resolveContained", () => {
   const nested = join(tmp, "sub", "deep");
   mkdirSync(nested, { recursive: true });
 
+  it("returns normalized root when no segments provided", () => {
+    const result = resolveContained(tmp);
+    expect(result).toBe(resolve(tmp));
+  });
+
   it("resolves a simple relative path within root", () => {
     const result = resolveContained(tmp, "sub", "deep");
     expect(result).toBe(join(tmp, "sub", "deep"));
@@ -138,6 +143,10 @@ describe("resolveContained", () => {
 
   it("returns undefined when segment is ..", () => {
     expect(resolveContained(tmp, "..", "other")).toBeUndefined();
+  });
+
+  it("returns undefined when segment is .", () => {
+    expect(resolveContained(tmp, ".", "other")).toBeUndefined();
   });
 
   it("returns undefined for segment with embedded separator", () => {
