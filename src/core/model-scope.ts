@@ -35,7 +35,7 @@ export function checkModelScope(
   scope: ModelScopeConfig | undefined,
   source: ModelSource,
 ): ModelScopeViolation | undefined {
-  if (!scope || !scope.enforce) return undefined;
+  if (!scope?.enforce) return undefined;
 
   // Normalize: lowercase, strip :thinking suffix
   const normalized = model.toLowerCase().replace(/:thinking$/, "");
