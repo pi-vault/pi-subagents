@@ -16,6 +16,8 @@ import type {
   SubagentToolInput,
 } from "../shared/types.js";
 import { validateToolBudget } from "./tool-budget.js";
+import { checkModelScope } from "./model-scope.js";
+import { loadSettings } from "./settings.js";
 import {
   renderSubagentCall,
   renderSubagentResult,
@@ -409,6 +411,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
         );
 
         // Validate model string against registry (if available)
+        let resolvedModelId = resolved.model;
         if (resolved.model) {
           const registry = (
             ctx as {
@@ -454,6 +457,41 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                   recentToolActivity: [],
                 },
               };
+            }
+            resolvedModelId = `${match.provider}/${match.id}`;
+          }
+        }
+
+        // Model scope enforcement
+        if (resolvedModelId) {
+          const settings = loadSettings(effectiveCwd);
+          if (settings.modelScope) {
+            const source = agentDef.model
+              ? "inherited" as const
+              : params.model
+                ? "explicit" as const
+                : "inherited" as const;
+            const violation = checkModelScope(resolvedModelId, settings.modelScope, source);
+            if (violation && violation.severity === "error") {
+              return {
+                content: [{ type: "text", text: violation.message }],
+                isError: true,
+                details: stubDetails({
+                  status: "error",
+                  agent: agentDef.name,
+                  task: params.task,
+                  model: resolved.model,
+                  stopReason: "error",
+                  stderr: violation.message,
+                }),
+              };
+            }
+            if (violation && violation.severity === "warn") {
+              pi.sendMessage({
+                customType: "model_scope_warning",
+                content: violation.message,
+                display: true,
+              });
             }
           }
         }
