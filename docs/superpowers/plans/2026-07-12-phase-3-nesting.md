@@ -83,7 +83,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 ```
 
-- [ ] **Step 2: Pass `customTools` to `createAgentSession`**
+- [ ] **Step 2: Pass `customTools` to `createAgentSession` (with allowlist fix)**
 
 In the `runAgent` function, find the `createAgentSession` call (around line 253). Change:
 
@@ -104,18 +104,30 @@ To:
 
 ```typescript
 const customTools = (options.customTools ?? []) as ToolDefinition[];
+// Custom tool names must be in the allowed tools list, otherwise
+// createAgentSession's internal allowlist filter silently drops them.
+const effectiveAllowedTools = customTools.length > 0
+  ? [...allowedTools, ...customTools.map((t) => t.name)]
+  : allowedTools;
 const { session } = await createAgentSession({
   cwd: options.cwd,
   agentDir,
   sessionManager,
   settingsManager,
   model,
-  tools: allowedTools,
+  tools: effectiveAllowedTools,
   resourceLoader: loader,
   ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}),
   ...(customTools.length > 0 ? { customTools } : {}),
 });
 ```
+
+> **Why the allowlist fix?** The pi-coding-agent SDK filters ALL registered
+> tools (including `customTools`) through the `tools` allowlist passed to
+> `createAgentSession`. Without adding the custom tool names to the list,
+> the injected "subagent" and "get\_subagent\_result" tools would be
+> silently dropped. Verified against `pi-coding-agent` source:
+> `AgentSession._buildRuntime()` → `isAllowedTool()` filter.
 
 - [ ] **Step 3: Verify it compiles**
 
