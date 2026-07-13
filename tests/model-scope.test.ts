@@ -335,4 +335,36 @@ describe("subagent tool: model scope enforcement", () => {
       expect(result.content[0]?.text).not.toContain("not in the allowed scope");
     }
   });
+
+  it("blocks out-of-scope model in chain step", async () => {
+    const { execute } = setupScopeTest({
+      enforce: true,
+      allow: ["anthropic/*"],
+    });
+
+    const result = await execute({
+      task: "pipeline",
+      chain: [{ agent: "Scout", task: "explore", model: "google/gemini-pro" }],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("not in the allowed scope");
+  });
+
+  it("allows in-scope model in chain step", async () => {
+    const { execute } = setupScopeTest({
+      enforce: true,
+      allow: ["anthropic/*"],
+    });
+
+    const result = await execute({
+      task: "pipeline",
+      chain: [{ agent: "Scout", task: "explore", model: "anthropic/claude-sonnet-4-20250514" }],
+    });
+
+    // Should not have a scope error
+    if (result.isError) {
+      expect(result.content[0]?.text).not.toContain("not in the allowed scope");
+    }
+  });
 });

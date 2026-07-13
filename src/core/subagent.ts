@@ -286,6 +286,27 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               ? { ...agentDef, skills: options.skills }
               : agentDef;
             if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+
+            // Model scope enforcement for chain steps
+            const stepModel = options?.model ?? agentDef.model;
+            if (stepModel) {
+              const settings = loadSettings(effectiveCwd);
+              if (settings.modelScope) {
+                const source = options?.model ? "explicit" as const : "inherited" as const;
+                const violation = checkModelScope(stepModel, settings.modelScope, source);
+                if (violation && violation.severity === "error") {
+                  throw new Error(violation.message);
+                }
+                if (violation && violation.severity === "warn") {
+                  pi.sendMessage({
+                    customType: "model_scope_warning",
+                    content: `[chain step] ${violation.message}`,
+                    display: true,
+                  });
+                }
+              }
+            }
+
             return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
               prompt,
               cwd: stepCwd || effectiveCwd,
