@@ -22,7 +22,7 @@ export function matchesPattern(model: string, pattern: string): boolean {
   const p = pattern.toLowerCase();
 
   // Convert glob pattern to regex: escape regex chars, replace * with .*
-  const escaped = p.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  const escaped = p.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`).test(m);
 }
 

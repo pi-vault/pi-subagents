@@ -61,6 +61,11 @@ describe("matchesPattern", () => {
     ).toBe(true);
   });
 
+  it("treats ? as literal character, not regex quantifier", () => {
+    expect(matchesPattern("anthropic/claude?", "anthropic/claude?")).toBe(true);
+    expect(matchesPattern("anthropic/claud", "anthropic/claude?")).toBe(false);
+  });
+
   it("empty pattern matches nothing", () => {
     expect(matchesPattern("anthropic/anything", "")).toBe(false);
   });

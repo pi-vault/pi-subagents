@@ -275,6 +275,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
 
           const { executeChain } = await import("./chain-execution.js");
           const chainRunId = `chain-${Date.now().toString(36)}`;
+          const chainSettings = loadSettings(effectiveCwd);
 
           const spawnAndWait = async (
             agentDef: AgentDefinition,
@@ -288,22 +289,21 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
 
             // Model scope enforcement for chain steps
+            // Note: uses raw model string; chain steps don't canonicalize through
+            // ctx.modelRegistry (registry resolution happens inside spawnAndWait).
             const stepModel = options?.model ?? agentDef.model;
-            if (stepModel) {
-              const settings = loadSettings(effectiveCwd);
-              if (settings.modelScope) {
-                const source = options?.model ? "explicit" as const : "inherited" as const;
-                const violation = checkModelScope(stepModel, settings.modelScope, source);
-                if (violation && violation.severity === "error") {
-                  throw new Error(violation.message);
-                }
-                if (violation && violation.severity === "warn") {
-                  pi.sendMessage({
-                    customType: "model_scope_warning",
-                    content: `[chain step] ${violation.message}`,
-                    display: true,
-                  });
-                }
+            if (stepModel && chainSettings.modelScope) {
+              const source = options?.model ? "explicit" as const : "inherited" as const;
+              const violation = checkModelScope(stepModel, chainSettings.modelScope, source);
+              if (violation && violation.severity === "error") {
+                throw new Error(violation.message);
+              }
+              if (violation && violation.severity === "warn") {
+                pi.sendMessage({
+                  customType: "model_scope_warning",
+                  content: `[chain step] ${violation.message}`,
+                  display: true,
+                });
               }
             }
 
