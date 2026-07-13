@@ -505,6 +505,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           parentSignal: signal,
           currentDepth: 0,
           toolBudget: resolvedBudget,
+          _deps: deps,
         };
 
         // Resume path
