@@ -35,8 +35,6 @@ function getSearchRoots(cwd: string): string[] {
   ];
 }
 
-
-
 /**
  * BFS walk over a skill root directory. Visits flat .md files at the root level,
  * then descends into subdirectories. Directories containing SKILL.md are skills;
