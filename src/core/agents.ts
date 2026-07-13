@@ -2,11 +2,11 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { isUnsafeName, safeReadFile } from "./safe-fs.js";
 import {
   normalizeOptionalString,
   parseAgentContent,
@@ -77,8 +77,21 @@ function discoverAgentsFromDirectory(directory: string): AgentDiscoveryResult {
     .sort((left, right) => left.localeCompare(right));
 
   for (const fileName of fileNames) {
+    const baseName = fileName.slice(0, -3);
+    if (isUnsafeName(baseName)) {
+      diagnostics.push({
+        path: resolve(directory, fileName),
+        reason: "unsafe filename",
+      });
+      continue;
+    }
     const filePath = resolve(directory, fileName);
-    const parsed = parseAgentContent(filePath, readFileSync(filePath, "utf8"));
+    const content = safeReadFile(filePath);
+    if (content === undefined) {
+      diagnostics.push({ path: filePath, reason: "unreadable or symlink" });
+      continue;
+    }
+    const parsed = parseAgentContent(filePath, content);
     if (parsed.ok) {
       agents.push(parsed.agent);
     } else {
@@ -310,8 +323,12 @@ function discoverChainsFromDirectory(
   const byName = new Map<string, ChainConfig>();
   for (const fileName of fileNames) {
     const filePath = resolve(directory, fileName);
+    const content = safeReadFile(filePath);
+    if (content === undefined) {
+      diagnostics.push({ filePath, error: "unreadable or symlink" });
+      continue;
+    }
     try {
-      const content = readFileSync(filePath, "utf8");
       const config = fileName.endsWith(".chain.json")
         ? parseJsonChain(filePath, content)
         : parseChain(filePath, content);

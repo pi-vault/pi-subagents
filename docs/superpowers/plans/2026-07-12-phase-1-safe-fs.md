@@ -4,11 +4,16 @@
 
 **Goal:** Create reusable safe filesystem helpers that protect agent/chain/skill discovery from path traversal and symlink attacks.
 
-**Architecture:** A single pure module `src/core/safe-fs.ts` with four exported functions. No dependencies on other project modules. Integration into `agents.ts` discovery replaces raw `readFileSync` calls with `safeReadFile` and validates filenames.
+**Architecture:** A single pure module `src/core/safe-fs.ts` with four exported functions. No dependencies on other project modules. Integration into `agents.ts` discovery replaces raw `readFileSync` calls with `safeReadFile` and validates filenames. `skill-loader.ts` local copies are replaced with imports from the shared module.
 
 **Tech Stack:** TypeScript, Node.js `fs` + `path`, Vitest
 
 **Spec:** `docs/superpowers/specs/2026-07-12-security-memory-intercom-watchdog-design.md` (Phase 1 section)
+
+**Reference implementations:**
+- `tintinweb-pi-subagents`: `src/memory.ts` (isSymlink, safeReadFile, isUnsafeName), `src/skill-loader.ts` (symlink-aware skill tree walk)
+- `nicobailon-pi-subagents`: `src/agents/agent-memory.ts` (resolveMemoryDir with realpath containment, O_NOFOLLOW), `src/runs/background/fleet-view.ts` (pathWithin containment check)
+- `pi` core: `packages/coding-agent/src/utils/paths.ts` (getCwdRelativePath rejects `..` traversals)
 
 ---
 
@@ -17,23 +22,44 @@
 | File                    | Action | Responsibility                                                       |
 | ----------------------- | ------ | -------------------------------------------------------------------- |
 | `src/core/safe-fs.ts`   | Create | `isSymlink`, `safeReadFile`, `isUnsafeName`, `resolveContained`      |
-| `tests/safe-fs.test.ts` | Create | Unit tests for all four helpers                                      |
-| `src/core/agents.ts`    | Modify | Use `safeReadFile` + `isUnsafeName` in `discoverAgentsFromDirectory` |
+| `tests/safe-fs.test.ts` | Create | Unit tests for all four helpers + integration tests                   |
+| `src/core/agents.ts`    | Modify | Use `safeReadFile` + `isUnsafeName` in agent and chain discovery     |
+| `src/core/skill-loader.ts` | Modify | Replace local `isSymlink`/`safeReadFile`/`isUnsafeName` with imports |
 
 ---
 
-### Task 1: Write failing tests for `isSymlink`
+### Task 1: Implement `isSymlink` with tests
 
 **Files:**
 
+- Create: `src/core/safe-fs.ts`
 - Create: `tests/safe-fs.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Create `src/core/safe-fs.ts` with `isSymlink`**
+
+```typescript
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { resolve, sep } from "node:path";
+
+/**
+ * Returns true if the path is a symlink (via lstatSync).
+ * Returns false on any error (ENOENT, EACCES, etc).
+ */
+export function isSymlink(filePath: string): boolean {
+  try {
+    return lstatSync(filePath).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+```
+
+- [ ] **Step 2: Write tests in `tests/safe-fs.test.ts`**
 
 ```typescript
 import { describe, expect, it } from "vitest";
 import { isSymlink } from "../src/core/safe-fs.js";
-import { mkdirSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -66,55 +92,44 @@ describe("isSymlink", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pnpm test -- tests/safe-fs.test.ts`
-Expected: FAIL — module `../src/core/safe-fs.js` does not exist
-
-- [ ] **Step 3: Implement `isSymlink`**
-
-Create `src/core/safe-fs.ts`:
-
-```typescript
-import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { resolve, sep } from "node:path";
-
-/**
- * Returns true if the path is a symlink (via lstatSync).
- * Returns false on any error (ENOENT, EACCES, etc).
- */
-export function isSymlink(filePath: string): boolean {
-  try {
-    return lstatSync(filePath).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 3: Run tests**
 
 Run: `pnpm test -- tests/safe-fs.test.ts`
 Expected: All `isSymlink` tests PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
-```bash
-git add src/core/safe-fs.ts tests/safe-fs.test.ts
-git commit -m "feat(safe-fs): add isSymlink helper"
+```
+feat(safe-fs): add isSymlink helper
 ```
 
 ---
 
-### Task 2: Write failing tests for `safeReadFile`
+### Task 2: Implement `safeReadFile` with tests
 
 **Files:**
 
+- Modify: `src/core/safe-fs.ts`
 - Modify: `tests/safe-fs.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Add `safeReadFile` to `src/core/safe-fs.ts`**
 
-Add to `tests/safe-fs.test.ts`:
+```typescript
+/**
+ * Reads a file, rejecting symlinks. Returns undefined if unsafe or missing.
+ */
+export function safeReadFile(filePath: string): string | undefined {
+  if (!existsSync(filePath)) return undefined;
+  if (isSymlink(filePath)) return undefined;
+  try {
+    return readFileSync(filePath, "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+```
+
+- [ ] **Step 2: Add tests**
 
 ```typescript
 import { safeReadFile } from "../src/core/safe-fs.js";
@@ -141,53 +156,44 @@ describe("safeReadFile", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pnpm test -- tests/safe-fs.test.ts`
-Expected: FAIL — `safeReadFile` is not exported from `safe-fs.js`
-
-- [ ] **Step 3: Implement `safeReadFile`**
-
-Add to `src/core/safe-fs.ts`:
-
-```typescript
-/**
- * Reads a file, rejecting symlinks. Returns undefined if unsafe or missing.
- */
-export function safeReadFile(filePath: string): string | undefined {
-  if (!existsSync(filePath)) return undefined;
-  if (isSymlink(filePath)) return undefined;
-  try {
-    return readFileSync(filePath, "utf-8");
-  } catch {
-    return undefined;
-  }
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 3: Run tests**
 
 Run: `pnpm test -- tests/safe-fs.test.ts`
 Expected: All tests PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
-```bash
-git add src/core/safe-fs.ts tests/safe-fs.test.ts
-git commit -m "feat(safe-fs): add safeReadFile helper"
+```
+feat(safe-fs): add safeReadFile helper
 ```
 
 ---
 
-### Task 3: Write failing tests for `isUnsafeName`
+### Task 3: Implement `isUnsafeName` with tests
 
 **Files:**
 
+- Modify: `src/core/safe-fs.ts`
 - Modify: `tests/safe-fs.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Add `isUnsafeName` to `src/core/safe-fs.ts`**
 
-Add to `tests/safe-fs.test.ts`:
+```typescript
+const SAFE_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+/**
+ * Returns true if name is unsafe for path construction.
+ * Unsafe means: empty, too long, contains NUL, or fails the safe character set.
+ * The regex rejects "." and ".." implicitly (must start with alphanumeric).
+ */
+export function isUnsafeName(name: string): boolean {
+  if (!name || name.length > 128) return true;
+  if (name.includes("\x00")) return true;
+  return !SAFE_NAME_REGEX.test(name);
+}
+```
+
+- [ ] **Step 2: Add tests**
 
 ```typescript
 import { isUnsafeName } from "../src/core/safe-fs.js";
@@ -225,7 +231,7 @@ describe("isUnsafeName", () => {
     expect(isUnsafeName("_under")).toBe(true);
   });
 
-  it("rejects dot and dot-dot", () => {
+  it("rejects dot and dot-dot (implicit via regex)", () => {
     expect(isUnsafeName(".")).toBe(true);
     expect(isUnsafeName("..")).toBe(true);
   });
@@ -243,54 +249,79 @@ describe("isUnsafeName", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pnpm test -- tests/safe-fs.test.ts`
-Expected: FAIL — `isUnsafeName` not exported
-
-- [ ] **Step 3: Implement `isUnsafeName`**
-
-Add to `src/core/safe-fs.ts`:
-
-```typescript
-const SAFE_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
-
-/**
- * Returns true if name is unsafe for path construction.
- * Unsafe means: empty, too long, contains NUL, fails character set,
- * or is "." or "..".
- */
-export function isUnsafeName(name: string): boolean {
-  if (!name || name.length > 128) return true;
-  if (name.includes("\x00")) return true;
-  if (name === "." || name === "..") return true;
-  return !SAFE_NAME_REGEX.test(name);
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 3: Run tests**
 
 Run: `pnpm test -- tests/safe-fs.test.ts`
 Expected: All tests PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
-```bash
-git add src/core/safe-fs.ts tests/safe-fs.test.ts
-git commit -m "feat(safe-fs): add isUnsafeName helper"
+```
+feat(safe-fs): add isUnsafeName helper
 ```
 
 ---
 
-### Task 4: Write failing tests for `resolveContained`
+### Task 4: Implement `resolveContained` with tests
 
 **Files:**
 
+- Modify: `src/core/safe-fs.ts`
 - Modify: `tests/safe-fs.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Add `resolveContained` to `src/core/safe-fs.ts`**
 
-Add to `tests/safe-fs.test.ts`:
+```typescript
+/**
+ * Resolves path segments within root. Returns undefined if result escapes root
+ * or if any existing intermediate segment is a symlink.
+ *
+ * Rejects: ".." and "." segments, absolute segments, segments containing
+ * path separators or colons, and NUL bytes.
+ */
+export function resolveContained(
+  root: string,
+  ...segments: string[]
+): string | undefined {
+  for (const seg of segments) {
+    if (!seg || seg === "." || seg === "..") return undefined;
+    if (seg.startsWith("/") || seg.startsWith("\\")) return undefined;
+    if (seg.includes("/") || seg.includes("\\")) return undefined;
+    if (seg.includes(":")) return undefined;
+    if (seg.includes("\0")) return undefined;
+  }
+
+  const normalizedRoot = resolve(root);
+  const resolved = resolve(normalizedRoot, ...segments);
+
+  // Ensure resolved path starts with root + separator (or equals root)
+  if (
+    resolved !== normalizedRoot &&
+    !resolved.startsWith(normalizedRoot + sep)
+  ) {
+    return undefined;
+  }
+
+  // Check intermediate segments for symlinks (only existing ones)
+  const relativePart = resolved.slice(normalizedRoot.length + 1);
+  if (!relativePart) return resolved;
+
+  const parts = relativePart.split(sep);
+  let current = normalizedRoot;
+  for (let i = 0; i < parts.length - 1; i++) {
+    current = resolve(current, parts[i]);
+    if (existsSync(current) && isSymlink(current)) {
+      return undefined;
+    }
+  }
+
+  return resolved;
+}
+```
+
+Note: The original plan used `seg.includes("..")` which would reject legitimate filenames like `foo..bar`. Fixed to use exact `seg === ".."` match. Added `seg.includes("/")` and `seg.includes("\\")` to catch embedded separators (e.g. `"sub/../../etc"` as a single segment).
+
+- [ ] **Step 2: Add tests**
 
 ```typescript
 import { resolveContained } from "../src/core/safe-fs.js";
@@ -322,9 +353,23 @@ describe("resolveContained", () => {
     expect(resolveContained(tmp, "C:foo")).toBeUndefined();
   });
 
-  it("returns undefined when result escapes root", () => {
-    // Even without ".." in segments, if resolve somehow escapes
+  it("returns undefined when segment is ..", () => {
     expect(resolveContained(tmp, "..", "other")).toBeUndefined();
+  });
+
+  it("returns undefined for segment with embedded separator", () => {
+    expect(resolveContained(tmp, "sub/../etc")).toBeUndefined();
+    expect(resolveContained(tmp, "sub\\..\\etc")).toBeUndefined();
+  });
+
+  it("returns undefined for segment with NUL byte", () => {
+    expect(resolveContained(tmp, "foo\x00bar")).toBeUndefined();
+  });
+
+  it("allows names containing consecutive dots (not traversal)", () => {
+    // "foo..bar" is a valid filename, not a traversal
+    const result = resolveContained(tmp, "foo..bar");
+    expect(result).toBe(join(tmp, "foo..bar"));
   });
 
   it("returns undefined when intermediate is a symlink", () => {
@@ -343,142 +388,239 @@ describe("resolveContained", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pnpm test -- tests/safe-fs.test.ts`
-Expected: FAIL — `resolveContained` not exported
-
-- [ ] **Step 3: Implement `resolveContained`**
-
-Add to `src/core/safe-fs.ts`:
-
-```typescript
-/**
- * Resolves path segments within root. Returns undefined if result escapes root
- * or if any existing intermediate segment is a symlink.
- */
-export function resolveContained(
-  root: string,
-  ...segments: string[]
-): string | undefined {
-  // Reject dangerous segments up front
-  for (const seg of segments) {
-    if (seg === ".." || seg.includes("..")) return undefined;
-    if (seg.startsWith("/") || seg.startsWith("\\")) return undefined;
-    if (seg.includes(":")) return undefined;
-  }
-
-  const resolved = resolve(root, ...segments);
-  const normalizedRoot = resolve(root);
-
-  // Ensure resolved path starts with root
-  if (
-    !resolved.startsWith(normalizedRoot + sep) &&
-    resolved !== normalizedRoot
-  ) {
-    return undefined;
-  }
-
-  // Check intermediate segments for symlinks (only existing ones)
-  const relativePart = resolved.slice(normalizedRoot.length + 1);
-  const parts = relativePart.split(sep);
-  let current = normalizedRoot;
-  for (let i = 0; i < parts.length - 1; i++) {
-    current = resolve(current, parts[i]);
-    if (existsSync(current) && isSymlink(current)) {
-      return undefined;
-    }
-  }
-
-  return resolved;
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 3: Run tests**
 
 Run: `pnpm test -- tests/safe-fs.test.ts`
 Expected: All tests PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
-```bash
-git add src/core/safe-fs.ts tests/safe-fs.test.ts
-git commit -m "feat(safe-fs): add resolveContained helper"
+```
+feat(safe-fs): add resolveContained helper
 ```
 
 ---
 
-### Task 5: Integrate safe-fs into agent discovery
+### Task 5: Integrate safe-fs into agent and chain discovery
 
 **Files:**
 
 - Modify: `src/core/agents.ts`
+- Modify: `tests/safe-fs.test.ts` (add integration tests)
 
-- [ ] **Step 1: Write integration test**
+- [ ] **Step 1: Add integration tests**
 
 Add to `tests/safe-fs.test.ts`:
 
 ```typescript
-describe("integration: agent discovery ignores unsafe files", () => {
-  it("discoverAgentsFromDirectory skips symlinked .md files", () => {
-    // This is tested indirectly via the agents.test.ts existing tests
-    // and the fact that discoverAgentsFromDirectory now uses safeReadFile.
-    // The key behavioral change: if a .md file is a symlink, it's skipped
-    // with a diagnostic rather than being read.
-    expect(true).toBe(true); // Placeholder — real integration tested in agents.test.ts
+import { discoverAgents } from "../src/core/agents.js";
+import type { ResolvedPaths } from "../src/shared/types.js";
+
+describe("integration: discovery ignores unsafe files", () => {
+  it("discoverAgents skips symlinked .md files with diagnostic", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "safe-fs-integration-"));
+    const bundledDir = join(rootDir, "bundled-agents");
+    mkdirSync(bundledDir, { recursive: true });
+
+    // Write a real agent file
+    writeFileSync(
+      join(bundledDir, "worker.md"),
+      "---\nname: worker\ndescription: Does work\ntools: read\n---\nDo work\n",
+    );
+
+    // Create a symlink masquerading as an agent
+    const outsideFile = join(rootDir, "secret.txt");
+    writeFileSync(outsideFile, "---\nname: evil\ndescription: Evil\ntools: bash\n---\nEvil\n");
+    symlinkSync(outsideFile, join(bundledDir, "evil.md"));
+
+    const paths: ResolvedPaths = {
+      agentDir: join(rootDir, "agent"),
+      configPath: join(rootDir, "agent", "extensions", "subagents.json"),
+      userAgentsDir: join(rootDir, "agent", "agents"),
+      bundledAgentsDir: bundledDir,
+      sessionsDir: join(rootDir, "agent", "sessions"),
+      userChainsDir: join(rootDir, "agent", "chains"),
+      bundledChainsDir: join(rootDir, "bundled-chains"),
+      userPromptsDir: join(rootDir, "agent", "prompts"),
+      bundledPromptsDir: join(rootDir, "bundled-prompts"),
+    };
+
+    const result = discoverAgents(paths);
+
+    // Real agent is discovered
+    expect(result.agents.map((a) => a.name)).toContain("worker");
+    // Symlinked file is not discovered as an agent
+    expect(result.agents.map((a) => a.name)).not.toContain("evil");
+    // Diagnostic is emitted
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ reason: "unreadable or symlink" }),
+    );
+  });
+
+  it("discoverAgents skips files with unsafe base names", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "safe-fs-integration-"));
+    const bundledDir = join(rootDir, "bundled-agents");
+    mkdirSync(bundledDir, { recursive: true });
+
+    writeFileSync(
+      join(bundledDir, "worker.md"),
+      "---\nname: worker\ndescription: Does work\ntools: read\n---\nDo work\n",
+    );
+    writeFileSync(
+      join(bundledDir, ".hidden.md"),
+      "---\nname: hidden\ndescription: Hidden\ntools: bash\n---\nHidden\n",
+    );
+
+    const paths: ResolvedPaths = {
+      agentDir: join(rootDir, "agent"),
+      configPath: join(rootDir, "agent", "extensions", "subagents.json"),
+      userAgentsDir: join(rootDir, "agent", "agents"),
+      bundledAgentsDir: bundledDir,
+      sessionsDir: join(rootDir, "agent", "sessions"),
+      userChainsDir: join(rootDir, "agent", "chains"),
+      bundledChainsDir: join(rootDir, "bundled-chains"),
+      userPromptsDir: join(rootDir, "agent", "prompts"),
+      bundledPromptsDir: join(rootDir, "bundled-prompts"),
+    };
+
+    const result = discoverAgents(paths);
+
+    expect(result.agents.map((a) => a.name)).toEqual(["worker"]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ reason: "unsafe filename" }),
+    );
   });
 });
 ```
 
-- [ ] **Step 2: Modify `agents.ts` to use safe-fs**
+- [ ] **Step 2: Modify `discoverAgentsFromDirectory` in `agents.ts`**
 
-In `src/core/agents.ts`, replace the raw `readFileSync` in `discoverAgentsFromDirectory`:
-
-Before (line ~81):
-
-```typescript
-const filePath = resolve(directory, fileName);
-const parsed = parseAgentContent(filePath, readFileSync(filePath, "utf8"));
-```
-
-After:
+Add import at top of file:
 
 ```typescript
 import { isUnsafeName, safeReadFile } from "./safe-fs.js";
-
-// Inside discoverAgentsFromDirectory, in the for loop:
-const baseName = fileName.slice(0, -3); // strip .md
-if (isUnsafeName(baseName)) {
-  diagnostics.push({
-    path: resolve(directory, fileName),
-    reason: "unsafe filename",
-  });
-  continue;
-}
-const filePath = resolve(directory, fileName);
-const content = safeReadFile(filePath);
-if (content === undefined) {
-  diagnostics.push({ path: filePath, reason: "unreadable or symlink" });
-  continue;
-}
-const parsed = parseAgentContent(filePath, content);
 ```
 
-- [ ] **Step 3: Run full test suite**
+Replace the for-loop body in `discoverAgentsFromDirectory` (lines 79-87):
+
+Before:
+```typescript
+  for (const fileName of fileNames) {
+    const filePath = resolve(directory, fileName);
+    const parsed = parseAgentContent(filePath, readFileSync(filePath, "utf8"));
+    if (parsed.ok) {
+      agents.push(parsed.agent);
+    } else {
+      diagnostics.push(parsed.diagnostic);
+    }
+  }
+```
+
+After:
+```typescript
+  for (const fileName of fileNames) {
+    const baseName = fileName.slice(0, -3); // strip .md
+    if (isUnsafeName(baseName)) {
+      diagnostics.push({
+        path: resolve(directory, fileName),
+        reason: "unsafe filename",
+      });
+      continue;
+    }
+    const filePath = resolve(directory, fileName);
+    const content = safeReadFile(filePath);
+    if (content === undefined) {
+      diagnostics.push({ path: filePath, reason: "unreadable or symlink" });
+      continue;
+    }
+    const parsed = parseAgentContent(filePath, content);
+    if (parsed.ok) {
+      agents.push(parsed.agent);
+    } else {
+      diagnostics.push(parsed.diagnostic);
+    }
+  }
+```
+
+- [ ] **Step 3: Modify `discoverChainsFromDirectory` in `agents.ts`**
+
+Replace the for-loop body in `discoverChainsFromDirectory` (lines 311-341):
+
+Before:
+```typescript
+  for (const fileName of fileNames) {
+    const filePath = resolve(directory, fileName);
+    try {
+      const content = readFileSync(filePath, "utf8");
+      const config = fileName.endsWith(".chain.json")
+        ? parseJsonChain(filePath, content)
+        : parseChain(filePath, content);
+      ...
+```
+
+After:
+```typescript
+  for (const fileName of fileNames) {
+    const filePath = resolve(directory, fileName);
+    const content = safeReadFile(filePath);
+    if (content === undefined) {
+      diagnostics.push({ filePath, error: "unreadable or symlink" });
+      continue;
+    }
+    try {
+      const config = fileName.endsWith(".chain.json")
+        ? parseJsonChain(filePath, content)
+        : parseChain(filePath, content);
+      ...
+```
+
+- [ ] **Step 4: Remove unused `readFileSync` import if no longer needed**
+
+Check if `readFileSync` is still used elsewhere in `agents.ts`. It is still used in the chain discovery `try` block — but after this change it's no longer needed. Remove from the import statement if unused (keep `existsSync`, `readdirSync`, etc.).
+
+- [ ] **Step 5: Run full test suite**
 
 Run: `pnpm test`
-Expected: All existing tests pass (agent discovery tests in `agents.test.ts` still work since normal files are unaffected)
+Expected: All existing tests pass. New integration tests pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
-```bash
-git add src/core/agents.ts
-git commit -m "feat(safe-fs): harden agent discovery against symlinks and traversal"
+```
+feat(safe-fs): harden agent and chain discovery against symlinks and traversal
 ```
 
 ---
 
-### Task 6: Typecheck and lint
+### Task 6: Consolidate skill-loader.ts local helpers
+
+**Files:**
+
+- Modify: `src/core/skill-loader.ts`
+
+- [ ] **Step 1: Replace local helpers with imports**
+
+In `src/core/skill-loader.ts`, remove the local implementations of `isSymlink` (lines 46-52), `safeReadFile` (lines 54-61), and `isUnsafeName` (lines 37-44). Replace with a single import:
+
+```typescript
+import { isSymlink, isUnsafeName, safeReadFile } from "./safe-fs.js";
+```
+
+Note: The local `isUnsafeName` in `skill-loader.ts` has slightly different rules (allows leading underscore implicitly via different logic). Verify that the shared version's stricter rules don't break skill discovery for legitimate skill names. The shared version requires `^[a-zA-Z0-9]` as first char — this matches the tintinweb reference and is the intended behavior (leading-dot names are hidden files, leading-underscore names are unconventional for skills).
+
+- [ ] **Step 2: Run full test suite**
+
+Run: `pnpm test`
+Expected: All tests pass. Skill-loader tests (if any) still pass since the behavior is equivalent for valid skill names.
+
+- [ ] **Step 3: Commit**
+
+```
+refactor(skill-loader): use shared safe-fs helpers instead of local copies
+```
+
+---
+
+### Task 7: Typecheck, lint, and final verification
 
 - [ ] **Step 1: Run typecheck**
 
@@ -495,9 +637,8 @@ Expected: No errors (fix any Biome issues)
 Run: `pnpm check`
 Expected: All pass
 
-- [ ] **Step 4: Final commit (if any fixes)**
+- [ ] **Step 4: Final commit (if any fixes needed)**
 
-```bash
-git add -A
-git commit -m "chore: fix lint/type issues from safe-fs integration"
+```
+chore: fix lint/type issues from safe-fs integration
 ```
