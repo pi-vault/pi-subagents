@@ -27,6 +27,33 @@ export function matchesPattern(model: string, pattern: string): boolean {
 }
 
 /**
+ * Pure check: does model pass scope? Returns undefined if allowed,
+ * or a ModelScopeViolation if blocked.
+ */
+export function checkModelScope(
+  model: string,
+  scope: ModelScopeConfig | undefined,
+  source: ModelSource,
+): ModelScopeViolation | undefined {
+  if (!scope || !scope.enforce) return undefined;
+
+  // Normalize: lowercase, strip :thinking suffix
+  const normalized = model.toLowerCase().replace(/:thinking$/, "");
+
+  for (const pattern of scope.allow) {
+    if (matchesPattern(normalized, pattern)) return undefined;
+  }
+
+  const severity = source === "explicit" ? "error" : "warn";
+  return {
+    model,
+    severity,
+    allowedPatterns: scope.allow,
+    message: `Model "${model}" is not in the allowed scope. Allowed: ${scope.allow.join(", ") || "(none)"}`,
+  };
+}
+
+/**
  * Parse modelScope from settings JSON. Returns undefined if invalid.
  */
 export function parseModelScopeConfig(
