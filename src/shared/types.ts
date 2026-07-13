@@ -245,6 +245,7 @@ export interface AgentRecord {
   outputFile?: string;
   outputCleanup?: () => void;
   compactionCount?: number;
+  spawnedBy?: string;
 }
 
 export interface RunOptions {
@@ -270,6 +271,7 @@ export interface RunOptions {
   }) => void;
   onSessionCreated?: (session: unknown) => void;
   toolBudget?: ResolvedToolBudget;
+  customTools?: unknown[];
 }
 
 export interface RunResult {
@@ -304,6 +306,8 @@ export interface SpawnOptions {
   }) => void;
   onSessionCreated?: (session: unknown) => void;
   toolBudget?: ResolvedToolBudget;
+  spawnedBy?: string;
+  _deps?: unknown;
 }
 
 export interface EnvInfo {

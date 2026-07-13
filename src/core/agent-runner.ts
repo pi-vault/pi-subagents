@@ -6,7 +6,7 @@ import {
   SettingsManager,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type {
   AgentDefinition,
   EnvInfo,
@@ -250,15 +250,20 @@ export async function runAgent(
 
   const thinkingLevel = options.thinking ?? agentDef.thinking;
 
+  const customTools = (options.customTools ?? []) as ToolDefinition[];
+  // Custom tool names must be in the allowed tools list, otherwise
+  // createAgentSession's internal allowlist filter silently drops them.
+  const effectiveAllowedTools = [...allowedTools, ...customTools.map((t) => t.name)];
   const { session } = await createAgentSession({
     cwd: options.cwd,
     agentDir,
     sessionManager,
     settingsManager,
     model,
-    tools: allowedTools,
+    tools: effectiveAllowedTools,
     resourceLoader: loader,
     ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}),
+    ...(customTools.length > 0 ? { customTools } : {}),
   });
 
   // 6. Bind extensions (required even when empty)

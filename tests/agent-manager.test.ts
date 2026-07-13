@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { createDeps } from "./_test-helpers.js";
 import type { AgentDefinition } from "../src/shared/types.js";
 
 const tmpDir = "/tmp";
@@ -153,6 +154,47 @@ describe("AgentManager", () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
       agentDef,
       expect.objectContaining({ allowRecursion: false }),
+      expect.anything(),
+    );
+  });
+
+  it("constructs customTools when _deps and subagentAgents are present", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const deps = createDeps({ manager });
+    const agentDef = makeAgentDef({ subagentAgents: ["helper"] });
+    await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 0,
+      _deps: deps,
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+      agentDef,
+      expect.objectContaining({
+        allowRecursion: true,
+        customTools: expect.arrayContaining([
+          expect.objectContaining({ name: "subagent" }),
+          expect.objectContaining({ name: "get_subagent_result" }),
+        ]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("passes empty customTools when _deps is absent", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const agentDef = makeAgentDef({ subagentAgents: ["helper"] });
+    await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 0,
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+      agentDef,
+      expect.objectContaining({
+        allowRecursion: true,
+        customTools: [],
+      }),
       expect.anything(),
     );
   });

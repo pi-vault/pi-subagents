@@ -7,6 +7,11 @@ import {
   resolveMaxSpawns,
 } from "./spawn-guard.js";
 import { createWorktree, cleanupWorktree, pruneWorktrees } from "./worktree.js";
+import {
+  createChildSubagentTool,
+  createChildGetResultTool,
+} from "./child-subagent-tool.js";
+import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentRecord,
@@ -113,6 +118,9 @@ export class AgentManager {
       isBackground,
       compactionCount: 0,
     };
+    if (options.spawnedBy) {
+      record.spawnedBy = options.spawnedBy;
+    }
     this.agents.set(id, record);
     this.spawnCount++;
 
@@ -247,6 +255,28 @@ export class AgentManager {
     const allowRecursion =
       agentDef.subagentAgents.length > 0 && (options.currentDepth ?? 0) + 1 < this.maxDepth;
 
+    // Build custom tools for child sessions that allow recursion
+    let customTools: unknown[] = [];
+    if (allowRecursion) {
+      const deps = (options as { _deps?: RuntimeDeps })._deps;
+      const paths = deps?.resolvePaths?.();
+      if (deps && paths) {
+        const discovery = deps.discoverAgents(paths);
+        customTools = [
+          createChildSubagentTool({
+            manager: this,
+            discovery,
+            allowedAgents: agentDef.subagentAgents,
+            currentDepth: (options.currentDepth ?? 0) + 1,
+            parentCwd: effectiveCwd,
+            parentAgentId: id,
+            deps,
+          }),
+          createChildGetResultTool(this, id),
+        ];
+      }
+    }
+
     const promise = runAgent(
       agentDef,
       {
@@ -288,6 +318,7 @@ export class AgentManager {
         },
         onTextDelta: options.onTextDelta,
         toolBudget: options.toolBudget,
+        customTools,
       },
       ctx as { model?: unknown; modelRegistry?: unknown },
     )
