@@ -8,6 +8,8 @@ import {
   resolveContained,
   safeReadFile,
 } from "../src/core/safe-fs.js";
+import { discoverAgents } from "../src/core/agents.js";
+import type { ResolvedPaths } from "../src/shared/types.js";
 
 describe("isSymlink", () => {
   const tmp = mkdtempSync(join(tmpdir(), "safe-fs-"));
@@ -164,5 +166,69 @@ describe("resolveContained", () => {
   it("allows non-existent paths that don't escape root", () => {
     const result = resolveContained(tmp, "new-dir", "new-file.md");
     expect(result).toBe(join(tmp, "new-dir", "new-file.md"));
+  });
+});
+
+function createPaths(rootDir: string): ResolvedPaths {
+  return {
+    agentDir: join(rootDir, "agent"),
+    configPath: join(rootDir, "agent", "extensions", "subagents.json"),
+    userAgentsDir: join(rootDir, "agent", "agents"),
+    bundledAgentsDir: join(rootDir, "bundled-agents"),
+    sessionsDir: join(rootDir, "agent", "sessions"),
+    userChainsDir: join(rootDir, "agent", "chains"),
+    bundledChainsDir: join(rootDir, "bundled-chains"),
+    userPromptsDir: join(rootDir, "agent", "prompts"),
+    bundledPromptsDir: join(rootDir, "bundled-prompts"),
+  };
+}
+
+describe("integration: discovery ignores unsafe files", () => {
+  it("discoverAgents skips symlinked .md files with diagnostic", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "safe-fs-integration-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+
+    writeFileSync(
+      join(paths.bundledAgentsDir, "worker.md"),
+      "---\nname: worker\ndescription: Does work\ntools: read\n---\nDo work\n",
+    );
+
+    const outsideFile = join(rootDir, "secret.txt");
+    writeFileSync(
+      outsideFile,
+      "---\nname: evil\ndescription: Evil\ntools: bash\n---\nEvil\n",
+    );
+    symlinkSync(outsideFile, join(paths.bundledAgentsDir, "evil.md"));
+
+    const result = discoverAgents(paths);
+
+    expect(result.agents.map((a) => a.name)).toContain("worker");
+    expect(result.agents.map((a) => a.name)).not.toContain("evil");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ reason: "unreadable or symlink" }),
+    );
+  });
+
+  it("discoverAgents skips files with unsafe base names", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "safe-fs-integration-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+
+    writeFileSync(
+      join(paths.bundledAgentsDir, "worker.md"),
+      "---\nname: worker\ndescription: Does work\ntools: read\n---\nDo work\n",
+    );
+    writeFileSync(
+      join(paths.bundledAgentsDir, ".hidden.md"),
+      "---\nname: hidden\ndescription: Hidden\ntools: bash\n---\nHidden\n",
+    );
+
+    const result = discoverAgents(paths);
+
+    expect(result.agents.map((a) => a.name)).toEqual(["worker"]);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ reason: "unsafe filename" }),
+    );
   });
 });
