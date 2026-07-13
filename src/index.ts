@@ -18,6 +18,7 @@ import { applySettings, loadSettings } from "./core/settings.js";
 import { SmartBatchTracker } from "./core/smart-batch-tracker.js";
 import { registerAgentCommand, registerSubagentTool } from "./core/subagent.js";
 import { registerRpcHandlers } from "./core/rpc.js";
+import { registerWaitTool } from "./core/wait.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
@@ -388,6 +389,9 @@ export function registerSubagentsExtension(
       };
     },
   });
+
+  // wait tool — blocks until background agent(s) complete
+  registerWaitTool(pi, deps.manager);
 
   // Captured from ExtensionContext during tool execution for RPC model resolution
   let capturedModelRegistry: {
