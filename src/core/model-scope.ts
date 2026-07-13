@@ -6,9 +6,7 @@ export interface ModelScopeConfig {
 export type ModelSource = "explicit" | "inherited";
 
 export interface ModelScopeViolation {
-  model: string;
   severity: "error" | "warn";
-  allowedPatterns: string[];
   message: string;
 }
 
@@ -46,9 +44,7 @@ export function checkModelScope(
 
   const severity = source === "explicit" ? "error" : "warn";
   return {
-    model,
     severity,
-    allowedPatterns: scope.allow,
     message: `Model "${model}" is not in the allowed scope. Allowed: ${scope.allow.join(", ") || "(none)"}`,
   };
 }

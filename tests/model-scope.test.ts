@@ -154,8 +154,8 @@ describe("checkModelScope", () => {
     const violation = checkModelScope("google/gemini-pro", scope, "explicit");
     expect(violation).toBeDefined();
     expect(violation!.severity).toBe("error");
-    expect(violation!.model).toBe("google/gemini-pro");
-    expect(violation!.allowedPatterns).toEqual(["anthropic/*", "openai/gpt-5-*"]);
+    expect(violation!.message).toContain("google/gemini-pro");
+    expect(violation!.message).toContain("anthropic/*");
   });
 
   it("returns warn violation for inherited out-of-scope model", () => {
@@ -198,7 +198,7 @@ describe("subagent tool: model scope enforcement", () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  function setupScopeTest(modelScope: object) {
+  function setupScopeTest(modelScope: object, agentOverrides?: Partial<Parameters<typeof createAgent>[0]>) {
     writeFileSync(
       join(piDir, "subagents.json"),
       JSON.stringify({ modelScope }),
@@ -208,7 +208,7 @@ describe("subagent tool: model scope enforcement", () => {
     const sentMessages: Array<{ customType: string; content: string }> = [];
     const deps = createDeps({
       discoverAgents: () =>
-        createDiscovery([createAgent({ name: "Scout", model: undefined })]),
+        createDiscovery([createAgent({ name: "Scout", model: undefined, ...agentOverrides })]),
       manager,
     });
 
@@ -261,65 +261,27 @@ describe("subagent tool: model scope enforcement", () => {
       allow: ["anthropic/*"],
     });
 
-    // This should NOT be blocked by scope, but will fail at spawn
-    // (no real session). We verify it doesn't return a scope error.
     const result = await execute({
       agent: "Scout",
       task: "do something",
       model: "anthropic/claude-sonnet-4-20250514",
     });
 
-    // Should not have a scope error — might have a different error (spawn fails)
-    if (result.isError) {
-      expect(result.content[0]?.text).not.toContain("not in the allowed scope");
-    }
+    expect(result.isError).toBe(false);
   });
 
   it("warns for inherited out-of-scope model (from agent frontmatter)", async () => {
-    // Agent has a model set in frontmatter → inherited source → warn, don't block
-    const manager = new AgentManager();
-    const sentMessages: Array<{ customType: string; content: string }> = [];
-    const deps = createDeps({
-      discoverAgents: () =>
-        createDiscovery([createAgent({ name: "Scout", model: "google/gemini-pro" })]),
-      manager,
-    });
-
-    writeFileSync(
-      join(piDir, "subagents.json"),
-      JSON.stringify({ modelScope: { enforce: true, allow: ["anthropic/*"] } }),
+    const { execute, sentMessages } = setupScopeTest(
+      { enforce: true, allow: ["anthropic/*"] },
+      { model: "google/gemini-pro" },
     );
 
-    let toolDef: { execute: (...args: unknown[]) => Promise<unknown> } | undefined;
-    const pi = {
-      registerTool(def: unknown) { toolDef = def as typeof toolDef; },
-      registerCommand() {},
-      sendMessage(msg: { customType: string; content: string }) {
-        sentMessages.push(msg);
-      },
-      getAllTools() { return []; },
-      on() {},
-      registerMessageRenderer() {},
-      sendUserMessage() {},
-    } as unknown as ExtensionAPI;
+    const result = await execute({ agent: "Scout", task: "do something" });
 
-    registerSubagentTool(pi, deps);
-    const ctx = { cwd: testDir } as unknown as ExtensionContext;
-
-    const result = await (toolDef!.execute as Function)(
-      "tc-1",
-      { agent: "Scout", task: "do something" },
-      undefined,
-      undefined,
-      ctx,
-    ) as { isError: boolean; content: Array<{ type: string; text: string }> };
-
-    // Should NOT be blocked (inherited = warn, not error)
-    // It will fail at spawn, but not due to scope
+    // Inherited → warn, not block
     if (result.isError) {
       expect(result.content[0]?.text).not.toContain("not in the allowed scope");
     }
-    // Should have emitted a warning
     expect(sentMessages.some((m) => m.customType === "model_scope_warning")).toBe(true);
   });
 

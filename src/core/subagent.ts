@@ -16,7 +16,7 @@ import type {
   SubagentToolInput,
 } from "../shared/types.js";
 import { validateToolBudget } from "./tool-budget.js";
-import { checkModelScope } from "./model-scope.js";
+import { checkModelScope, type ModelSource } from "./model-scope.js";
 import { loadSettings } from "./settings.js";
 import {
   renderSubagentCall,
@@ -293,7 +293,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             // ctx.modelRegistry (registry resolution happens inside spawnAndWait).
             const stepModel = options?.model ?? agentDef.model;
             if (stepModel && chainSettings.modelScope) {
-              const source = options?.model ? "explicit" as const : "inherited" as const;
+              const source: ModelSource = options?.model ? "explicit" : "inherited";
               const violation = checkModelScope(stepModel, chainSettings.modelScope, source);
               if (violation && violation.severity === "error") {
                 throw new Error(violation.message);
@@ -487,11 +487,11 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
         if (resolvedModelId) {
           const settings = loadSettings(effectiveCwd);
           if (settings.modelScope) {
-            const source = agentDef.model
-              ? "inherited" as const
+            const source: ModelSource = agentDef.model
+              ? "inherited"
               : params.model
-                ? "explicit" as const
-                : "inherited" as const;
+                ? "explicit"
+                : "inherited";
             const violation = checkModelScope(resolvedModelId, settings.modelScope, source);
             if (violation && violation.severity === "error") {
               return {
