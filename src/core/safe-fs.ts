@@ -28,7 +28,6 @@ export function isSymlink(filePath: string): boolean {
  * Reads a file, rejecting symlinks. Returns undefined if unsafe or missing.
  */
 export function safeReadFile(filePath: string): string | undefined {
-  if (!existsSync(filePath)) return undefined;
   if (isSymlink(filePath)) return undefined;
   try {
     return readFileSync(filePath, "utf-8");
@@ -60,7 +59,6 @@ export function resolveContained(
 ): string | undefined {
   for (const seg of segments) {
     if (!seg || seg === "." || seg === "..") return undefined;
-    if (seg.startsWith("/") || seg.startsWith("\\")) return undefined;
     if (seg.includes("/") || seg.includes("\\")) return undefined;
     if (seg.includes(":")) return undefined;
     if (seg.includes("\0")) return undefined;
