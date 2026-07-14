@@ -107,3 +107,69 @@ export function readMemoryFile(memoryDir: string): MemoryFileResult {
 
   return { contents: result, truncated };
 }
+
+/**
+ * Build prompt injection block for agent memory.
+ * Returns empty string if read-only mode and no MEMORY.md exists,
+ * or if directory resolution fails.
+ */
+export function buildMemoryInjection(
+  _agentName: string,
+  config: AgentMemoryConfig,
+  cwd: string,
+  hasWriteTools: boolean,
+): string {
+  const dirResult = resolveMemoryDir(config.scope, config.path, cwd);
+  if ("error" in dirResult) return "";
+
+  const { dir } = dirResult;
+  const fileResult = readMemoryFile(dir);
+
+  // Read-only mode: skip entirely if no file or unsafe
+  if (!hasWriteTools) {
+    if (fileResult === null || fileResult === "unsafe") return "";
+    const { contents, truncated } = fileResult;
+    const truncNote = truncated ? "\n(truncated at 200 lines / 16KB)" : "";
+    return [
+      "# Persistent agent memory (read-only)",
+      "",
+      `Memory scope: ${config.scope}`,
+      "You have read-only access to memory. You can reference existing memories but cannot create or modify them.",
+      "",
+      "## Current MEMORY.md",
+      "---",
+      contents + truncNote,
+      "---",
+    ].join("\n");
+  }
+
+  // Read-write mode
+  let memorySection: string;
+  if (fileResult === null) {
+    memorySection =
+      "No MEMORY.md exists yet. You may create it to begin accumulating notes.";
+  } else if (fileResult === "unsafe") {
+    memorySection = "(MEMORY.md exists but is unsafe — skipped)";
+  } else {
+    const { contents, truncated } = fileResult;
+    const truncNote = truncated ? "\n(truncated at 200 lines / 16KB)" : "";
+    memorySection = contents + truncNote;
+  }
+
+  return [
+    "# Persistent agent memory",
+    "",
+    `You have a durable, role-specific memory at: ${dir}/MEMORY.md`,
+    `Memory scope: ${config.scope}`,
+    "",
+    "Read this file at the start of a task to recall accumulated role notes.",
+    "When you produce durable, reusable role knowledge, append a concise dated entry.",
+    "Only persist generally reusable knowledge, not one-off task details or secrets.",
+    "Keep MEMORY.md under 200 lines — store detailed content in separate files and link from the index.",
+    "",
+    "## Current MEMORY.md",
+    "---",
+    memorySection,
+    "---",
+  ].join("\n");
+}

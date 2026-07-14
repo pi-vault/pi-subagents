@@ -153,3 +153,87 @@ describe("readMemoryFile", () => {
     expect(result.contents.length).toBeLessThanOrEqual(16_384);
   });
 });
+
+describe("buildMemoryInjection", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "memory-inject-"));
+
+  it("returns read-write block when hasWriteTools is true", () => {
+    mkdirSync(join(tmp, ".pi", "agent-memory", "rw-agent"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(tmp, ".pi", "agent-memory", "rw-agent", "MEMORY.md"),
+      "# My notes\n- thing 1\n",
+    );
+
+    const result = buildMemoryInjection(
+      "Scout",
+      { scope: "project", path: "rw-agent" },
+      tmp,
+      true,
+    );
+    expect(result).toContain("# Persistent agent memory");
+    expect(result).toContain("# My notes");
+    expect(result).toContain("append a concise dated entry");
+    expect(result).not.toContain("read-only");
+  });
+
+  it("returns read-only block when hasWriteTools is false and file exists", () => {
+    mkdirSync(join(tmp, ".pi", "agent-memory", "ro-agent"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(tmp, ".pi", "agent-memory", "ro-agent", "MEMORY.md"),
+      "# Existing\n",
+    );
+
+    const result = buildMemoryInjection(
+      "Reader",
+      { scope: "project", path: "ro-agent" },
+      tmp,
+      false,
+    );
+    expect(result).toContain("read-only");
+    expect(result).toContain("# Existing");
+  });
+
+  it("returns empty string when read-only and no MEMORY.md exists", () => {
+    const result = buildMemoryInjection(
+      "NoFile",
+      { scope: "project", path: "no-file-agent" },
+      tmp,
+      false,
+    );
+    expect(result).toBe("");
+  });
+
+  it("returns create-prompt when read-write and no MEMORY.md exists", () => {
+    const result = buildMemoryInjection(
+      "NewAgent",
+      { scope: "project", path: "new-agent" },
+      tmp,
+      true,
+    );
+    expect(result).toContain("No MEMORY.md exists yet");
+    expect(result).toContain("create it");
+  });
+
+  it("notes truncation when file is large", () => {
+    mkdirSync(join(tmp, ".pi", "agent-memory", "big-agent"), {
+      recursive: true,
+    });
+    const lines = Array.from({ length: 250 }, (_, i) => `line ${i}`);
+    writeFileSync(
+      join(tmp, ".pi", "agent-memory", "big-agent", "MEMORY.md"),
+      lines.join("\n"),
+    );
+
+    const result = buildMemoryInjection(
+      "Big",
+      { scope: "project", path: "big-agent" },
+      tmp,
+      true,
+    );
+    expect(result).toContain("truncated");
+  });
+});
