@@ -46,6 +46,17 @@ describe("parseMemoryConfig", () => {
     expect(parseMemoryConfig({ scope: "project", path: "" })).toBeUndefined();
   });
 
+  it("parses a JSON string", () => {
+    expect(
+      parseMemoryConfig('{"scope": "project", "path": "reviewer"}'),
+    ).toEqual({ scope: "project", path: "reviewer" });
+  });
+
+  it("returns undefined for invalid JSON string", () => {
+    expect(parseMemoryConfig("{bad json}")).toBeUndefined();
+    expect(parseMemoryConfig("just a string")).toBeUndefined();
+  });
+
   it("returns undefined for path with unsafe characters", () => {
     expect(
       parseMemoryConfig({ scope: "project", path: "../escape" }),
@@ -216,6 +227,33 @@ describe("buildMemoryInjection", () => {
     );
     expect(result).toContain("No MEMORY.md exists yet");
     expect(result).toContain("create it");
+  });
+
+  it("renders unsafe note in read-write mode when MEMORY.md is a symlink", () => {
+    const dir = join(tmp, ".pi", "agent-memory", "unsafe-agent");
+    mkdirSync(dir, { recursive: true });
+    const realFile = join(tmp, "decoy.md");
+    writeFileSync(realFile, "secret data");
+    symlinkSync(realFile, join(dir, "MEMORY.md"));
+
+    const result = buildMemoryInjection(
+      "UnsafeAgent",
+      { scope: "project", path: "unsafe-agent" },
+      tmp,
+      true,
+    );
+    expect(result).toContain("# Persistent agent memory");
+    expect(result).toContain("unsafe");
+  });
+
+  it("returns empty string when path resolution fails", () => {
+    const result = buildMemoryInjection(
+      "BadPath",
+      { scope: "project", path: "../escape" },
+      tmp,
+      true,
+    );
+    expect(result).toBe("");
   });
 
   it("notes truncation when file is large", () => {

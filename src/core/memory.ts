@@ -13,10 +13,27 @@ const VALID_SCOPES: ReadonlySet<string> = new Set(["user", "project", "local"]);
 
 /**
  * Parse memory config from agent frontmatter.
+ * Accepts an object or a JSON string (frontmatter stores values as strings).
  * Returns undefined if invalid.
  */
 export function parseMemoryConfig(raw: unknown): AgentMemoryConfig | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
+  if (!raw) return undefined;
+
+  // Frontmatter gives us a string — try JSON.parse
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+        return undefined;
+      return parseMemoryConfig(parsed);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
 
   if (typeof r.scope !== "string" || !VALID_SCOPES.has(r.scope))

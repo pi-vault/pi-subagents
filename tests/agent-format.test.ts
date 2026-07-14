@@ -720,6 +720,35 @@ describe("new frontmatter fields", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.diagnostic.reason).toContain("soft");
   });
+
+  test("parses memory config from frontmatter", () => {
+    const content =
+      '---\nname: reviewer\ndescription: Reviews code\ntools: read\nmemory: {"scope": "project", "path": "reviewer"}\n---\nReview things\n';
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.agent.memory).toEqual({
+        scope: "project",
+        path: "reviewer",
+      });
+    }
+  });
+
+  test("memory is undefined when omitted", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.memory).toBeUndefined();
+  });
+
+  test("memory is undefined for invalid config", () => {
+    const content =
+      '---\nname: test\ndescription: A test\ntools: read\nmemory: {"scope": "invalid", "path": "test"}\n---\nPrompt\n';
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.memory).toBeUndefined();
+  });
 });
 
 describe("round-trip", () => {
