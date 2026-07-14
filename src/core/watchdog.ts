@@ -124,3 +124,37 @@ export function computeChangeSignature(cwd: string): ChangeSignature | undefined
 
   return { root, key: hash.digest("hex"), changedPaths };
 }
+
+// ─── Warning Tool ─────────────────────────────────────────────────────────────
+
+/**
+ * Create the watchdog_warn tool that the reviewer LLM calls to emit warnings.
+ * Deduplicates by normalized summary. Collected warnings are pushed into the array.
+ */
+export function createWatchdogWarnTool(
+  collected: WatchdogWarning[],
+  seen: Set<string>,
+) {
+  return {
+    name: "watchdog_warn" as const,
+    label: "Watchdog Warning",
+    description: "Emit a warning about a code issue found during review.",
+    async execute(
+      _toolCallId: string,
+      params: WatchdogWarning,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      _ctx: unknown,
+    ) {
+      const key = params.summary.toLowerCase().trim();
+      if (seen.has(key)) {
+        return {
+          content: [{ type: "text" as const, text: "Warning duplicate — already recorded." }],
+        };
+      }
+      seen.add(key);
+      collected.push(params);
+      return { content: [{ type: "text" as const, text: "Warning recorded." }] };
+    },
+  };
+}

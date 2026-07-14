@@ -1,5 +1,6 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { computeChangeSignature } from "../src/core/watchdog.js";
+import { computeChangeSignature, createWatchdogWarnTool } from "../src/core/watchdog.js";
+import type { WatchdogWarning } from "../src/core/watchdog.js";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -122,5 +123,95 @@ describe("computeChangeSignature", () => {
     expect(sig).toBeDefined();
     expect(sig!.changedPaths).toContain("file.ts");
     expect(sig!.key).toBeTruthy();
+  });
+});
+
+describe("createWatchdogWarnTool", () => {
+  it("collects warnings via tool calls", async () => {
+    const collected: WatchdogWarning[] = [];
+    const seen = new Set<string>();
+    const tool = createWatchdogWarnTool(collected, seen);
+
+    expect(tool.name).toBe("watchdog_warn");
+
+    await tool.execute(
+      "tc-1",
+      {
+        severity: "blocker",
+        summary: "Null pointer",
+        evidence: "src/foo.ts:42",
+        recommendedAction: "Add null check",
+        category: "correctness",
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(collected).toHaveLength(1);
+    expect(collected[0].severity).toBe("blocker");
+    expect(collected[0].summary).toBe("Null pointer");
+  });
+
+  it("deduplicates warnings by summary", async () => {
+    const collected: WatchdogWarning[] = [];
+    const seen = new Set<string>();
+    const tool = createWatchdogWarnTool(collected, seen);
+
+    const params = {
+      severity: "concern" as const,
+      summary: "Missing test",
+      evidence: "src/bar.ts",
+      recommendedAction: "Add unit test",
+      category: "test-gap" as const,
+    };
+
+    await tool.execute("tc-1", params, undefined, undefined, {} as never);
+    await tool.execute("tc-2", params, undefined, undefined, {} as never);
+
+    expect(collected).toHaveLength(1);
+  });
+
+  it("returns confirmation text", async () => {
+    const collected: WatchdogWarning[] = [];
+    const seen = new Set<string>();
+    const tool = createWatchdogWarnTool(collected, seen);
+    const result = await tool.execute(
+      "tc-1",
+      {
+        severity: "concern",
+        summary: "Missing test",
+        evidence: "src/bar.ts",
+        recommendedAction: "Add unit test",
+        category: "test-gap",
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(result.content[0].text).toContain("recorded");
+  });
+
+  it("returns duplicate notice for repeated warnings", async () => {
+    const collected: WatchdogWarning[] = [];
+    const seen = new Set(["missing test"]); // pre-populate
+    const tool = createWatchdogWarnTool(collected, seen);
+    const result = await tool.execute(
+      "tc-1",
+      {
+        severity: "concern",
+        summary: "Missing test",
+        evidence: "src/bar.ts",
+        recommendedAction: "Add unit test",
+        category: "test-gap",
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(collected).toHaveLength(0);
+    expect(result.content[0].text).toContain("duplicate");
   });
 });
