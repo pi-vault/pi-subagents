@@ -64,6 +64,13 @@ export interface LoadedConfig {
   exists: boolean;
 }
 
+export type MemoryScope = "user" | "project" | "local";
+
+export interface AgentMemoryConfig {
+  scope: MemoryScope;
+  path: string;
+}
+
 export interface AgentDefinition {
   name: string;
   description: string;
@@ -85,6 +92,8 @@ export interface AgentDefinition {
   extensions?: true | string[] | false;
   disallowedTools?: string[];
   toolBudget?: ToolBudgetConfig;
+  // Phase 3: memory
+  memory?: AgentMemoryConfig;
 }
 
 export interface AgentDiscoveryDiagnostic {

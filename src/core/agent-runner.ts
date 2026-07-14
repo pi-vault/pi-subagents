@@ -16,6 +16,7 @@ import type {
 } from "../shared/types.js";
 import { preloadSkills } from "./skill-loader.js";
 import { evaluateToolCall } from "./tool-budget.js";
+import { buildMemoryInjection } from "./memory.js";
 
 interface SkillBlock {
   name: string;
@@ -201,13 +202,27 @@ export async function runAgent(
       ? preloadSkills(agentDef.skills, options.cwd)
       : [];
   const skillBlocks = preloaded.length > 0 ? preloaded : undefined;
-  const systemPrompt = buildAgentPrompt(
+  let systemPrompt = buildAgentPrompt(
     agentDef,
     options.cwd,
     env,
     options.parentSystemPrompt,
     skillBlocks,
   );
+
+  // Inject agent memory block (append position)
+  if (agentDef.memory) {
+    const hasWriteTools =
+      allowedTools.includes("write") || allowedTools.includes("edit");
+    const memoryBlock = buildMemoryInjection(
+      agentDef.memory,
+      options.cwd,
+      hasWriteTools,
+    );
+    if (memoryBlock) {
+      systemPrompt += `\n\n${memoryBlock}`;
+    }
+  }
 
   // 2b. If inheritContext, prepend parent conversation to prompt
   let fullPrompt = options.prompt;
