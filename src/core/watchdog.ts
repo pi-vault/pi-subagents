@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -304,7 +304,7 @@ export function createWatchdogRuntime(
     try {
       let diff: string;
       try {
-        diff = execSync("git diff --stat --patch", { cwd, stdio: "pipe", encoding: "utf-8" });
+        diff = execFileSync("git", ["diff", "--stat", "--patch", "--", ...signature.changedPaths], { cwd, stdio: "pipe", encoding: "utf-8", timeout: 10_000, maxBuffer: 256 * 1024 });
         if (diff.length > 8192) diff = diff.slice(0, 8192) + "\n... (truncated)";
       } catch {
         diff = "(unable to get diff)";

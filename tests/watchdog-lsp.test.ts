@@ -3,7 +3,7 @@ import {
   collectLspDiagnostics,
   parseTscOutput,
 } from "../src/core/watchdog-lsp.js";
-import type { LspDiagnostic, LspConfig } from "../src/core/watchdog-lsp.js";
+import type { LspConfig } from "../src/core/watchdog-lsp.js";
 
 describe("parseTscOutput", () => {
   it("parses error lines", () => {

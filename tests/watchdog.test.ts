@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { computeChangeSignature, createWatchdogWarnTool, createWatchdogRuntime, parseWatchdogConfig } from "../src/core/watchdog.js";
+import { computeChangeSignature, createWatchdogWarnTool, createWatchdogRuntime, parseWatchdogConfig, buildReviewPrompt } from "../src/core/watchdog.js";
 import type { WatchdogWarning } from "../src/core/watchdog.js";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -371,5 +371,14 @@ describe("WatchdogRuntime", () => {
     expect(runtime.status()).toBe("reviewing");
     await promise;
     expect(runtime.status()).toBe("idle");
+  });
+});
+
+describe("buildReviewPrompt", () => {
+  it("includes diff, lsp output, and agent id", () => {
+    const result = buildReviewPrompt("diff content", "lsp output", "agent-123");
+    expect(result).toContain("diff content");
+    expect(result).toContain("lsp output");
+    expect(result).toContain("agent-123");
   });
 });

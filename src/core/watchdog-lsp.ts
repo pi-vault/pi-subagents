@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
 
@@ -84,7 +84,7 @@ export async function collectLspDiagnostics(
   }
 
   try {
-    execSync(`${tsc} --noEmit --pretty false`, {
+    execFileSync(tsc, ["--noEmit", "--pretty", "false"], {
       cwd,
       stdio: "pipe",
       timeout: config.timeoutMs,
@@ -92,12 +92,18 @@ export async function collectLspDiagnostics(
     });
     return { status: "ok", diagnostics: [], checkedPaths };
   } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; killed?: boolean; signal?: string };
+    const e = err as { stdout?: string; stderr?: string; killed?: boolean; signal?: string; status?: number | null };
+    // Timeout or signal kill → unavailable
     if (e.killed || e.signal === "SIGTERM") {
       return { status: "timeout", diagnostics: [], checkedPaths };
     }
     const output = (e.stdout ?? "") + (e.stderr ?? "");
     const diagnostics = parseTscOutput(output).slice(0, config.maxDiagnostics);
+    // tsc exits non-zero when it finds errors — that's expected and we parsed them above.
+    // If we got no parseable diagnostics from a non-zero exit, treat as a real failure.
+    if (diagnostics.length === 0) {
+      return { status: "failed", diagnostics: [], checkedPaths };
+    }
     return { status: "ok", diagnostics, checkedPaths };
   }
 }

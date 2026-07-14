@@ -341,7 +341,7 @@ export function registerSubagentsExtension(
         (pi as unknown as { sendMessage: (msg: unknown) => void }).sendMessage(
           {
             customType: "notification",
-            content: `Watchdog is controlled via settings (watchdog.enabled). Current status: ${st}. Use /watchdog off to disable for this session.`,
+            content: `Watchdog is controlled via settings (watchdog.enabled). Current status: ${st}. Note: /watchdog off disables permanently for this session.`,
             display: true,
           } as unknown as Parameters<typeof pi.sendMessage>[0],
         );
