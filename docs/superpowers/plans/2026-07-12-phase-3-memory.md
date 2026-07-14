@@ -10,7 +10,19 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-12-security-memory-intercom-watchdog-design.md` (Phase 3 section)
 
-**Dependencies:** Phase 1 (safe-fs) must be completed first.
+**Dependencies:** Phase 1 (safe-fs) must be completed first. (Verified: merged in PR #55)
+
+---
+
+## Memory Scope Directories
+
+| Scope     | Directory                                  | Git-tracked     | Use case                            |
+| --------- | ------------------------------------------ | --------------- | ----------------------------------- |
+| `user`    | `{getAgentDir()}/agent-memory/{path}/`     | N/A             | Cross-project role knowledge        |
+| `project` | `{cwd}/.pi/agent-memory/{path}/`           | Yes             | Project-specific agent notes        |
+| `local`   | `{cwd}/.pi/agent-memory-local/{path}/`     | No (.gitignore) | Machine-specific, sensitive context |
+
+> Note: `getAgentDir()` defaults to `~/.pi/agent/` but is overridable via `PI_CODING_AGENT_DIR`. Using it (rather than hardcoding `~/.pi/`) ensures memory follows the user's config.
 
 ---
 
@@ -45,7 +57,7 @@ export interface AgentMemoryConfig {
 }
 ```
 
-Add to `AgentDefinition` interface:
+Add to `AgentDefinition` interface (after `toolBudget`):
 
 ```typescript
 export interface AgentDefinition {
@@ -137,11 +149,15 @@ Expected: FAIL — module `../src/core/memory.js` does not exist
 Create `src/core/memory.ts`:
 
 ```typescript
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { isUnsafeName, resolveContained, safeReadFile } from "./safe-fs.js";
+import {
+  isSymlink,
+  isUnsafeName,
+  resolveContained,
+  safeReadFile,
+} from "./safe-fs.js";
 import type { AgentMemoryConfig, MemoryScope } from "../shared/types.js";
 
 const VALID_SCOPES: ReadonlySet<string> = new Set(["user", "project", "local"]);
@@ -157,8 +173,6 @@ export function parseMemoryConfig(raw: unknown): AgentMemoryConfig | undefined {
   if (typeof r.scope !== "string" || !VALID_SCOPES.has(r.scope))
     return undefined;
   if (typeof r.path !== "string" || !r.path) return undefined;
-
-  // Path must be a single safe segment (no slashes, no traversal)
   if (isUnsafeName(r.path)) return undefined;
 
   return { scope: r.scope as MemoryScope, path: r.path };
@@ -191,37 +205,34 @@ Add to `tests/memory.test.ts`:
 
 ```typescript
 import { resolveMemoryDir } from "../src/core/memory.js";
-import { mkdirSync, symlinkSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, symlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 describe("resolveMemoryDir", () => {
   const tmp = mkdtempSync(join(tmpdir(), "memory-resolve-"));
 
   it("resolves project scope to .pi/agent-memory/<path>/", () => {
     const result = resolveMemoryDir("project", "reviewer", tmp);
-    expect(result).toHaveProperty("dir");
-    expect((result as { dir: string }).dir).toBe(
-      join(tmp, ".pi", "agent-memory", "reviewer"),
-    );
+    expect(result).toEqual({
+      dir: join(tmp, ".pi", "agent-memory", "reviewer"),
+    });
   });
 
   it("resolves local scope to .pi/agent-memory-local/<path>/", () => {
     const result = resolveMemoryDir("local", "reviewer", tmp);
-    expect(result).toHaveProperty("dir");
-    expect((result as { dir: string }).dir).toBe(
-      join(tmp, ".pi", "agent-memory-local", "reviewer"),
-    );
+    expect(result).toEqual({
+      dir: join(tmp, ".pi", "agent-memory-local", "reviewer"),
+    });
   });
 
-  it("resolves user scope to ~/.pi/agent-memory/<path>/", () => {
+  it("resolves user scope to getAgentDir()/agent-memory/<path>/", () => {
     const result = resolveMemoryDir("user", "reviewer", tmp);
-    expect(result).toHaveProperty("dir");
-    // User scope uses getAgentDir() or ~/.pi/agent-memory/
-    const dir = (result as { dir: string }).dir;
-    expect(dir).toContain("agent-memory");
-    expect(dir).toContain("reviewer");
+    expect(result).toEqual({
+      dir: join(getAgentDir(), "agent-memory", "reviewer"),
+    });
   });
 
   it("returns error for unsafe path", () => {
@@ -229,17 +240,13 @@ describe("resolveMemoryDir", () => {
     expect(result).toHaveProperty("error");
   });
 
-  it("returns error when root is a symlink", () => {
+  it("returns error when .pi is a symlink", () => {
     const realDir = join(tmp, "real-pi");
     mkdirSync(join(realDir, "agent-memory"), { recursive: true });
-    const symPi = join(tmp, "sym-project", ".pi");
-    mkdirSync(join(tmp, "sym-project"), { recursive: true });
-    symlinkSync(realDir, symPi);
-    const result = resolveMemoryDir(
-      "project",
-      "test",
-      join(tmp, "sym-project"),
-    );
+    const symProject = join(tmp, "sym-project");
+    mkdirSync(symProject, { recursive: true });
+    symlinkSync(realDir, join(symProject, ".pi"));
+    const result = resolveMemoryDir("project", "test", symProject);
     expect(result).toHaveProperty("error");
   });
 });
@@ -264,7 +271,6 @@ export function resolveMemoryDir(
   scopedPath: string,
   cwd: string,
 ): { dir: string } | { error: string } {
-  // Validate path segment
   if (isUnsafeName(scopedPath)) {
     return { error: `Unsafe memory path: "${scopedPath}"` };
   }
@@ -282,63 +288,7 @@ export function resolveMemoryDir(
       break;
   }
 
-  // Check if .pi directory itself is a symlink (project/local scopes)
-  if (scope !== "user") {
-    const piDir = join(cwd, ".pi");
-    if (existsSync(piDir)) {
-      const { isSymlink } = require("./safe-fs.js");
-      if (isSymlink(piDir)) {
-        return { error: `.pi directory is a symlink — refusing memory access` };
-      }
-    }
-  }
-
-  const resolved = resolveContained(rootDir, scopedPath);
-  if (!resolved) {
-    return { error: `Memory path "${scopedPath}" escapes root directory` };
-  }
-
-  return { dir: resolved };
-}
-```
-
-Wait — we can't use `require` in an ESM module. Let me fix that:
-
-```typescript
-import {
-  isSymlink,
-  resolveContained,
-  safeReadFile,
-  isUnsafeName,
-} from "./safe-fs.js";
-```
-
-The import is already at the top. The implementation should be:
-
-```typescript
-export function resolveMemoryDir(
-  scope: MemoryScope,
-  scopedPath: string,
-  cwd: string,
-): { dir: string } | { error: string } {
-  if (isUnsafeName(scopedPath)) {
-    return { error: `Unsafe memory path: "${scopedPath}"` };
-  }
-
-  let rootDir: string;
-  switch (scope) {
-    case "user":
-      rootDir = join(getAgentDir(), "agent-memory");
-      break;
-    case "project":
-      rootDir = join(cwd, ".pi", "agent-memory");
-      break;
-    case "local":
-      rootDir = join(cwd, ".pi", "agent-memory-local");
-      break;
-  }
-
-  // Check if .pi directory itself is a symlink (project/local scopes)
+  // Reject symlinked .pi directory (project/local scopes only)
   if (scope !== "user") {
     const piDir = join(cwd, ".pi");
     if (existsSync(piDir) && isSymlink(piDir)) {
@@ -381,6 +331,7 @@ Add to `tests/memory.test.ts`:
 
 ```typescript
 import { readMemoryFile } from "../src/core/memory.js";
+import { writeFileSync } from "node:fs";
 
 describe("readMemoryFile", () => {
   const tmp = mkdtempSync(join(tmpdir(), "memory-read-"));
@@ -395,14 +346,10 @@ describe("readMemoryFile", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "MEMORY.md"), "# Notes\n- item 1\n- item 2\n");
     const result = readMemoryFile(dir);
-    expect(result).not.toBeNull();
-    expect(result).not.toBe("unsafe");
-    expect((result as { contents: string }).contents).toBe(
-      "# Notes\n- item 1\n- item 2\n",
-    );
-    expect((result as { contents: string; truncated: boolean }).truncated).toBe(
-      false,
-    );
+    expect(result).toEqual({
+      contents: "# Notes\n- item 1\n- item 2\n",
+      truncated: false,
+    });
   });
 
   it("returns 'unsafe' when MEMORY.md is a symlink", () => {
@@ -425,7 +372,7 @@ describe("readMemoryFile", () => {
       truncated: boolean;
     };
     expect(result.truncated).toBe(true);
-    expect(result.contents.split("\n").length).toBeLessThanOrEqual(201); // 200 lines + possible trailing
+    expect(result.contents.split("\n").length).toBeLessThanOrEqual(200);
   });
 
   it("truncates at 16KB", () => {
@@ -440,7 +387,7 @@ describe("readMemoryFile", () => {
       truncated: boolean;
     };
     expect(result.truncated).toBe(true);
-    expect(result.contents.length).toBeLessThanOrEqual(16384 + 100); // small tolerance for split
+    expect(result.contents.length).toBeLessThanOrEqual(16_384);
   });
 });
 ```
@@ -468,13 +415,11 @@ const MAX_BYTES = 16_384;
  */
 export function readMemoryFile(memoryDir: string): MemoryFileResult {
   const filePath = join(memoryDir, "MEMORY.md");
-  const contents = safeReadFile(filePath);
 
-  if (contents === undefined) {
-    // Distinguish: file doesn't exist vs exists but unsafe
-    if (!existsSync(filePath)) return null;
-    return "unsafe";
-  }
+  if (!existsSync(filePath)) return null;
+
+  const contents = safeReadFile(filePath);
+  if (contents === undefined) return "unsafe";
 
   // Apply limits
   let truncated = false;
@@ -530,7 +475,13 @@ describe("buildMemoryInjection", () => {
   it("returns read-write block when hasWriteTools is true", () => {
     const dir = join(tmp, "rw-agent");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "MEMORY.md"), "# My notes\n- thing 1\n");
+    mkdirSync(join(tmp, ".pi", "agent-memory", "rw-agent"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(tmp, ".pi", "agent-memory", "rw-agent", "MEMORY.md"),
+      "# My notes\n- thing 1\n",
+    );
 
     const result = buildMemoryInjection(
       "Scout",
@@ -545,9 +496,13 @@ describe("buildMemoryInjection", () => {
   });
 
   it("returns read-only block when hasWriteTools is false and file exists", () => {
-    const dir = join(tmp, "ro-agent");
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "MEMORY.md"), "# Existing\n");
+    mkdirSync(join(tmp, ".pi", "agent-memory", "ro-agent"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(tmp, ".pi", "agent-memory", "ro-agent", "MEMORY.md"),
+      "# Existing\n",
+    );
 
     const result = buildMemoryInjection(
       "Reader",
@@ -581,10 +536,14 @@ describe("buildMemoryInjection", () => {
   });
 
   it("notes truncation when file is large", () => {
-    const dir = join(tmp, "big-agent");
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(tmp, ".pi", "agent-memory", "big-agent"), {
+      recursive: true,
+    });
     const lines = Array.from({ length: 250 }, (_, i) => `line ${i}`);
-    writeFileSync(join(dir, "MEMORY.md"), lines.join("\n"));
+    writeFileSync(
+      join(tmp, ".pi", "agent-memory", "big-agent", "MEMORY.md"),
+      lines.join("\n"),
+    );
 
     const result = buildMemoryInjection(
       "Big",
@@ -609,21 +568,22 @@ Add to `src/core/memory.ts`:
 ```typescript
 /**
  * Build prompt injection block for agent memory.
- * Returns empty string if read-only mode and no MEMORY.md exists.
+ * Returns empty string if read-only mode and no MEMORY.md exists,
+ * or if directory resolution fails.
  */
 export function buildMemoryInjection(
-  agentName: string,
+  _agentName: string,
   config: AgentMemoryConfig,
   cwd: string,
   hasWriteTools: boolean,
 ): string {
   const dirResult = resolveMemoryDir(config.scope, config.path, cwd);
-  if ("error" in dirResult) return ""; // silently skip on resolution error
+  if ("error" in dirResult) return "";
 
   const { dir } = dirResult;
   const fileResult = readMemoryFile(dir);
 
-  // Read-only mode: skip entirely if no file
+  // Read-only mode: skip entirely if no file or unsafe
   if (!hasWriteTools) {
     if (fileResult === null || fileResult === "unsafe") return "";
     const { contents, truncated } = fileResult;
@@ -693,23 +653,49 @@ git commit -m "feat(memory): add buildMemoryInjection with read-write/read-only 
 
 - Modify: `src/core/agent-format.ts`
 
-- [ ] **Step 1: Add memory parsing to agent frontmatter parser**
+- [ ] **Step 1: Import parseMemoryConfig**
 
-Find where other optional frontmatter fields are parsed in `agent-format.ts` (look for where `disallowedTools`, `toolBudget`, etc. are extracted from the parsed YAML). Add:
+Add to the imports at the top of `src/core/agent-format.ts`:
 
 ```typescript
 import { parseMemoryConfig } from "./memory.js";
-
-// In the function that builds AgentDefinition from parsed frontmatter:
-memory: parseMemoryConfig(frontmatter.memory),
 ```
 
-- [ ] **Step 2: Run existing agent-format tests**
+- [ ] **Step 2: Parse memory field and add to return object**
+
+In `parseAgentContent()`, after the `toolBudget` validation block (around line 438) and before the `return { ok: true, agent: { ... } }` block (line 440), add:
+
+```typescript
+  // memory
+  const memory = parseMemoryConfig(frontmatter.memory);
+```
+
+Then add `memory,` to the returned agent object (after `toolBudget,`):
+
+```typescript
+  return {
+    ok: true,
+    agent: {
+      // ... existing fields ...
+      toolBudget,
+      memory,
+      systemPrompt,
+      sourcePath: filePath,
+    },
+  };
+```
+
+- [ ] **Step 3: Run existing agent-format tests**
 
 Run: `pnpm test -- tests/agent-format.test.ts`
 Expected: All existing tests still pass
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Run typecheck**
+
+Run: `pnpm typecheck`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/core/agent-format.ts
@@ -724,50 +710,56 @@ git commit -m "feat(memory): parse memory config from agent frontmatter"
 
 - Modify: `src/core/agent-runner.ts`
 
-- [ ] **Step 1: Add memory injection after system prompt build**
+- [ ] **Step 1: Import buildMemoryInjection**
 
-In `src/core/agent-runner.ts`, after `buildAgentPrompt()` returns the system prompt (around line 204), append the memory block:
+Add to the imports at the top of `src/core/agent-runner.ts`:
 
 ```typescript
 import { buildMemoryInjection } from "./memory.js";
+```
 
-// After: const systemPrompt = buildAgentPrompt(agentDef, ...);
-// Add memory injection
-let finalSystemPrompt = systemPrompt;
-if (agentDef.memory) {
-  const effectivelyHas = (name: string) =>
-    allowedTools.includes(name) &&
-    !(agentDef.disallowedTools ?? []).includes(name);
-  const hasWriteTools = effectivelyHas("write") || effectivelyHas("edit");
-  const memoryBlock = buildMemoryInjection(
-    agentDef.name,
-    agentDef.memory,
+- [ ] **Step 2: Add memory injection after system prompt build**
+
+In `runAgent()`, the system prompt is built at lines 204-210:
+
+```typescript
+  const systemPrompt = buildAgentPrompt(
+    agentDef,
     options.cwd,
-    hasWriteTools,
+    env,
+    options.parentSystemPrompt,
+    skillBlocks,
   );
-  if (memoryBlock) {
-    finalSystemPrompt = systemPrompt + "\n\n" + memoryBlock;
+```
+
+Change `const` to `let` and add memory injection immediately after:
+
+```typescript
+  let systemPrompt = buildAgentPrompt(
+    agentDef,
+    options.cwd,
+    env,
+    options.parentSystemPrompt,
+    skillBlocks,
+  );
+
+  // Inject agent memory block (append position)
+  if (agentDef.memory) {
+    const hasWriteTools =
+      allowedTools.includes("write") || allowedTools.includes("edit");
+    const memoryBlock = buildMemoryInjection(
+      agentDef.name,
+      agentDef.memory,
+      options.cwd,
+      hasWriteTools,
+    );
+    if (memoryBlock) {
+      systemPrompt += "\n\n" + memoryBlock;
+    }
   }
-}
 ```
 
-Then use `finalSystemPrompt` instead of `systemPrompt` in the `ResourceLoader` override:
-
-```typescript
-systemPromptOverride: () => finalSystemPrompt,
-```
-
-- [ ] **Step 2: Emit notification for local scope first creation**
-
-Add after the memory injection (only for local scope when directory is being created for the first time):
-
-```typescript
-// This will be handled by the existing sendMessage in subagent.ts if needed.
-// The memory.ts module doesn't create directories itself — the agent does via write tool.
-// No change needed here for the notification — it's handled at the extension level.
-```
-
-Actually, the notification for `.gitignore` is emitted at the extension level (index.ts) when we detect a local memory directory creation. This integration is lightweight and can be added later if needed. For now, the memory module does not create directories.
+> Note: `allowedTools` (defined at line 191) already accounts for `disallowedTools` filtering, so checking `allowedTools.includes("write")` is the correct "effectively has" check.
 
 - [ ] **Step 3: Run full test suite**
 
@@ -783,7 +775,7 @@ git commit -m "feat(memory): inject memory block into agent system prompt"
 
 ---
 
-### Task 8: Typecheck and lint
+### Task 8: Typecheck, lint, and final verification
 
 - [ ] **Step 1: Run typecheck**
 
@@ -793,7 +785,7 @@ Expected: No errors
 - [ ] **Step 2: Run lint**
 
 Run: `pnpm lint`
-Expected: No errors
+Expected: No errors (fix any formatting issues with `pnpm format`)
 
 - [ ] **Step 3: Run full check**
 
@@ -806,3 +798,20 @@ Expected: All pass
 git add -A
 git commit -m "chore: fix lint/type issues from memory integration"
 ```
+
+---
+
+## Implementation Notes
+
+**What this module does NOT do (by design):**
+
+- Does not create memory directories. The agent creates `MEMORY.md` via its write tool, which creates parent directories as needed.
+- Does not emit `.gitignore` notifications for local scope. That's an extension-level concern for a follow-up if needed.
+- Does not integrate into chain execution directly. Chains invoke agents through `runAgent()`, so memory injection is inherited automatically.
+
+**Security invariants (enforced via Phase 1 safe-fs):**
+
+- Memory path must be a single safe segment (alphanumeric + `._-`, no traversal)
+- MEMORY.md must not be a symlink
+- `.pi` directory must not be a symlink (project/local scopes)
+- Path resolution must stay contained within the memory root directory
