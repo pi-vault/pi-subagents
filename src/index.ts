@@ -19,6 +19,11 @@ import { SmartBatchTracker } from "./core/smart-batch-tracker.js";
 import { registerAgentCommand, registerSubagentTool } from "./core/subagent.js";
 import { registerRpcHandlers } from "./core/rpc.js";
 import { registerWaitTool } from "./core/wait.js";
+import {
+  createIntercomManager,
+  createIntercomTool,
+  type IntercomRequest,
+} from "./core/intercom.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
@@ -111,6 +116,22 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     widget.update();
   });
 
+  // Intercom: child↔parent communication channel
+  const intercom = createIntercomManager({
+    onRequest: (request) => {
+      const label = `[${request.agentName}] ${request.reason}: ${request.message}`;
+      (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+        {
+          customType: "intercom-request",
+          content: label,
+          display: true,
+          details: request,
+        } as unknown as Parameters<typeof pi.sendMessage>[0],
+        { deliverAs: "followUp", triggerTurn: true },
+      );
+    },
+  });
+
   const manager = new AgentManager(3, (record) => {
     // Fire lifecycle events
     const isError =
@@ -138,6 +159,9 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
         completedAt: record.completedAt,
       },
     );
+
+    // Cancel any pending intercom requests for this agent
+    intercom.cancelForAgent(record.id);
 
     // TUI: mark agent finished immediately regardless of notification path
     agentActivity.delete(record.id);
@@ -225,6 +249,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     fleet,
     agentActivity,
     chainWidget,
+    intercom,
     ensureTimers: () => {
       widget.ensureTimer();
       fleet.ensureTimer();
@@ -393,6 +418,26 @@ export function registerSubagentsExtension(
   // wait tool — blocks until background agent(s) complete
   registerWaitTool(pi, deps.manager);
 
+  // Intercom: parent-side reply tool
+  if (deps.intercom) {
+    pi.registerTool(createIntercomTool(deps.intercom) as never);
+
+    // Render intercom requests from children
+    pi.registerMessageRenderer("intercom-request", (msg, _opts, theme) => {
+      const d = (msg as { details?: IntercomRequest }).details;
+      if (!d) return new Text("", 0, 0);
+      const t = theme as {
+        fg: (color: string, text: string) => string;
+        bold: (text: string) => string;
+      };
+      return new Text(
+        `${t.bold(t.fg("cyan", `[${d.agentName}]`))} ${d.reason}: ${d.message}`,
+        0,
+        0,
+      );
+    });
+  }
+
   // Captured from ExtensionContext during tool execution for RPC model resolution
   let capturedModelRegistry: {
     getAll: () => Array<{ id: string; provider: string; name?: string }>;
@@ -424,6 +469,7 @@ export function registerSubagentsExtension(
     deps.chainWidget?.dispose();
     deps.fleet?.dispose();
     deps.agentActivity?.clear();
+    deps.intercom?.dispose();
     deps.manager.abortAll();
     deps.manager.dispose();
     deps.groupJoin?.dispose();
