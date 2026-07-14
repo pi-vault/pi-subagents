@@ -6,6 +6,7 @@ import type {
   ToolBudgetConfig,
 } from "../shared/types.js";
 import { validateToolBudget } from "./tool-budget.js";
+import { parseMemoryConfig } from "./memory.js";
 
 type ParseResult =
   | { ok: true; agent: AgentDefinition }
@@ -437,6 +438,9 @@ export function parseAgentContent(
     }
   }
 
+  // memory
+  const memory = parseMemoryConfig(frontmatter.memory);
+
   return {
     ok: true,
     agent: {
@@ -457,6 +461,7 @@ export function parseAgentContent(
       extensions,
       disallowedTools,
       toolBudget,
+      memory,
       systemPrompt,
       sourcePath: filePath,
     },
