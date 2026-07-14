@@ -116,6 +116,7 @@ export class AgentManager {
       startedAt: Date.now(),
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       invocation: { agent: agentDef.name, task: options.prompt, cwd: options.cwd, description: options.description },
+      cwd: options.cwd,
       isBackground,
       compactionCount: 0,
     };
@@ -161,6 +162,7 @@ export class AgentManager {
     id: string,
     task: string,
     promise: Promise<{ content: string; isError: boolean }>,
+    cwd: string,
     onClear?: () => void,
   ): AgentRecord {
     const record: AgentRecord = {
@@ -173,6 +175,7 @@ export class AgentManager {
       turnCount: 0,
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       isBackground: true,
+      cwd,
     };
     this.registerExternalRecord(id, record);
     promise

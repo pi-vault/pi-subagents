@@ -547,6 +547,7 @@ export async function executeSlashChain(
       chainRunId,
       task,
       executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+      ctx.cwd,
       () => deps.chainWidget?.clear(),
     );
     pi.sendMessage({

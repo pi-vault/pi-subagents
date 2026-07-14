@@ -243,6 +243,7 @@ export interface AgentRecord {
   abortController?: AbortController;
   lifetimeUsage: LifetimeUsage;
   invocation?: AgentInvocation;
+  cwd?: string;
   // Phase 3: background execution fields
   isBackground?: boolean;
   promise?: Promise<string>;
