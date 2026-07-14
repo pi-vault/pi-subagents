@@ -749,6 +749,30 @@ describe("new frontmatter fields", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.agent.memory).toBeUndefined();
   });
+
+  test("parses intercom: true from frontmatter", () => {
+    const content =
+      "---\nname: scout\ndescription: Scouts\ntools: read\nintercom: true\n---\nDo things\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.intercom).toBe(true);
+  });
+
+  test("intercom is undefined when omitted", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.intercom).toBeUndefined();
+  });
+
+  test("intercom is undefined for non-true value", () => {
+    const content =
+      '---\nname: test\ndescription: A test\ntools: read\nintercom: "yes"\n---\nPrompt\n';
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.agent.intercom).toBeUndefined();
+  });
 });
 
 describe("round-trip", () => {

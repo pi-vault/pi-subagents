@@ -1,4 +1,5 @@
 import type { AgentManager } from "../core/agent-manager.js";
+import type { IntercomManager } from "../core/intercom.js";
 import type { GroupJoinManager } from "../core/group-join-manager.js";
 import type { AgentActivity } from "../tui/activity.js";
 import type { AgentWidget } from "../tui/agent-widget.js";
@@ -58,4 +59,5 @@ export interface RuntimeDeps {
   ensureTimers?: () => void;
   /** Chain progress widget — present when TUI is active. */
   chainWidget?: ChainWidget;
+  intercom?: IntercomManager;
 }
