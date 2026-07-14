@@ -95,7 +95,10 @@ export function computeChangeSignature(cwd: string): ChangeSignature | undefined
   const changedPaths: string[] = [];
 
   for (const entry of entries) {
-    const filePath = entry.slice(3); // skip "XY " status chars + space
+    // Valid porcelain entries are "XY path" where the 3rd char is a space.
+    // Rename/copy source paths have no status prefix — skip them.
+    if (entry.length < 3 || entry[2] !== " ") continue;
+    const filePath = entry.slice(3);
     if (!filePath) continue;
     if (IGNORED_PREFIXES.some((prefix) => filePath.startsWith(prefix))) continue;
     changedPaths.push(filePath);

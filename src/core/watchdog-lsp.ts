@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 
 export interface LspDiagnostic {
   file: string;
@@ -68,7 +68,7 @@ export async function collectLspDiagnostics(
   config: LspConfig,
 ): Promise<LspResult> {
   const tsFiles = changedPaths.filter((p) => {
-    const ext = p.slice(p.lastIndexOf("."));
+    const ext = extname(p);
     return TS_JS_EXTENSIONS.has(ext);
   });
 
