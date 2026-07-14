@@ -333,19 +333,10 @@ export function registerSubagentsExtension(
 
   // Watchdog slash command: /watchdog [status|on|off]
   pi.registerCommand("watchdog", {
-    description: "Watchdog control: status, on, off",
+    description: "Watchdog control: status, off",
     handler: async (args) => {
       const sub = args.trim().toLowerCase();
-      if (sub === "on") {
-        const st = deps.watchdog?.status() ?? "not initialized";
-        (pi as unknown as { sendMessage: (msg: unknown) => void }).sendMessage(
-          {
-            customType: "notification",
-            content: `Watchdog is controlled via settings (watchdog.enabled). Current status: ${st}. Note: /watchdog off disables permanently for this session.`,
-            display: true,
-          } as unknown as Parameters<typeof pi.sendMessage>[0],
-        );
-      } else if (sub === "off") {
+      if (sub === "off") {
         deps.watchdog?.dispose();
         (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
           {

@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Type } from "typebox";
 
@@ -27,7 +25,6 @@ export interface WatchdogWarning {
 
 export interface ChangeSignature {
   root: string;
-  key: string;
   changedPaths: string[];
 }
 
@@ -35,21 +32,11 @@ export interface WatchdogConfig {
   enabled: boolean;
   model?: string;
   thinking?: string;
-  autoFollow: {
-    blockers: boolean;
-    concerns: boolean;
-    maxAttempts: number;
-    stalemateRepeats: number;
-  };
   lsp: {
     enabled: boolean;
     timeoutMs: number;
     maxFiles: number;
     maxDiagnostics: number;
-  };
-  children: {
-    enabled: boolean;
-    overrides: Record<string, Partial<WatchdogConfig>>;
   };
 }
 
@@ -107,23 +94,7 @@ export function computeChangeSignature(cwd: string): ChangeSignature | undefined
 
   if (changedPaths.length === 0) return undefined;
 
-  const hash = createHash("sha256");
-  for (const p of changedPaths.sort()) {
-    const fullPath = join(root, p);
-    if (existsSync(fullPath)) {
-      try {
-        const content = readFileSync(fullPath, { encoding: null });
-        hash.update(p);
-        hash.update(content.subarray(0, 8192));
-      } catch {
-        hash.update(p);
-      }
-    } else {
-      hash.update(p + ":deleted");
-    }
-  }
-
-  return { root, key: hash.digest("hex"), changedPaths };
+  return { root, changedPaths };
 }
 
 // ─── Warning Tool ─────────────────────────────────────────────────────────────
@@ -179,21 +150,11 @@ export function createWatchdogWarnTool(
 
 const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   enabled: false,
-  autoFollow: {
-    blockers: true,
-    concerns: false,
-    maxAttempts: 3,
-    stalemateRepeats: 3,
-  },
   lsp: {
     enabled: true,
     timeoutMs: 3_000,
     maxFiles: 20,
     maxDiagnostics: 50,
-  },
-  children: {
-    enabled: false,
-    overrides: {},
   },
 };
 
@@ -204,31 +165,19 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
   if (!raw || typeof raw !== "object") {
     return {
       ...DEFAULT_WATCHDOG_CONFIG,
-      autoFollow: { ...DEFAULT_WATCHDOG_CONFIG.autoFollow },
       lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
-      children: { ...DEFAULT_WATCHDOG_CONFIG.children },
     };
   }
   const r = raw as Record<string, unknown>;
 
   const config: WatchdogConfig = {
     ...DEFAULT_WATCHDOG_CONFIG,
-    autoFollow: { ...DEFAULT_WATCHDOG_CONFIG.autoFollow },
     lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
-    children: { ...DEFAULT_WATCHDOG_CONFIG.children },
   };
 
   if (typeof r.enabled === "boolean") config.enabled = r.enabled;
   if (typeof r.model === "string") config.model = r.model;
   if (typeof r.thinking === "string") config.thinking = r.thinking;
-
-  if (r.autoFollow && typeof r.autoFollow === "object") {
-    const af = r.autoFollow as Record<string, unknown>;
-    if (typeof af.blockers === "boolean") config.autoFollow.blockers = af.blockers;
-    if (typeof af.concerns === "boolean") config.autoFollow.concerns = af.concerns;
-    if (typeof af.maxAttempts === "number") config.autoFollow.maxAttempts = af.maxAttempts;
-    if (typeof af.stalemateRepeats === "number") config.autoFollow.stalemateRepeats = af.stalemateRepeats;
-  }
 
   if (r.lsp && typeof r.lsp === "object") {
     const lsp = r.lsp as Record<string, unknown>;
@@ -236,14 +185,6 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
     if (typeof lsp.timeoutMs === "number") config.lsp.timeoutMs = lsp.timeoutMs;
     if (typeof lsp.maxFiles === "number") config.lsp.maxFiles = lsp.maxFiles;
     if (typeof lsp.maxDiagnostics === "number") config.lsp.maxDiagnostics = lsp.maxDiagnostics;
-  }
-
-  if (r.children && typeof r.children === "object") {
-    const ch = r.children as Record<string, unknown>;
-    if (typeof ch.enabled === "boolean") config.children.enabled = ch.enabled;
-    if (ch.overrides && typeof ch.overrides === "object") {
-      config.children.overrides = ch.overrides as Record<string, Partial<WatchdogConfig>>;
-    }
   }
 
   return config;
@@ -262,14 +203,6 @@ Rules:
 - Only report real issues with concrete evidence
 - Do NOT report style preferences, formatting, or naming opinions
 - Be specific: cite file:line and explain the actual problem`;
-
-export function buildReviewPrompt(
-  diff: string,
-  lspOutput: string,
-  agentId: string,
-): string {
-  return `## Git Diff\n${diff}\n\n## LSP Diagnostics\n${lspOutput}\n\n## Agent Context\nAgent: ${agentId}`;
-}
 
 // ─── Runtime ──────────────────────────────────────────────────────────────────
 
@@ -412,7 +345,7 @@ async function runDefaultReview(
 
   await session.bindExtensions({});
 
-  const prompt = buildReviewPrompt(diff, lspOutput, agentId);
+  const prompt = `## Git Diff\n${diff}\n\n## LSP Diagnostics\n${lspOutput}\n\n## Agent Context\nAgent: ${agentId}`;
 
   try {
     await session.prompt(prompt);

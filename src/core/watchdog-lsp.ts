@@ -13,7 +13,6 @@ export interface LspDiagnostic {
 export interface LspResult {
   status: "ok" | "unavailable" | "timeout" | "failed";
   diagnostics: LspDiagnostic[];
-  checkedPaths: string[];
 }
 
 export interface LspConfig {
@@ -73,14 +72,12 @@ export async function collectLspDiagnostics(
   });
 
   if (tsFiles.length === 0) {
-    return { status: "ok", diagnostics: [], checkedPaths: [] };
+    return { status: "ok", diagnostics: [] };
   }
-
-  const checkedPaths = tsFiles.slice(0, config.maxFiles);
 
   const tsc = findTsc(cwd);
   if (!tsc) {
-    return { status: "unavailable", diagnostics: [], checkedPaths };
+    return { status: "unavailable", diagnostics: [] };
   }
 
   try {
@@ -90,20 +87,20 @@ export async function collectLspDiagnostics(
       timeout: config.timeoutMs,
       encoding: "utf-8",
     });
-    return { status: "ok", diagnostics: [], checkedPaths };
+    return { status: "ok", diagnostics: [] };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; killed?: boolean; signal?: string; status?: number | null };
     // Timeout or signal kill → unavailable
     if (e.killed || e.signal === "SIGTERM") {
-      return { status: "timeout", diagnostics: [], checkedPaths };
+      return { status: "timeout", diagnostics: [] };
     }
     const output = (e.stdout ?? "") + (e.stderr ?? "");
     const diagnostics = parseTscOutput(output).slice(0, config.maxDiagnostics);
     // tsc exits non-zero when it finds errors — that's expected and we parsed them above.
     // If we got no parseable diagnostics from a non-zero exit, treat as a real failure.
     if (diagnostics.length === 0) {
-      return { status: "failed", diagnostics: [], checkedPaths };
+      return { status: "failed", diagnostics: [] };
     }
-    return { status: "ok", diagnostics, checkedPaths };
+    return { status: "ok", diagnostics };
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { computeChangeSignature, createWatchdogWarnTool, createWatchdogRuntime, parseWatchdogConfig, buildReviewPrompt } from "../src/core/watchdog.js";
+import { computeChangeSignature, createWatchdogWarnTool, createWatchdogRuntime, parseWatchdogConfig } from "../src/core/watchdog.js";
 import type { WatchdogWarning } from "../src/core/watchdog.js";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -14,19 +14,19 @@ afterEach(() => {
   }
 });
 
-describe("computeChangeSignature", () => {
-  function makeTmp(prefix: string): string {
-    const tmp = mkdtempSync(join(tmpdir(), prefix));
-    tmps.push(tmp);
-    return tmp;
-  }
+function makeTmp(prefix: string): string {
+  const tmp = mkdtempSync(join(tmpdir(), prefix));
+  tmps.push(tmp);
+  return tmp;
+}
 
+describe("computeChangeSignature", () => {
   it("returns undefined for non-git directory", () => {
     const tmp = makeTmp("watchdog-");
     expect(computeChangeSignature(tmp)).toBeUndefined();
   });
 
-  it("returns a signature with key and changedPaths for git repo with changes", () => {
+  it("returns a signature with changedPaths for git repo with changes", () => {
     const tmp = makeTmp("watchdog-git-");
     execSync("git init", { cwd: tmp, stdio: "pipe" });
     execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
@@ -39,7 +39,6 @@ describe("computeChangeSignature", () => {
     const sig = computeChangeSignature(tmp);
     expect(sig).toBeDefined();
     expect(sig!.changedPaths).toContain("file.ts");
-    expect(sig!.key).toBeTruthy();
   });
 
   it("returns undefined when no changes", () => {
@@ -67,23 +66,6 @@ describe("computeChangeSignature", () => {
     writeFileSync(join(tmp, ".pi", "settings.json"), '{"x":1}');
     const sig = computeChangeSignature(tmp);
     expect(sig).toBeUndefined();
-  });
-
-  it("produces different keys for different content changes", () => {
-    const tmp = makeTmp("watchdog-keys-");
-    execSync("git init", { cwd: tmp, stdio: "pipe" });
-    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
-    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
-    writeFileSync(join(tmp, "file.ts"), "original");
-    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
-
-    writeFileSync(join(tmp, "file.ts"), "change-a");
-    const sig1 = computeChangeSignature(tmp);
-
-    writeFileSync(join(tmp, "file.ts"), "change-b");
-    const sig2 = computeChangeSignature(tmp);
-
-    expect(sig1!.key).not.toBe(sig2!.key);
   });
 
   it("handles renamed files — includes new path, excludes source path corruption", () => {
@@ -122,7 +104,6 @@ describe("computeChangeSignature", () => {
     const sig = computeChangeSignature(tmp);
     expect(sig).toBeDefined();
     expect(sig!.changedPaths).toContain("file.ts");
-    expect(sig!.key).toBeTruthy();
   });
 });
 
@@ -227,17 +208,6 @@ describe("parseWatchdogConfig", () => {
     expect(config.enabled).toBe(true);
   });
 
-  it("parses nested autoFollow config", () => {
-    const config = parseWatchdogConfig({
-      enabled: true,
-      autoFollow: { blockers: false, maxAttempts: 5 },
-    });
-    expect(config.autoFollow.blockers).toBe(false);
-    expect(config.autoFollow.maxAttempts).toBe(5);
-    expect(config.autoFollow.concerns).toBe(false);
-    expect(config.autoFollow.stalemateRepeats).toBe(3);
-  });
-
   it("parses lsp config", () => {
     const config = parseWatchdogConfig({
       enabled: true,
@@ -260,12 +230,6 @@ describe("parseWatchdogConfig", () => {
 });
 
 describe("WatchdogRuntime", () => {
-  function makeTmp(prefix: string): string {
-    const tmp = mkdtempSync(join(tmpdir(), prefix));
-    tmps.push(tmp);
-    return tmp;
-  }
-
   it("status returns disabled when not enabled", () => {
     const runtime = createWatchdogRuntime(
       parseWatchdogConfig({ enabled: false }),
@@ -371,14 +335,5 @@ describe("WatchdogRuntime", () => {
     expect(runtime.status()).toBe("reviewing");
     await promise;
     expect(runtime.status()).toBe("idle");
-  });
-});
-
-describe("buildReviewPrompt", () => {
-  it("includes diff, lsp output, and agent id", () => {
-    const result = buildReviewPrompt("diff content", "lsp output", "agent-123");
-    expect(result).toContain("diff content");
-    expect(result).toContain("lsp output");
-    expect(result).toContain("agent-123");
   });
 });
