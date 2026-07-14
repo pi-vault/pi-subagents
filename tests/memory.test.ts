@@ -95,3 +95,61 @@ describe("resolveMemoryDir", () => {
     expect(result).toHaveProperty("error");
   });
 });
+
+describe("readMemoryFile", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "memory-read-"));
+
+  it("returns null when MEMORY.md does not exist", () => {
+    const result = readMemoryFile(join(tmp, "nonexistent"));
+    expect(result).toBeNull();
+  });
+
+  it("reads a normal MEMORY.md file", () => {
+    const dir = join(tmp, "agent1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "MEMORY.md"), "# Notes\n- item 1\n- item 2\n");
+    const result = readMemoryFile(dir);
+    expect(result).toEqual({
+      contents: "# Notes\n- item 1\n- item 2\n",
+      truncated: false,
+    });
+  });
+
+  it("returns 'unsafe' when MEMORY.md is a symlink", () => {
+    const dir = join(tmp, "agent2");
+    mkdirSync(dir, { recursive: true });
+    const realFile = join(tmp, "real-memory.md");
+    writeFileSync(realFile, "secret");
+    symlinkSync(realFile, join(dir, "MEMORY.md"));
+    const result = readMemoryFile(dir);
+    expect(result).toBe("unsafe");
+  });
+
+  it("truncates at 200 lines", () => {
+    const dir = join(tmp, "agent3");
+    mkdirSync(dir, { recursive: true });
+    const lines = Array.from({ length: 250 }, (_, i) => `line ${i + 1}`);
+    writeFileSync(join(dir, "MEMORY.md"), lines.join("\n"));
+    const result = readMemoryFile(dir) as {
+      contents: string;
+      truncated: boolean;
+    };
+    expect(result.truncated).toBe(true);
+    expect(result.contents.split("\n").length).toBeLessThanOrEqual(200);
+  });
+
+  it("truncates at 16KB", () => {
+    const dir = join(tmp, "agent4");
+    mkdirSync(dir, { recursive: true });
+    // Write 20KB of content in <200 lines (long lines)
+    const longLine = "x".repeat(1000);
+    const lines = Array.from({ length: 50 }, () => longLine);
+    writeFileSync(join(dir, "MEMORY.md"), lines.join("\n"));
+    const result = readMemoryFile(dir) as {
+      contents: string;
+      truncated: boolean;
+    };
+    expect(result.truncated).toBe(true);
+    expect(result.contents.length).toBeLessThanOrEqual(16_384);
+  });
+});

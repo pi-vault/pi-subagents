@@ -68,3 +68,42 @@ export function resolveMemoryDir(
 
   return { dir: resolved };
 }
+
+export type MemoryFileResult =
+  | { contents: string; truncated: boolean }
+  | "unsafe"
+  | null;
+
+const MAX_LINES = 200;
+const MAX_BYTES = 16_384;
+
+/**
+ * Read MEMORY.md safely (symlink rejection, line/byte limit).
+ */
+export function readMemoryFile(memoryDir: string): MemoryFileResult {
+  const filePath = join(memoryDir, "MEMORY.md");
+
+  if (!existsSync(filePath)) return null;
+
+  const contents = safeReadFile(filePath);
+  if (contents === undefined) return "unsafe";
+
+  // Apply limits
+  let truncated = false;
+  let result = contents;
+
+  // Byte limit first
+  if (result.length > MAX_BYTES) {
+    result = result.slice(0, MAX_BYTES);
+    truncated = true;
+  }
+
+  // Line limit
+  const lines = result.split("\n");
+  if (lines.length > MAX_LINES) {
+    result = lines.slice(0, MAX_LINES).join("\n");
+    truncated = true;
+  }
+
+  return { contents: result, truncated };
+}
