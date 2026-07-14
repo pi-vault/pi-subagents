@@ -38,8 +38,7 @@ describe("IntercomManager", () => {
     manager.reply(pending[0].id, "Use approach A");
 
     const result = await promise;
-    expect(result).not.toBeNull();
-    expect(result!.message).toBe("Use approach A");
+    expect(result).toBe("Use approach A");
   });
 
   it("sendRequest times out and returns timeout reply", async () => {
@@ -51,8 +50,7 @@ describe("IntercomManager", () => {
       message: "Help?",
       expectsReply: true,
     });
-    expect(result).not.toBeNull();
-    expect(result!.message).toContain("timeout");
+    expect(result).toContain("timeout");
   });
 
   it("cancelForAgent rejects pending requests for that agent", async () => {
@@ -67,8 +65,7 @@ describe("IntercomManager", () => {
     manager.cancelForAgent("a1");
 
     const result = await promise;
-    expect(result).not.toBeNull();
-    expect(result!.message).toContain("cancelled");
+    expect(result).toContain("cancelled");
   });
 
   it("dispose rejects all pending", async () => {
@@ -83,8 +80,7 @@ describe("IntercomManager", () => {
     manager.dispose();
 
     const result = await promise;
-    expect(result).not.toBeNull();
-    expect(result!.message).toContain("ended");
+    expect(result).toContain("ended");
   });
 
   it("listPending only shows expectsReply=true requests", async () => {
@@ -266,7 +262,7 @@ describe("createIntercomTool", () => {
     );
 
     const reply = await replyPromise;
-    expect(reply!.message).toBe("Use main.ts");
+    expect(reply).toBe("Use main.ts");
   });
 
   it("reply auto-resolves when only one pending", async () => {
@@ -296,7 +292,7 @@ describe("createIntercomTool", () => {
     );
 
     const reply = await replyPromise;
-    expect(reply!.message).toBe("Use main.ts");
+    expect(reply).toBe("Use main.ts");
   });
 
   it("status action returns info", async () => {

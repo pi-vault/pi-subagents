@@ -442,10 +442,7 @@ export function parseAgentContent(
   const memory = parseMemoryConfig(frontmatter.memory);
 
   // intercom
-  const intercom =
-    frontmatter.intercom === true || frontmatter.intercom === "true"
-      ? true
-      : undefined;
+  const intercom = frontmatter.intercom === "true" ? true : undefined;
 
   return {
     ok: true,

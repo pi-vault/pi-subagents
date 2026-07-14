@@ -17,17 +17,11 @@ export interface IntercomRequest {
   interview?: unknown;
 }
 
-export interface IntercomReply {
-  requestId: string;
-  message: string;
-  createdAt: number;
-}
-
 export interface IntercomManager {
   sendRequest(
     request: Omit<IntercomRequest, "id" | "createdAt">,
     signal?: AbortSignal,
-  ): Promise<IntercomReply | null>;
+  ): Promise<string | null>;
   listPending(): IntercomRequest[];
   reply(requestId: string, message: string): void;
   cancelForAgent(agentId: string): void;
@@ -36,7 +30,7 @@ export interface IntercomManager {
 
 interface PendingEntry {
   request: IntercomRequest;
-  resolve: (reply: IntercomReply | null) => void;
+  resolve: (reply: string | null) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -50,7 +44,7 @@ export function createIntercomManager(options?: {
   function sendRequest(
     input: Omit<IntercomRequest, "id" | "createdAt">,
     signal?: AbortSignal,
-  ): Promise<IntercomReply | null> {
+  ): Promise<string | null> {
     // Non-blocking progress updates
     if (!input.expectsReply) {
       return Promise.resolve(null);
@@ -62,15 +56,12 @@ export function createIntercomManager(options?: {
       createdAt: Date.now(),
     };
 
-    return new Promise<IntercomReply | null>((resolve) => {
+    return new Promise<string | null>((resolve) => {
       const timer = setTimeout(() => {
         pending.delete(request.id);
-        resolve({
-          requestId: request.id,
-          message:
-            "Supervisor reply timeout — no reply received. Proceed with your best judgment.",
-          createdAt: Date.now(),
-        });
+        resolve(
+          "Supervisor reply timeout — no reply received. Proceed with your best judgment.",
+        );
       }, timeoutMs);
 
       const entry: PendingEntry = { request, resolve, timer };
@@ -84,11 +75,7 @@ export function createIntercomManager(options?: {
         const onAbort = () => {
           clearTimeout(timer);
           pending.delete(request.id);
-          resolve({
-            requestId: request.id,
-            message: "Request cancelled.",
-            createdAt: Date.now(),
-          });
+          resolve("Request cancelled.");
         };
         signal.addEventListener("abort", onAbort, { once: true });
       }
@@ -118,11 +105,7 @@ export function createIntercomManager(options?: {
 
     clearTimeout(entry.timer);
     pending.delete(requestId);
-    entry.resolve({
-      requestId,
-      message,
-      createdAt: Date.now(),
-    });
+    entry.resolve(message);
   }
 
   function cancelForAgent(agentId: string): void {
@@ -130,11 +113,7 @@ export function createIntercomManager(options?: {
       if (entry.request.agentId === agentId) {
         clearTimeout(entry.timer);
         pending.delete(id);
-        entry.resolve({
-          requestId: id,
-          message: "Agent cancelled — supervisor request abandoned.",
-          createdAt: Date.now(),
-        });
+        entry.resolve("Agent cancelled — supervisor request abandoned.");
       }
     }
   }
@@ -142,11 +121,7 @@ export function createIntercomManager(options?: {
   function dispose(): void {
     for (const [id, entry] of pending) {
       clearTimeout(entry.timer);
-      entry.resolve({
-        requestId: id,
-        message: "Session ended — supervisor request abandoned.",
-        createdAt: Date.now(),
-      });
+      entry.resolve("Session ended — supervisor request abandoned.");
     }
     pending.clear();
   }
@@ -220,23 +195,7 @@ export function createContactSupervisorTool(
         };
       }
 
-      if (reply) {
-        if (reply.message.includes("timeout")) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Supervisor reply timeout — no reply received. Proceed with your best judgment.`,
-              },
-            ],
-          };
-        }
-        return {
-          content: [{ type: "text", text: `Parent replied: ${reply.message}` }],
-        };
-      }
-
-      return { content: [{ type: "text", text: "No reply received." }] };
+      return { content: [{ type: "text", text: reply! }] };
     },
   };
 }
