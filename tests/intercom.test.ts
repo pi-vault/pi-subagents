@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { createIntercomManager, createContactSupervisorTool } from "../src/core/intercom.js";
+import { createIntercomManager, createContactSupervisorTool, createIntercomTool } from "../src/core/intercom.js";
 import type { IntercomManager } from "../src/core/intercom.js";
 
 describe("IntercomManager", () => {
@@ -208,5 +208,107 @@ describe("createContactSupervisorTool", () => {
       {} as any,
     );
     expect(result.content[0].text).toContain("timeout");
+  });
+});
+
+describe("createIntercomTool", () => {
+  it("list action shows pending requests", async () => {
+    const manager = createIntercomManager({ timeoutMs: 5000 });
+    const tool = createIntercomTool(manager);
+
+    // Create a pending request
+    manager.sendRequest({
+      agentId: "a1",
+      agentName: "Scout",
+      reason: "need_decision",
+      message: "Which file?",
+      expectsReply: true,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    const result = await tool.execute(
+      "tc-1",
+      { action: "list" } as any,
+      undefined,
+      undefined,
+      {} as any,
+    );
+    expect(result.content[0].text).toContain("Scout");
+    expect(result.content[0].text).toContain("Which file?");
+  });
+
+  it("reply action resolves a pending request", async () => {
+    const manager = createIntercomManager({ timeoutMs: 5000 });
+    const tool = createIntercomTool(manager);
+
+    const replyPromise = manager.sendRequest({
+      agentId: "a1",
+      agentName: "Scout",
+      reason: "need_decision",
+      message: "Which file?",
+      expectsReply: true,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    const pending = manager.listPending();
+
+    await tool.execute(
+      "tc-1",
+      {
+        action: "reply",
+        replyTo: pending[0].id,
+        message: "Use main.ts",
+      } as any,
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    const reply = await replyPromise;
+    expect(reply!.message).toBe("Use main.ts");
+  });
+
+  it("reply auto-resolves when only one pending", async () => {
+    const manager = createIntercomManager({ timeoutMs: 5000 });
+    const tool = createIntercomTool(manager);
+
+    const replyPromise = manager.sendRequest({
+      agentId: "a1",
+      agentName: "Scout",
+      reason: "need_decision",
+      message: "Which file?",
+      expectsReply: true,
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    // No replyTo specified — should auto-resolve single pending
+    await tool.execute(
+      "tc-1",
+      {
+        action: "reply",
+        message: "Use main.ts",
+      } as any,
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    const reply = await replyPromise;
+    expect(reply!.message).toBe("Use main.ts");
+  });
+
+  it("status action returns info", async () => {
+    const manager = createIntercomManager({ timeoutMs: 5000 });
+    const tool = createIntercomTool(manager);
+    const result = await tool.execute(
+      "tc-1",
+      { action: "status" } as any,
+      undefined,
+      undefined,
+      {} as any,
+    );
+    expect(result.content[0].text).toContain("Intercom active");
   });
 });

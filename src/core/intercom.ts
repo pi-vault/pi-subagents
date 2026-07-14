@@ -236,4 +236,110 @@ export function createContactSupervisorTool(
   };
 }
 
+/**
+ * Create the parent-side `intercom` tool for replying to child requests.
+ */
+export function createIntercomTool(manager: IntercomManager): IntercomToolDef {
+  return {
+    name: "intercom",
+    label: "Intercom",
+    description:
+      "Reply to child agent requests. Use 'list' to see pending, 'reply' to respond, 'status' for info.",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("reply"),
+        Type.Literal("list"),
+        Type.Literal("status"),
+      ]),
+      replyTo: Type.Optional(
+        Type.String({
+          description:
+            "Request ID to reply to (prefix match). Omit if only one pending.",
+        }),
+      ),
+      message: Type.Optional(
+        Type.String({
+          description: "Reply message content",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const action = (params as { action?: string }).action;
+      switch (action) {
+        case "list": {
+          const pendingList = manager.listPending();
+          if (pendingList.length === 0) {
+            return {
+              content: [
+                { type: "text", text: "No pending intercom requests." },
+              ],
+            };
+          }
+          const lines = pendingList.map((r) => {
+            const age = Math.round((Date.now() - r.createdAt) / 1000);
+            return `- [${r.id}] ${r.agentName} (${r.reason}): "${r.message}" (${age}s ago)`;
+          });
+          return {
+            content: [
+              { type: "text", text: `Pending requests:\n${lines.join("\n")}` },
+            ],
+          };
+        }
+
+        case "reply": {
+          const pendingList = manager.listPending();
+          const replyTo = (params as { replyTo?: string }).replyTo;
+          const message = (params as { message?: string }).message ?? "";
+
+          if (!replyTo && pendingList.length === 1) {
+            // Auto-resolve single pending
+            manager.reply(pendingList[0].id, message);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Replied to ${pendingList[0].agentName}: "${message}"`,
+                },
+              ],
+            };
+          }
+
+          if (!replyTo) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Multiple pending requests. Specify replyTo ID. Use action "list" to see them.`,
+                },
+              ],
+            };
+          }
+
+          manager.reply(replyTo, message);
+          return {
+            content: [
+              { type: "text", text: `Replied to ${replyTo}: "${message}"` },
+            ],
+          };
+        }
+
+        case "status": {
+          const count = manager.listPending().length;
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Intercom active. Pending: ${count} request(s).`,
+              },
+            ],
+          };
+        }
+
+        default:
+          return { content: [{ type: "text", text: "Unknown action." }] };
+      }
+    },
+  };
+}
+
 
