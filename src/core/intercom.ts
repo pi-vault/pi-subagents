@@ -161,7 +161,7 @@ export interface IntercomToolDef {
   parameters: unknown;
   execute(
     toolCallId: string,
-    params: { reason: IntercomReason; message: string; interview?: unknown },
+    params: unknown,
     signal: AbortSignal | undefined,
     onUpdate: unknown,
     ctx: unknown,
@@ -195,16 +195,21 @@ export function createContactSupervisorTool(
       ),
     }),
     async execute(_toolCallId, params, signal) {
-      const expectsReply = params.reason !== "progress_update";
+      const p = params as {
+        reason: IntercomReason;
+        message: string;
+        interview?: unknown;
+      };
+      const expectsReply = p.reason !== "progress_update";
 
       const reply = await manager.sendRequest(
         {
           agentId,
           agentName,
-          reason: params.reason,
-          message: params.message,
+          reason: p.reason,
+          message: p.message,
           expectsReply,
-          interview: params.interview,
+          interview: p.interview,
         },
         signal ?? undefined,
       );
