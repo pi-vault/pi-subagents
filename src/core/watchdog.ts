@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Type } from "typebox";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -139,6 +140,21 @@ export function createWatchdogWarnTool(
     name: "watchdog_warn" as const,
     label: "Watchdog Warning",
     description: "Emit a warning about a code issue found during review.",
+    parameters: Type.Object({
+      severity: Type.Union([Type.Literal("blocker"), Type.Literal("concern")]),
+      summary: Type.String({ description: "One-line description" }),
+      evidence: Type.String({ description: "file:line or relevant code snippet" }),
+      recommendedAction: Type.String({ description: "Specific fix instruction" }),
+      category: Type.Union([
+        Type.Literal("correctness"),
+        Type.Literal("missed-constraint"),
+        Type.Literal("test-gap"),
+        Type.Literal("unsafe-change"),
+        Type.Literal("scope-drift"),
+        Type.Literal("loop-risk"),
+        Type.Literal("other"),
+      ]),
+    }),
     async execute(
       _toolCallId: string,
       params: WatchdogWarning,
