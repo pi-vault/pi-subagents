@@ -221,7 +221,7 @@ export async function runAgent(
       hasWriteTools,
     );
     if (memoryBlock) {
-      systemPrompt += "\n\n" + memoryBlock;
+      systemPrompt += `\n\n${memoryBlock}`;
     }
   }
 
