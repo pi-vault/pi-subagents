@@ -21,8 +21,8 @@
 | `src/shared/types.ts`        | Modify | Add `intercom` field to `AgentDefinition`                              |
 | `src/shared/runtime-deps.ts` | Modify | Add `intercom?: IntercomManager`                                       |
 | `src/core/agent-format.ts`   | Modify | Parse `intercom` from frontmatter                                      |
-| `src/core/agent-runner.ts`   | Modify | Inject `contact_supervisor` tool for intercom agents                   |
-| `src/index.ts`               | Modify | Create IntercomManager, register parent tool, dispose on shutdown      |
+| `src/core/agent-manager.ts`  | Modify | Inject `contact_supervisor` tool via customTools                       |
+| `src/index.ts`               | Modify | Create IntercomManager, register parent tool, renderer, cleanup        |
 
 ---
 
@@ -153,6 +153,37 @@ describe("IntercomManager", () => {
   it("reply to nonexistent ID is a no-op", () => {
     expect(() => manager.reply("nonexistent", "hi")).not.toThrow();
   });
+
+  it("onRequest callback fires for expectsReply=true", async () => {
+    const onRequest = vi.fn();
+    const mgr = createIntercomManager({ timeoutMs: 5000, onRequest });
+    mgr.sendRequest({
+      agentId: "a1",
+      agentName: "Scout",
+      reason: "need_decision",
+      message: "Which?",
+      expectsReply: true,
+    });
+    expect(onRequest).toHaveBeenCalledOnce();
+    expect(onRequest.mock.calls[0][0]).toMatchObject({
+      agentName: "Scout",
+      reason: "need_decision",
+    });
+    mgr.dispose();
+  });
+
+  it("onRequest callback does not fire for expectsReply=false", async () => {
+    const onRequest = vi.fn();
+    const mgr = createIntercomManager({ timeoutMs: 5000, onRequest });
+    await mgr.sendRequest({
+      agentId: "a1",
+      agentName: "Scout",
+      reason: "progress_update",
+      message: "50%",
+      expectsReply: false,
+    });
+    expect(onRequest).not.toHaveBeenCalled();
+  });
 });
 ```
 
@@ -209,6 +240,7 @@ interface PendingEntry {
 
 export function createIntercomManager(options?: {
   timeoutMs?: number;
+  onRequest?: (request: IntercomRequest) => void;
 }): IntercomManager {
   const timeoutMs = options?.timeoutMs ?? 300_000; // 5 min default
   const pending = new Map<string, PendingEntry>();
@@ -241,6 +273,9 @@ export function createIntercomManager(options?: {
 
       const entry: PendingEntry = { request, resolve, timer };
       pending.set(request.id, entry);
+
+      // Notify listener (e.g., parent session) about the new request
+      options?.onRequest?.(request);
 
       // Wire abort signal
       if (signal) {
@@ -797,128 +832,316 @@ export interface RuntimeDeps {
 
 - [ ] **Step 3: Parse `intercom` from frontmatter**
 
-In `src/core/agent-format.ts`, where boolean frontmatter fields are parsed, add:
+In `src/core/agent-format.ts`, in `parseAgentContent()` after the memory parsing line (`const memory = parseMemoryConfig(frontmatter.memory);`), add:
 
 ```typescript
-intercom: frontmatter.intercom === true ? true : undefined,
+// intercom
+const intercom = frontmatter.intercom === true ? true : undefined;
 ```
 
-- [ ] **Step 4: Run typecheck and tests**
+Then add `intercom` to the returned agent object (after the `memory` field).
+
+- [ ] **Step 4: Add frontmatter parsing tests**
+
+Add to `tests/agent-format.test.ts`, near the existing memory tests:
+
+```typescript
+test("parses intercom: true from frontmatter", () => {
+  const content =
+    "---\nname: scout\ndescription: Scouts\ntools: read\nintercom: true\n---\nDo things\n";
+  const result = parseAgentContent("/test.md", content);
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.agent.intercom).toBe(true);
+});
+
+test("intercom is undefined when omitted", () => {
+  const content =
+    "---\nname: test\ndescription: A test\ntools: read\n---\nPrompt\n";
+  const result = parseAgentContent("/test.md", content);
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.agent.intercom).toBeUndefined();
+});
+
+test("intercom is undefined for non-true value", () => {
+  const content =
+    '---\nname: test\ndescription: A test\ntools: read\nintercom: "yes"\n---\nPrompt\n';
+  const result = parseAgentContent("/test.md", content);
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.agent.intercom).toBeUndefined();
+});
+```
+
+- [ ] **Step 5: Run typecheck and tests**
 
 Run: `pnpm check`
 Expected: All pass
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/shared/types.ts src/shared/runtime-deps.ts src/core/agent-format.ts
+git add src/shared/types.ts src/shared/runtime-deps.ts src/core/agent-format.ts tests/agent-format.test.ts
 git commit -m "feat(intercom): add intercom to types, RuntimeDeps, and frontmatter"
 ```
 
 ---
 
-### Task 5: Wire intercom into agent-runner and index.ts
+### Task 5: Inject `contact_supervisor` tool in `agent-manager.ts`
 
 **Files:**
 
-- Modify: `src/core/agent-runner.ts`
-- Modify: `src/index.ts`
+- Modify: `src/core/agent-manager.ts`
 
-- [ ] **Step 1: Inject contact_supervisor tool in agent-runner**
+**Context:** Custom tools are built in `agent-manager.ts` lines 258-278, where `createChildSubagentTool` and `createChildGetResultTool` are conditionally added. The intercom tool follows the same pattern: add it to the `customTools` array when the agent opts in.
 
-In `src/core/agent-runner.ts`, after the memory injection block, add:
+- [ ] **Step 1: Add import**
+
+At the top of `src/core/agent-manager.ts`, add:
 
 ```typescript
 import { createContactSupervisorTool } from "./intercom.js";
+```
 
-// In runAgent(), before createAgentSession:
-// If agent has intercom enabled and an intercom manager is available:
-if (agentDef.intercom && options.customTools) {
-  // The intercom tool is passed via customTools from the caller (agent-manager/subagent.ts)
-  // This is already handled by the customTools passthrough.
+- [ ] **Step 2: Inject intercom tool into customTools**
+
+In the `spawn()` method, after the existing `customTools` block (line 278, after the closing `}`), add:
+
+```typescript
+// Inject contact_supervisor tool for intercom-enabled agents
+if (agentDef.intercom) {
+  const deps = (options as { _deps?: RuntimeDeps })._deps;
+  if (deps?.intercom) {
+    customTools.push(
+      createContactSupervisorTool(deps.intercom, id, agentDef.name),
+    );
+  }
 }
 ```
 
-Actually, the intercom tool injection is best done at the `subagent.ts` level where we have access to `deps.intercom`. Before calling `manager.spawnAndWait()`:
+This reuses the same `deps` extraction pattern already used for child subagent tools. The `id` (agent ID) and `agentDef.name` are both available at this point.
 
-```typescript
-// In subagent.ts, before spawning:
-if (agentDef.intercom && deps.intercom) {
-  const contactTool = createContactSupervisorTool(
-    deps.intercom,
-    agentId,
-    agentDef.name,
-  );
-  // Add to customTools that get passed to runAgent
-  customTools.push(contactTool);
-}
-```
+Note: `agent-runner.ts` requires NO changes — it already passes `customTools` through to `createAgentSession` via the generic `customTools` field in `RunOptions`.
 
-The exact integration point depends on how `customTools` flows through `spawnAndWait` → `runAgent`. Since `RunOptions` already has a `customTools` field, add the intercom tool there.
-
-- [ ] **Step 2: Create and register IntercomManager in index.ts**
-
-In `src/index.ts`, during extension init:
-
-```typescript
-import { createIntercomManager, createIntercomTool } from "./core/intercom.js";
-
-// During init:
-const intercom = createIntercomManager();
-deps.intercom = intercom;
-
-// Register parent tool lazily (or eagerly — register always, it's a no-op when no children use it):
-pi.registerTool(createIntercomTool(intercom) as any);
-
-// On shutdown:
-intercom.dispose();
-```
-
-- [ ] **Step 3: Notify parent on intercom request**
-
-When a child sends a request, the parent should be notified. Add a notification callback:
-
-```typescript
-// In subagent.ts, wrap the intercom manager to notify parent:
-// Actually, the manager's sendRequest is called by the child tool.
-// The parent notification should happen in the tool execution.
-// Add a sendMessage call in createContactSupervisorTool:
-
-// Before blocking on reply in the child tool execute():
-if (expectsReply && notifyParent) {
-  notifyParent(request);
-}
-```
-
-The notification is sent via `pi.sendMessage()` which is available at the `index.ts` level. Pass a `onRequest` callback to `createContactSupervisorTool`:
-
-```typescript
-export function createContactSupervisorTool(
-  manager: IntercomManager,
-  agentId: string,
-  agentName: string,
-  onRequest?: (request: IntercomRequest) => void,
-): IntercomToolDef {
-  // In execute(), after sendRequest starts:
-  // Call onRequest to notify parent UI
-}
-```
-
-- [ ] **Step 4: Run full test suite**
+- [ ] **Step 3: Run tests**
 
 Run: `pnpm test`
-Expected: All pass
+Expected: All pass (no tests break; intercom-specific tests already pass from Tasks 1-3)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/core/agent-runner.ts src/core/subagent.ts src/index.ts
-git commit -m "feat(intercom): wire intercom into agent lifecycle and extension init"
+git add src/core/agent-manager.ts
+git commit -m "feat(intercom): inject contact_supervisor tool via customTools"
 ```
 
 ---
 
-### Task 6: Typecheck and lint
+### Task 6: Wire IntercomManager into `index.ts`
+
+**Files:**
+
+- Modify: `src/index.ts`
+
+**Context:** `index.ts` has two key functions: `createRuntimeDeps(pi)` which builds the dependency graph, and `registerSubagentsExtension(pi, deps)` which registers tools, renderers, and event handlers. Intercom needs integration in both.
+
+- [ ] **Step 1: Add imports**
+
+At the top of `src/index.ts`, add:
+
+```typescript
+import {
+  createIntercomManager,
+  createIntercomTool,
+  type IntercomRequest,
+} from "./core/intercom.js";
+```
+
+- [ ] **Step 2: Create IntercomManager in `createRuntimeDeps()`**
+
+In `createRuntimeDeps()`, **before** the `new AgentManager(...)` call (line 114), create the intercom manager:
+
+```typescript
+// Intercom: child↔parent communication channel
+const intercom = createIntercomManager({
+  onRequest: (request) => {
+    const label = `[${request.agentName}] ${request.reason}: ${request.message}`;
+    (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+      {
+        customType: "intercom-request",
+        content: label,
+        display: true,
+        details: request,
+      } as unknown as Parameters<typeof pi.sendMessage>[0],
+      { deliverAs: "followUp", triggerTurn: true },
+    );
+  },
+});
+```
+
+The `onRequest` callback fires when a child sends a blocking request. It injects a message into the parent conversation via `pi.sendMessage()` with `triggerTurn: true`, which prompts the parent LLM to respond (using the `intercom` tool).
+
+- [ ] **Step 3: Add `cancelForAgent` to the `onComplete` callback**
+
+In the `AgentManager` constructor's `onComplete` callback (currently starting at line 114), add this line near the top of the callback (after the lifecycle event emission):
+
+```typescript
+intercom.cancelForAgent(record.id);
+```
+
+This cleans up any pending intercom requests when an agent completes or errors.
+
+- [ ] **Step 4: Add `intercom` to the deps object**
+
+In the `deps: RuntimeDeps = { ... }` object literal, add:
+
+```typescript
+intercom,
+```
+
+- [ ] **Step 5: Register parent tool and message renderer in `registerSubagentsExtension()`**
+
+After the existing tool registrations (after `registerWaitTool(pi, deps.manager);`), add:
+
+```typescript
+// Intercom: parent-side reply tool
+if (deps.intercom) {
+  pi.registerTool(createIntercomTool(deps.intercom) as never);
+
+  // Render intercom requests from children
+  pi.registerMessageRenderer("intercom-request", (msg, _opts, theme) => {
+    const d = (msg as { details?: IntercomRequest }).details;
+    if (!d) return new Text("", 0, 0);
+    const t = theme as {
+      fg: (color: string, text: string) => string;
+      bold: (text: string) => string;
+    };
+    return new Text(
+      `${t.bold(t.fg("cyan", `[${d.agentName}]`))} ${d.reason}: ${d.message}`,
+      0,
+      0,
+    );
+  });
+}
+```
+
+- [ ] **Step 6: Add `intercom.dispose()` to shutdown handler**
+
+In the `session_shutdown` handler, add before `deps.manager.abortAll()`:
+
+```typescript
+deps.intercom?.dispose();
+```
+
+- [ ] **Step 7: Run full test suite**
+
+Run: `pnpm test`
+Expected: All pass
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/index.ts
+git commit -m "feat(intercom): wire intercom into extension init, tool registration, and cleanup"
+```
+
+---
+
+### Task 7: Integration test
+
+**Files:**
+
+- Modify: `tests/intercom.test.ts`
+
+- [ ] **Step 1: Add integration test for full send→reply flow**
+
+Add to `tests/intercom.test.ts`:
+
+```typescript
+describe("integration: child send → parent reply", () => {
+  it("full round-trip: child blocks, parent lists + replies, child unblocks", async () => {
+    const onRequest = vi.fn();
+    const manager = createIntercomManager({ timeoutMs: 5000, onRequest });
+    const childTool = createContactSupervisorTool(manager, "agent-1", "Scout");
+    const parentTool = createIntercomTool(manager);
+
+    // Child sends a blocking request
+    const childPromise = childTool.execute(
+      "tc-1",
+      { reason: "need_decision", message: "Which approach?" },
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    // onRequest should have fired
+    expect(onRequest).toHaveBeenCalledOnce();
+
+    // Small delay to let the request register
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Parent lists pending requests
+    const listResult = await parentTool.execute(
+      "tc-2",
+      { action: "list" },
+      undefined,
+      undefined,
+      {} as any,
+    );
+    expect(listResult.content[0].text).toContain("Scout");
+    expect(listResult.content[0].text).toContain("Which approach?");
+
+    // Parent replies (auto-resolve since only one pending)
+    await parentTool.execute(
+      "tc-3",
+      { action: "reply", message: "Use approach A" },
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    // Child should now have the reply
+    const childResult = await childPromise;
+    expect(childResult.content[0].text).toContain("Use approach A");
+
+    // No more pending
+    expect(manager.listPending()).toHaveLength(0);
+  });
+
+  it("cancelForAgent resolves child tool with cancellation message", async () => {
+    const manager = createIntercomManager({ timeoutMs: 5000 });
+    const childTool = createContactSupervisorTool(manager, "agent-1", "Scout");
+
+    const childPromise = childTool.execute(
+      "tc-1",
+      { reason: "need_decision", message: "Help?" },
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    manager.cancelForAgent("agent-1");
+
+    const result = await childPromise;
+    expect(result.content[0].text).toContain("cancelled");
+  });
+});
+```
+
+- [ ] **Step 2: Run tests**
+
+Run: `pnpm test -- tests/intercom.test.ts`
+Expected: All pass
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/intercom.test.ts
+git commit -m "test(intercom): add integration test for full send/reply round-trip"
+```
+
+---
+
+### Task 8: Typecheck and lint
 
 - [ ] **Step 1: Run typecheck**
 
