@@ -312,3 +312,73 @@ describe("createIntercomTool", () => {
     expect(result.content[0].text).toContain("Intercom active");
   });
 });
+
+describe("integration: child send → parent reply", () => {
+  it("full round-trip: child blocks, parent lists + replies, child unblocks", async () => {
+    const onRequest = vi.fn();
+    const manager = createIntercomManager({ timeoutMs: 5000, onRequest });
+    const childTool = createContactSupervisorTool(manager, "agent-1", "Scout");
+    const parentTool = createIntercomTool(manager);
+
+    // Child sends a blocking request
+    const childPromise = childTool.execute(
+      "tc-1",
+      { reason: "need_decision", message: "Which approach?" },
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    // onRequest should have fired
+    expect(onRequest).toHaveBeenCalledOnce();
+
+    // Small delay to let the request register
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Parent lists pending requests
+    const listResult = await parentTool.execute(
+      "tc-2",
+      { action: "list" },
+      undefined,
+      undefined,
+      {} as any,
+    );
+    expect(listResult.content[0].text).toContain("Scout");
+    expect(listResult.content[0].text).toContain("Which approach?");
+
+    // Parent replies (auto-resolve since only one pending)
+    await parentTool.execute(
+      "tc-3",
+      { action: "reply", message: "Use approach A" },
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    // Child should now have the reply
+    const childResult = await childPromise;
+    expect(childResult.content[0].text).toContain("Use approach A");
+
+    // No more pending
+    expect(manager.listPending()).toHaveLength(0);
+  });
+
+  it("cancelForAgent resolves child tool with cancellation message", async () => {
+    const manager = createIntercomManager({ timeoutMs: 5000 });
+    const childTool = createContactSupervisorTool(manager, "agent-1", "Scout");
+
+    const childPromise = childTool.execute(
+      "tc-1",
+      { reason: "need_decision", message: "Help?" },
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    manager.cancelForAgent("agent-1");
+
+    const result = await childPromise;
+    expect(result.content[0].text).toContain("cancelled");
+  });
+});
