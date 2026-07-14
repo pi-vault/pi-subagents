@@ -26,6 +26,7 @@ import {
 } from "./core/intercom.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
+import { createWatchdogRuntime, parseWatchdogConfig } from "./core/watchdog.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import type { JoinMode, NotificationDetails, WidgetMode } from "./shared/types.js";
 import type { AgentActivity } from "./tui/activity.js";
@@ -116,6 +117,27 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     widget.update();
   });
 
+  // Load settings early (needed for watchdog config before manager construction)
+  const settings = loadSettings(process.cwd());
+
+  // Watchdog: adversarial reviewer at agent-end boundaries
+  const watchdogConfig = parseWatchdogConfig(settings.watchdog);
+  const watchdog = createWatchdogRuntime(watchdogConfig, {
+    onWarnings: (_agentId, warnings) => {
+      for (const w of warnings) {
+        const content = `[watchdog/${w.severity}] ${w.summary}\nEvidence: ${w.evidence}\nAction: ${w.recommendedAction}`;
+        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+          {
+            customType: "watchdog-warning",
+            content,
+            display: true,
+          } as unknown as Parameters<typeof pi.sendMessage>[0],
+          { deliverAs: "followUp" },
+        );
+      }
+    },
+  });
+
   // Intercom: child↔parent communication channel
   const intercom = createIntercomManager({
     onRequest: (request) => {
@@ -162,6 +184,11 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
     // Cancel any pending intercom requests for this agent
     intercom.cancelForAgent(record.id);
+
+    // Trigger watchdog review non-blocking after agent completes
+    if (watchdog.status() !== "disabled" && record.status === "completed") {
+      watchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd()).catch(() => {});
+    }
 
     // TUI: mark agent finished immediately regardless of notification path
     agentActivity.delete(record.id);
@@ -250,6 +277,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     agentActivity,
     chainWidget,
     intercom,
+    watchdog,
     ensureTimers: () => {
       widget.ensureTimer();
       fleet.ensureTimer();
@@ -259,7 +287,6 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   };
 
   // Apply persisted settings to live state
-  const settings = loadSettings(process.cwd());
   applySettings(settings, {
     setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
     setDefaultJoinMode: (mode) => {
@@ -300,6 +327,33 @@ export function registerSubagentsExtension(
   registerAgentCommand(pi, deps);
   registerChainCommands(pi, deps);
   registerPromptWorkflowCommands(pi, deps);
+
+  // Watchdog slash command: /watchdog [status|off]
+  pi.registerCommand("watchdog", {
+    description: "Watchdog: show status or disable for this session",
+    handler: async (args) => {
+      const sub = args.trim().toLowerCase();
+      if (sub === "off") {
+        deps.watchdog?.dispose();
+        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+          {
+            customType: "notification",
+            content: "Watchdog disabled for this session.",
+            display: true,
+          } as unknown as Parameters<typeof pi.sendMessage>[0],
+        );
+      } else {
+        const st = deps.watchdog?.status() ?? "not initialized";
+        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+          {
+            customType: "notification",
+            content: `Watchdog status: ${st}`,
+            display: true,
+          } as unknown as Parameters<typeof pi.sendMessage>[0],
+        );
+      }
+    },
+  });
 
   // get_subagent_result tool
   pi.registerTool({
@@ -465,6 +519,7 @@ export function registerSubagentsExtension(
   // Cleanup on session shutdown
   pi.on("session_shutdown", () => {
     rpcDispose.dispose();
+    deps.watchdog?.dispose();
     deps.widget?.dispose();
     deps.chainWidget?.dispose();
     deps.fleet?.dispose();
