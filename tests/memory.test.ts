@@ -178,7 +178,6 @@ describe("buildMemoryInjection", () => {
     );
 
     const result = buildMemoryInjection(
-      "Scout",
       { scope: "project", path: "rw-agent" },
       tmp,
       true,
@@ -199,7 +198,6 @@ describe("buildMemoryInjection", () => {
     );
 
     const result = buildMemoryInjection(
-      "Reader",
       { scope: "project", path: "ro-agent" },
       tmp,
       false,
@@ -210,7 +208,6 @@ describe("buildMemoryInjection", () => {
 
   it("returns empty string when read-only and no MEMORY.md exists", () => {
     const result = buildMemoryInjection(
-      "NoFile",
       { scope: "project", path: "no-file-agent" },
       tmp,
       false,
@@ -220,7 +217,6 @@ describe("buildMemoryInjection", () => {
 
   it("returns create-prompt when read-write and no MEMORY.md exists", () => {
     const result = buildMemoryInjection(
-      "NewAgent",
       { scope: "project", path: "new-agent" },
       tmp,
       true,
@@ -237,7 +233,6 @@ describe("buildMemoryInjection", () => {
     symlinkSync(realFile, join(dir, "MEMORY.md"));
 
     const result = buildMemoryInjection(
-      "UnsafeAgent",
       { scope: "project", path: "unsafe-agent" },
       tmp,
       true,
@@ -248,7 +243,6 @@ describe("buildMemoryInjection", () => {
 
   it("returns empty string when path resolution fails", () => {
     const result = buildMemoryInjection(
-      "BadPath",
       { scope: "project", path: "../escape" },
       tmp,
       true,
@@ -267,7 +261,6 @@ describe("buildMemoryInjection", () => {
     );
 
     const result = buildMemoryInjection(
-      "Big",
       { scope: "project", path: "big-agent" },
       tmp,
       true,

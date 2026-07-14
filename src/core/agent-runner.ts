@@ -215,7 +215,6 @@ export async function runAgent(
     const hasWriteTools =
       allowedTools.includes("write") || allowedTools.includes("edit");
     const memoryBlock = buildMemoryInjection(
-      agentDef.name,
       agentDef.memory,
       options.cwd,
       hasWriteTools,

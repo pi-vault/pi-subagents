@@ -9,8 +9,6 @@ import {
 } from "./safe-fs.js";
 import type { AgentMemoryConfig, MemoryScope } from "../shared/types.js";
 
-const VALID_SCOPES: ReadonlySet<string> = new Set(["user", "project", "local"]);
-
 /**
  * Parse memory config from agent frontmatter.
  * Accepts an object or a JSON string (frontmatter stores values as strings).
@@ -36,7 +34,10 @@ export function parseMemoryConfig(raw: unknown): AgentMemoryConfig | undefined {
   if (typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
 
-  if (typeof r.scope !== "string" || !VALID_SCOPES.has(r.scope))
+  if (
+    typeof r.scope !== "string" ||
+    !["user", "project", "local"].includes(r.scope)
+  )
     return undefined;
   if (typeof r.path !== "string" || !r.path) return undefined;
   if (isUnsafeName(r.path)) return undefined;
@@ -86,7 +87,7 @@ export function resolveMemoryDir(
   return { dir: resolved };
 }
 
-export type MemoryFileResult =
+type MemoryFileResult =
   | { contents: string; truncated: boolean }
   | "unsafe"
   | null;
@@ -131,7 +132,6 @@ export function readMemoryFile(memoryDir: string): MemoryFileResult {
  * or if directory resolution fails.
  */
 export function buildMemoryInjection(
-  _agentName: string,
   config: AgentMemoryConfig,
   cwd: string,
   hasWriteTools: boolean,
