@@ -123,7 +123,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   // Watchdog: adversarial reviewer at agent-end boundaries
   const watchdogConfig = parseWatchdogConfig(settings.watchdog);
   const watchdog = createWatchdogRuntime(watchdogConfig, {
-    onWarnings: (_agentId, warnings) => {
+    onWarnings: (agentId, warnings) => {
       for (const w of warnings) {
         const content = `[watchdog/${w.severity}] ${w.summary}\nEvidence: ${w.evidence}\nAction: ${w.recommendedAction}`;
         (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
@@ -131,8 +131,9 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
             customType: "watchdog-warning",
             content,
             display: true,
+            details: { agentId, ...w },
           } as unknown as Parameters<typeof pi.sendMessage>[0],
-          { deliverAs: "followUp" },
+          { deliverAs: "followUp", triggerTurn: true },
         );
       }
     },
@@ -187,7 +188,9 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
     // Trigger watchdog review non-blocking after agent completes
     if (watchdog.status() !== "disabled" && record.status === "completed") {
-      watchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd()).catch(() => {});
+      watchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd()).catch((err) => {
+        console.error("[watchdog] handleAgentEnd failed:", err);
+      });
     }
 
     // TUI: mark agent finished immediately regardless of notification path
@@ -328,12 +331,21 @@ export function registerSubagentsExtension(
   registerChainCommands(pi, deps);
   registerPromptWorkflowCommands(pi, deps);
 
-  // Watchdog slash command: /watchdog [status|off]
+  // Watchdog slash command: /watchdog [status|on|off]
   pi.registerCommand("watchdog", {
-    description: "Watchdog: show status or disable for this session",
+    description: "Watchdog control: status, on, off",
     handler: async (args) => {
       const sub = args.trim().toLowerCase();
-      if (sub === "off") {
+      if (sub === "on") {
+        const st = deps.watchdog?.status() ?? "not initialized";
+        (pi as unknown as { sendMessage: (msg: unknown) => void }).sendMessage(
+          {
+            customType: "notification",
+            content: `Watchdog is controlled via settings (watchdog.enabled). Current status: ${st}. Use /watchdog off to disable for this session.`,
+            display: true,
+          } as unknown as Parameters<typeof pi.sendMessage>[0],
+        );
+      } else if (sub === "off") {
         deps.watchdog?.dispose();
         (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
           {
