@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Type } from "typebox";
 
 export type IntercomReason =
   | "need_decision"
@@ -151,6 +152,88 @@ export function createIntercomManager(options?: {
   }
 
   return { sendRequest, listPending, reply, cancelForAgent, dispose };
+}
+
+export interface IntercomToolDef {
+  name: string;
+  label: string;
+  description: string;
+  parameters: unknown;
+  execute(
+    toolCallId: string,
+    params: { reason: IntercomReason; message: string; interview?: unknown },
+    signal: AbortSignal | undefined,
+    onUpdate: unknown,
+    ctx: unknown,
+  ): Promise<{ content: Array<{ type: string; text: string }> }>;
+}
+
+/**
+ * Create the child-side `contact_supervisor` tool bound to a specific agent.
+ */
+export function createContactSupervisorTool(
+  manager: IntercomManager,
+  agentId: string,
+  agentName: string,
+): IntercomToolDef {
+  return {
+    name: "contact_supervisor",
+    label: "Contact Supervisor",
+    description:
+      "Contact the parent session for a blocking decision, progress update, or structured interview.",
+    parameters: Type.Object({
+      reason: Type.Union([
+        Type.Literal("need_decision"),
+        Type.Literal("progress_update"),
+        Type.Literal("interview_request"),
+      ]),
+      message: Type.String({ description: "What you need from the parent" }),
+      interview: Type.Optional(
+        Type.Unknown({
+          description: "Structured data for interview_request",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const expectsReply = params.reason !== "progress_update";
+
+      const reply = await manager.sendRequest(
+        {
+          agentId,
+          agentName,
+          reason: params.reason,
+          message: params.message,
+          expectsReply,
+          interview: params.interview,
+        },
+        signal ?? undefined,
+      );
+
+      if (!expectsReply) {
+        return {
+          content: [{ type: "text", text: "Progress update delivered." }],
+        };
+      }
+
+      if (reply) {
+        if (reply.message.includes("timeout")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Supervisor reply timeout — no reply received. Proceed with your best judgment.`,
+              },
+            ],
+          };
+        }
+        return {
+          content: [{ type: "text", text: `Parent replied: ${reply.message}` }],
+        };
+      }
+
+      return { content: [{ type: "text", text: "No reply received." }] };
+    },
+  };
 }
 
 

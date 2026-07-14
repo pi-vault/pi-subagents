@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { createIntercomManager } from "../src/core/intercom.js";
+import { createIntercomManager, createContactSupervisorTool } from "../src/core/intercom.js";
 import type { IntercomManager } from "../src/core/intercom.js";
 
 describe("IntercomManager", () => {
@@ -145,5 +145,68 @@ describe("IntercomManager", () => {
       expectsReply: false,
     });
     expect(onRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("createContactSupervisorTool", () => {
+  it("returns a tool definition with correct name", () => {
+    const manager = createIntercomManager({ timeoutMs: 100 });
+    const tool = createContactSupervisorTool(manager, "agent-1", "Scout");
+    expect(tool.name).toBe("contact_supervisor");
+  });
+
+  it("progress_update returns immediately", async () => {
+    const manager = createIntercomManager({ timeoutMs: 100 });
+    const tool = createContactSupervisorTool(manager, "agent-1", "Scout");
+    const result = await tool.execute(
+      "tc-1",
+      {
+        reason: "progress_update",
+        message: "50% complete",
+      },
+      undefined,
+      undefined,
+      {} as any,
+    );
+    expect(result.content[0].text).toContain("delivered");
+  });
+
+  it("need_decision blocks until reply", async () => {
+    const manager = createIntercomManager({ timeoutMs: 5000 });
+    const tool = createContactSupervisorTool(manager, "agent-1", "Scout");
+    const promise = tool.execute(
+      "tc-1",
+      {
+        reason: "need_decision",
+        message: "Which path?",
+      },
+      undefined,
+      undefined,
+      {} as any,
+    );
+
+    // Reply from parent side
+    await new Promise((r) => setTimeout(r, 10));
+    const pending = manager.listPending();
+    manager.reply(pending[0].id, "Take path B");
+
+    const result = await promise;
+    expect(result.content[0].text).toContain("Take path B");
+  });
+
+  it("returns timeout message on timeout", async () => {
+    const manager = createIntercomManager({ timeoutMs: 50 });
+    const tool = createContactSupervisorTool(manager, "agent-1", "Scout");
+    const result = await tool.execute(
+      "tc-1",
+      {
+        reason: "need_decision",
+        message: "Help?",
+      },
+      undefined,
+      undefined,
+      {} as any,
+    );
+    expect(result.content[0].text).toContain("timeout");
   });
 });
