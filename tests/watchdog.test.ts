@@ -1,25 +1,25 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { computeChangeSignature, createWatchdogWarnTool } from "../src/core/watchdog.js";
+import { computeChangeSignature, createWatchdogWarnTool, createWatchdogRuntime, parseWatchdogConfig } from "../src/core/watchdog.js";
 import type { WatchdogWarning } from "../src/core/watchdog.js";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 
-describe("computeChangeSignature", () => {
-  const tmps: string[] = [];
+// File-level tmps array so all describe blocks can share cleanup
+const tmps: string[] = [];
+afterEach(() => {
+  for (const tmp of tmps.splice(0)) {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
+describe("computeChangeSignature", () => {
   function makeTmp(prefix: string): string {
     const tmp = mkdtempSync(join(tmpdir(), prefix));
     tmps.push(tmp);
     return tmp;
   }
-
-  afterEach(() => {
-    for (const tmp of tmps.splice(0)) {
-      rmSync(tmp, { recursive: true, force: true });
-    }
-  });
 
   it("returns undefined for non-git directory", () => {
     const tmp = makeTmp("watchdog-");
@@ -213,5 +213,136 @@ describe("createWatchdogWarnTool", () => {
 
     expect(collected).toHaveLength(0);
     expect(result.content[0].text).toContain("duplicate");
+  });
+});
+
+describe("parseWatchdogConfig", () => {
+  it("returns default config for undefined", () => {
+    const config = parseWatchdogConfig(undefined);
+    expect(config.enabled).toBe(false);
+  });
+
+  it("parses enabled flag", () => {
+    const config = parseWatchdogConfig({ enabled: true });
+    expect(config.enabled).toBe(true);
+  });
+
+  it("parses nested autoFollow config", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      autoFollow: { blockers: false, maxAttempts: 5 },
+    });
+    expect(config.autoFollow.blockers).toBe(false);
+    expect(config.autoFollow.maxAttempts).toBe(5);
+    expect(config.autoFollow.concerns).toBe(false);
+    expect(config.autoFollow.stalemateRepeats).toBe(3);
+  });
+
+  it("parses lsp config", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      lsp: { enabled: false, timeoutMs: 5000 },
+    });
+    expect(config.lsp.enabled).toBe(false);
+    expect(config.lsp.timeoutMs).toBe(5000);
+    expect(config.lsp.maxFiles).toBe(20); // default preserved
+  });
+
+  it("parses model and thinking", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      model: "anthropic/claude-sonnet-4",
+      thinking: "high",
+    });
+    expect(config.model).toBe("anthropic/claude-sonnet-4");
+    expect(config.thinking).toBe("high");
+  });
+});
+
+describe("WatchdogRuntime", () => {
+  it("status returns disabled when not enabled", () => {
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: false }),
+    );
+    expect(runtime.status()).toBe("disabled");
+  });
+
+  it("status returns idle when enabled", () => {
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true }),
+    );
+    expect(runtime.status()).toBe("idle");
+  });
+
+  it("dispose is idempotent", () => {
+    const runtime = createWatchdogRuntime(parseWatchdogConfig({ enabled: true }));
+    expect(() => {
+      runtime.dispose();
+      runtime.dispose();
+    }).not.toThrow();
+    expect(runtime.status()).toBe("disabled");
+  });
+
+  it("handleAgentEnd returns empty when disabled", async () => {
+    const runtime = createWatchdogRuntime(parseWatchdogConfig({ enabled: false }));
+    const warnings = await runtime.handleAgentEnd("test-agent", "/tmp");
+    expect(warnings).toEqual([]);
+  });
+
+  it("handleAgentEnd returns empty for non-git directory", async () => {
+    const runtime = createWatchdogRuntime(parseWatchdogConfig({ enabled: true }));
+    const tmp = mkdtempSync(join(tmpdir(), "watchdog-nongit-"));
+    tmps.push(tmp);
+    const warnings = await runtime.handleAgentEnd("test-agent", tmp);
+    expect(warnings).toEqual([]);
+  });
+
+  it("handleAgentEnd invokes runReview when changes detected", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "watchdog-review-"));
+    tmps.push(tmp);
+    execSync("git init", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 2;");
+
+    let reviewCalled = false;
+    const runtime = createWatchdogRuntime(parseWatchdogConfig({ enabled: true }), {
+      runReview: async () => {
+        reviewCalled = true;
+        return [{ severity: "concern", summary: "Test issue", evidence: "file.ts:1", recommendedAction: "Fix it", category: "other" }];
+      },
+    });
+
+    const warnings = await runtime.handleAgentEnd("test-agent", tmp);
+    expect(reviewCalled).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].summary).toBe("Test issue");
+  });
+
+  it("onWarnings callback is invoked with produced warnings", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "watchdog-cb-"));
+    tmps.push(tmp);
+    execSync("git init", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 2;");
+
+    let callbackAgentId = "";
+    let callbackWarnings: WatchdogWarning[] = [];
+    const runtime = createWatchdogRuntime(parseWatchdogConfig({ enabled: true }), {
+      runReview: async () => [{ severity: "blocker", summary: "CB test", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" }],
+      onWarnings: (agentId, warnings) => {
+        callbackAgentId = agentId;
+        callbackWarnings = warnings;
+      },
+    });
+
+    await runtime.handleAgentEnd("agent-xyz", tmp);
+    expect(callbackAgentId).toBe("agent-xyz");
+    expect(callbackWarnings).toHaveLength(1);
   });
 });
