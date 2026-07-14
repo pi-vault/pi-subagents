@@ -441,6 +441,9 @@ export function parseAgentContent(
   // memory
   const memory = parseMemoryConfig(frontmatter.memory);
 
+  // intercom
+  const intercom = frontmatter.intercom === "true" ? true : undefined;
+
   return {
     ok: true,
     agent: {
@@ -462,6 +465,7 @@ export function parseAgentContent(
       disallowedTools,
       toolBudget,
       memory,
+      intercom,
       systemPrompt,
       sourcePath: filePath,
     },

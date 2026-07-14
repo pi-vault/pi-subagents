@@ -94,6 +94,8 @@ export interface AgentDefinition {
   toolBudget?: ToolBudgetConfig;
   // Phase 3: memory
   memory?: AgentMemoryConfig;
+  // Phase 4: intercom
+  intercom?: boolean;
 }
 
 export interface AgentDiscoveryDiagnostic {

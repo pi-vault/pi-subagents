@@ -11,6 +11,7 @@ import {
   createChildSubagentTool,
   createChildGetResultTool,
 } from "./child-subagent-tool.js";
+import { createContactSupervisorTool } from "./intercom.js";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
@@ -274,6 +275,16 @@ export class AgentManager {
           }),
           createChildGetResultTool(this, id),
         ];
+      }
+    }
+
+    // Inject contact_supervisor tool for intercom-enabled agents
+    if (agentDef.intercom) {
+      const deps = (options as { _deps?: RuntimeDeps })._deps;
+      if (deps?.intercom) {
+        customTools.push(
+          createContactSupervisorTool(deps.intercom, id, agentDef.name),
+        );
       }
     }
 
