@@ -260,6 +260,12 @@ describe("parseWatchdogConfig", () => {
 });
 
 describe("WatchdogRuntime", () => {
+  function makeTmp(prefix: string): string {
+    const tmp = mkdtempSync(join(tmpdir(), prefix));
+    tmps.push(tmp);
+    return tmp;
+  }
+
   it("status returns disabled when not enabled", () => {
     const runtime = createWatchdogRuntime(
       parseWatchdogConfig({ enabled: false }),
@@ -344,5 +350,26 @@ describe("WatchdogRuntime", () => {
     await runtime.handleAgentEnd("agent-xyz", tmp);
     expect(callbackAgentId).toBe("agent-xyz");
     expect(callbackWarnings).toHaveLength(1);
+  });
+
+  it("status transitions idle -> reviewing -> idle during handleAgentEnd", async () => {
+    const tmp = makeTmp("watchdog-status-");
+    execSync("git init", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 2;");
+
+    const runtime = createWatchdogRuntime(parseWatchdogConfig({ enabled: true }), {
+      runReview: async () => [],
+    });
+
+    expect(runtime.status()).toBe("idle");
+    const promise = runtime.handleAgentEnd("test-agent", tmp);
+    // Status transitions to "reviewing" synchronously before first await
+    expect(runtime.status()).toBe("reviewing");
+    await promise;
+    expect(runtime.status()).toBe("idle");
   });
 });

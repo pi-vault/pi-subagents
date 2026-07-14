@@ -312,12 +312,16 @@ export function createWatchdogRuntime(
 
       let lspOutput = "No LSP issues found";
       if (config.lsp.enabled) {
-        const { collectLspDiagnostics } = await import("./watchdog-lsp.js");
-        const lspResult = await collectLspDiagnostics(cwd, signature.changedPaths, config.lsp);
-        if (lspResult.diagnostics.length > 0) {
-          lspOutput = lspResult.diagnostics
-            .map((d) => `${d.file}:${d.line} ${d.severity} ${d.code ?? ""}: ${d.message}`)
-            .join("\n");
+        try {
+          const { collectLspDiagnostics } = await import("./watchdog-lsp.js");
+          const lspResult = await collectLspDiagnostics(cwd, signature.changedPaths, config.lsp);
+          if (lspResult.diagnostics.length > 0) {
+            lspOutput = lspResult.diagnostics
+              .map((d) => `${d.file}:${d.line} ${d.severity} ${d.code ?? ""}: ${d.message}`)
+              .join("\n");
+          }
+        } catch {
+          lspOutput = "LSP diagnostics unavailable";
         }
       }
 
@@ -400,7 +404,7 @@ async function runDefaultReview(
     sessionManager,
     settingsManager,
     model,
-    tools: [warnTool.name],
+    tools: [],
     resourceLoader: loader,
     thinkingLevel,
     customTools: [warnTool as never],
@@ -412,8 +416,9 @@ async function runDefaultReview(
 
   try {
     await session.prompt(prompt);
-  } catch {
+  } catch (err) {
     // Reviewer failure is non-fatal
+    console.error("[watchdog] Reviewer session failed:", err);
   }
 
   return collected;
