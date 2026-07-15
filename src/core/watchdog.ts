@@ -28,10 +28,22 @@ export interface ChangeSignature {
   changedPaths: string[];
 }
 
+export interface WatchdogChildOverride {
+  enabled?: boolean;
+  model?: string;
+  thinking?: string;
+}
+
 export interface WatchdogConfig {
   enabled: boolean;
   model?: string;
   thinking?: string;
+  children: {
+    enabled: boolean;
+    model?: string;
+    thinking?: string;
+    overrides: Record<string, WatchdogChildOverride>;
+  };
   lsp: {
     enabled: boolean;
     timeoutMs: number;
@@ -150,6 +162,7 @@ export function createWatchdogWarnTool(
 
 const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   enabled: false,
+  children: { enabled: false, overrides: {} },
   lsp: {
     enabled: true,
     timeoutMs: 3_000,
@@ -165,6 +178,7 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
   if (!raw || typeof raw !== "object") {
     return {
       ...DEFAULT_WATCHDOG_CONFIG,
+      children: { ...DEFAULT_WATCHDOG_CONFIG.children, overrides: {} },
       lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
     };
   }
@@ -172,12 +186,23 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
 
   const config: WatchdogConfig = {
     ...DEFAULT_WATCHDOG_CONFIG,
+    children: { ...DEFAULT_WATCHDOG_CONFIG.children, overrides: {} },
     lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
   };
 
   if (typeof r.enabled === "boolean") config.enabled = r.enabled;
   if (typeof r.model === "string") config.model = r.model;
   if (typeof r.thinking === "string") config.thinking = r.thinking;
+
+  if (r.children && typeof r.children === "object") {
+    const ch = r.children as Record<string, unknown>;
+    if (typeof ch.enabled === "boolean") config.children.enabled = ch.enabled;
+    if (typeof ch.model === "string") config.children.model = ch.model;
+    if (typeof ch.thinking === "string") config.children.thinking = ch.thinking;
+    if (ch.overrides && typeof ch.overrides === "object") {
+      config.children.overrides = ch.overrides as typeof config.children.overrides;
+    }
+  }
 
   if (r.lsp && typeof r.lsp === "object") {
     const lsp = r.lsp as Record<string, unknown>;

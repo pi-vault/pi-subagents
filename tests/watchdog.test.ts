@@ -248,6 +248,30 @@ describe("parseWatchdogConfig", () => {
     expect(config.model).toBe("anthropic/claude-sonnet-4");
     expect(config.thinking).toBe("high");
   });
+
+  it("returns default children config when not specified", () => {
+    const config = parseWatchdogConfig({ enabled: true });
+    expect(config.children.enabled).toBe(false);
+    expect(config.children.overrides).toEqual({});
+  });
+
+  it("parses children enabled flag", () => {
+    const config = parseWatchdogConfig({ enabled: true, children: { enabled: true } });
+    expect(config.children.enabled).toBe(true);
+  });
+
+  it("parses children model and overrides", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      children: {
+        enabled: true,
+        model: "child-model",
+        overrides: { scout: { enabled: false } },
+      },
+    });
+    expect(config.children.model).toBe("child-model");
+    expect(config.children.overrides.scout.enabled).toBe(false);
+  });
 });
 
 describe("WatchdogRuntime", () => {
