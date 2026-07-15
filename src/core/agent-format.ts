@@ -329,6 +329,15 @@ export function parseAgentContent(
     }
   }
 
+  // max_depth
+  let maxDepth: number | undefined;
+  if (frontmatter.max_depth !== undefined) {
+    const parsed = Number(frontmatter.max_depth);
+    if (Number.isFinite(parsed) && parsed >= 0 && Number.isInteger(parsed)) {
+      maxDepth = parsed;
+    }
+  }
+
   // inherit_context
   let inheritContext: boolean | undefined;
   if (frontmatter.inherit_context !== undefined) {
@@ -457,6 +466,7 @@ export function parseAgentContent(
       skills,
       promptMode,
       maxTurns,
+      maxDepth,
       inheritContext,
       runInBackground,
       isolated,

@@ -85,6 +85,7 @@ export interface AgentDefinition {
   // Phase 2: new frontmatter fields
   promptMode?: "replace" | "append";
   maxTurns?: number;
+  maxDepth?: number;
   inheritContext?: boolean;
   runInBackground?: boolean;
   isolated?: boolean;
