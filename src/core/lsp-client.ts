@@ -1,6 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { delimiter, extname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // ─── JSON-RPC framing ────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ export function resolveLanguageServer(root: string): LspCommand | undefined {
     return { command: local, args: ["--stdio"], label: `${PROVIDER_NAME} (project)` };
   }
   // Check PATH
-  for (const dir of (process.env.PATH ?? "").split(":").filter(Boolean)) {
+  for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
     const candidate = join(dir, PROVIDER_NAME);
     if (existsSync(candidate)) {
       return { command: candidate, args: ["--stdio"], label: PROVIDER_NAME };
@@ -225,7 +225,7 @@ export class JsonRpcLspClient {
     }
 
     // Handle request responses
-    if (message.id != null && this.pending.has(message.id)) {
+    if (message.id != null) {
       const handler = this.pending.get(message.id);
       if (!handler) return;
       const { resolve, reject } = handler;
