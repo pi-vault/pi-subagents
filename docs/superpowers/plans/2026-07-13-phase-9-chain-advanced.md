@@ -2,58 +2,130 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `/chain status` and `/chain cancel` commands with runtime step-append, and a chain clarification TUI for pre-execution editing.
+**Goal:** Add `/chain status` and `/chain cancel` subcommands with live step-progress tracking, and wire the existing chain clarification TUI into foreground execution.
 
-**Architecture:** Task 1 adds subcommand routing to the existing `/chain` command. Task 2 creates an interactive TUI component following the `showAgentsMenu` pattern.
+**Architecture:** Task 1 adds subcommand routing to the `/chain` handler (following the watchdog subcommand pattern). Task 2 wires the existing `ChainClarifyComponent` (in `src/tui/chain-clarify.ts`) into the foreground execution path via `ctx.ui.custom<T>()`.
 
-**Tech Stack:** TypeScript, Vitest, Pi SDK Extension API (registerCommand, ui.notify), pi-tui components
+**Tech Stack:** TypeScript, Vitest, Pi SDK Extension API (`registerCommand`, `ui.notify`, `ui.custom`), pi-tui `Component` interface
 
-**Note:** `--bg` flag, `fireAndForgetChain`, and prompt workflow chains are already implemented. This plan covers only the remaining 2 items.
+**Already implemented (do NOT re-implement):**
+
+- `--bg` flag and `fireAndForgetChain` (agent-manager.ts:165-204)
+- Chain append queue (`src/core/chain-append.ts` — `enqueueChainAppendRequest`, `consumeChainAppendRequests`, integrated at chain-execution.ts:489)
+- Chain clarification TUI component (`src/tui/chain-clarify.ts` — `ChainClarifyComponent`, 211 lines)
+- Chain clarification tests (`tests/chain-clarify.test.ts` — 257 lines, 15 tests)
+- Workflow graph snapshot building (`src/core/workflow-graph.ts`, `src/tui/chain-widget.ts`)
 
 ---
 
 ## File Map
 
-| Task | Create | Modify | Test |
-|------|--------|--------|------|
-| 1: Chain Status/Cancel | `src/core/chain-status.ts` | `src/core/slash-chain.ts`, `src/core/agent-manager.ts`, `src/shared/types.ts` | `tests/core/chain-status.test.ts` |
-| 2: Chain Clarification TUI | `src/core/chain-clarify.ts` | `src/core/slash-chain.ts` | `tests/core/chain-clarify.test.ts` |
+| Task                      | Create                     | Modify                                                                        | Test                                           |
+| ------------------------- | -------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------- |
+| 1: Chain Status/Cancel    | `src/core/chain-status.ts` | `src/shared/types.ts`, `src/core/agent-manager.ts`, `src/core/slash-chain.ts` | `tests/core/chain-status.test.ts`              |
+| 2: Wire Clarification TUI | —                          | `src/core/slash-chain.ts`                                                     | `tests/core/chain-clarify-integration.test.ts` |
 
 ---
 
-### Task 1: Chain Status/Cancel Commands + Step-Append
+## Verified API Surface
+
+These were verified against the Pi SDK (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`) and the nicobailon and tintinweb reference implementations.
+
+**`ctx.ui.custom<T>()`** — launches TUI overlay, returns `Promise<T>`:
+
+```typescript
+// Signature (from pi SDK ExtensionUIContext):
+custom<T>(
+  factory: (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: T) => void)
+    => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
+  options?: { overlay?: boolean; overlayOptions?: OverlayOptions | (() => OverlayOptions) },
+): Promise<T>;
+```
+
+**`deps.manager.listAgents()`** — returns `AgentRecord[]` (line 540). No `getAgents()` exists.
+
+**`deps.manager.abort(id)`** — returns `boolean` (line 486). Handles queued and running agents.
+
+**`ChainClarifyComponent`** constructor — `(tui: TUI, theme: Theme, steps: ChainStep[], done: (result: ChainClarifyResult) => void)`.
+
+**`ChainClarifyResult`** — `{ action: "run" | "cancel" | "bg"; steps: ChainStep[] }`. Note: `steps` includes any task/model overrides applied by the user.
+
+**`WorkflowGraphSnapshot`** — contains `nodes: WorkflowGraphNode[]` where each node has `{ label, status: WorkflowNodeStatus, ... }`. The `onGraphUpdate` callback in `executeChain` emits these as steps transition through pending/running/completed/failed.
+
+**Subcommand routing pattern** (from nicobailon watchdog — `src/watchdog/register-main.ts:250`):
+
+```typescript
+const input = args.trim();
+if (!input || input === "status") {
+  /* handle status */
+}
+if (input.startsWith("cancel ")) {
+  /* handle cancel */
+}
+// ... fall through to normal execution
+```
+
+---
+
+### Task 1: Chain Status/Cancel Subcommands
 
 **Files:**
+
 - Create: `src/core/chain-status.ts`
-- Modify: `src/core/slash-chain.ts:589-685` (add subcommand routing)
-- Modify: `src/core/agent-manager.ts:161-200` (add chainSteps metadata)
-- Modify: `src/shared/types.ts:230-261` (add chainSteps to AgentRecord)
+- Modify: `src/shared/types.ts:231-262` (add `chainSteps` to `AgentRecord`)
+- Modify: `src/core/agent-manager.ts:165-204` (init `chainSteps` in `fireAndForgetChain`)
+- Modify: `src/core/slash-chain.ts:590-625` (add subcommand routing before expression parsing)
+- Modify: `src/core/slash-chain.ts:543-558` (pass `onGraphUpdate` that syncs to record.chainSteps)
 - Test: `tests/core/chain-status.test.ts`
 
-- [ ] **Step 1: Write the failing test for chain status formatting**
+- [ ] **Step 1: Add `chainSteps` to `AgentRecord` type**
+
+In `src/shared/types.ts`, add after `spawnedBy?` (line 261):
+
+```typescript
+  chainSteps?: Array<{
+    label: string;
+    status: WorkflowNodeStatus;
+    durationMs?: number;
+    error?: string;
+  }>;
+```
+
+This reuses the existing `WorkflowNodeStatus` type (line 452) rather than defining a new union.
+
+- [ ] **Step 2: Write failing tests for chain-status**
 
 Create `tests/core/chain-status.test.ts`:
 
 ```typescript
 import { describe, it, expect } from "vitest";
-import { formatChainStatus } from "../src/core/chain-status.js";
+import { formatChainStatus, listChains } from "../src/core/chain-status.js";
 import type { AgentRecord } from "../src/shared/types.js";
 
+function makeRecord(overrides: Partial<AgentRecord>): AgentRecord {
+  return {
+    id: "chain-1",
+    type: "(chain)",
+    description: "Chain: test",
+    status: "running",
+    startedAt: Date.now() - 60_000,
+    toolUses: 0,
+    turnCount: 0,
+    lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+    ...overrides,
+  } as AgentRecord;
+}
+
 describe("formatChainStatus", () => {
-  it("formats a running chain with current step", () => {
-    const record: Partial<AgentRecord> = {
-      id: "chain-1",
-      type: "(chain)",
-      description: "Chain: implement feature",
-      status: "running",
-      startedAt: Date.now() - 60_000,
+  it("formats a running chain with step statuses", () => {
+    const record = makeRecord({
       chainSteps: [
         { label: "scout", status: "completed", durationMs: 15000 },
         { label: "planner", status: "running" },
         { label: "worker", status: "pending" },
       ],
-    };
-    const output = formatChainStatus(record as AgentRecord);
+    });
+    const output = formatChainStatus(record);
     expect(output).toContain("chain-1");
     expect(output).toContain("scout");
     expect(output).toContain("completed");
@@ -63,98 +135,134 @@ describe("formatChainStatus", () => {
     expect(output).toContain("pending");
   });
 
-  it("shows elapsed time", () => {
-    const record: Partial<AgentRecord> = {
+  it("shows elapsed time for running chain", () => {
+    const record = makeRecord({
       id: "chain-2",
-      type: "(chain)",
-      status: "running",
       startedAt: Date.now() - 120_000,
       chainSteps: [{ label: "step1", status: "running" }],
-    };
-    const output = formatChainStatus(record as AgentRecord);
-    expect(output).toMatch(/2m|120s/);
+    });
+    const output = formatChainStatus(record);
+    expect(output).toMatch(/2m/);
   });
 
-  it("formats completed chain", () => {
-    const record: Partial<AgentRecord> = {
+  it("shows duration for completed chain", () => {
+    const now = Date.now();
+    const record = makeRecord({
       id: "chain-3",
-      type: "(chain)",
       status: "completed",
-      startedAt: Date.now() - 30_000,
-      completedAt: Date.now(),
+      startedAt: now - 30_000,
+      completedAt: now,
       chainSteps: [{ label: "step1", status: "completed", durationMs: 30000 }],
-    };
-    const output = formatChainStatus(record as AgentRecord);
+    });
+    const output = formatChainStatus(record);
     expect(output).toContain("completed");
+    expect(output).toContain("30s");
+  });
+
+  it("handles chain with no chainSteps gracefully", () => {
+    const record = makeRecord({});
+    const output = formatChainStatus(record);
+    expect(output).toContain("chain-1");
+    expect(output).not.toContain("Steps:");
+  });
+
+  it("shows error on failed step", () => {
+    const record = makeRecord({
+      chainSteps: [
+        { label: "worker", status: "failed", error: "Build failed" },
+      ],
+    });
+    const output = formatChainStatus(record);
+    expect(output).toContain("failed");
+    expect(output).toContain("Build failed");
+  });
+});
+
+describe("listChains", () => {
+  it("filters to chain-type records", () => {
+    const records: AgentRecord[] = [
+      makeRecord({ id: "chain-1", type: "(chain)" }),
+      makeRecord({ id: "agent-1", type: "scout" }),
+      makeRecord({ id: "chain-2", type: "(chain)" }),
+    ];
+    const chains = listChains(records);
+    expect(chains).toHaveLength(2);
+    expect(chains.map((c) => c.id)).toEqual(["chain-1", "chain-2"]);
+  });
+
+  it("returns empty array when no chains", () => {
+    const records: AgentRecord[] = [
+      makeRecord({ id: "agent-1", type: "scout" }),
+    ];
+    expect(listChains(records)).toHaveLength(0);
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run tests to verify they fail**
 
 Run: `npx vitest run tests/core/chain-status.test.ts --reporter=verbose`
-Expected: FAIL — module not found
+Expected: FAIL — module `chain-status.js` not found
 
-- [ ] **Step 3: Add chainSteps to AgentRecord type**
-
-In `src/shared/types.ts`, add to `AgentRecord` interface (after `spawnedBy?`):
-
-```typescript
-chainSteps?: Array<{ label: string; status: "pending" | "running" | "completed" | "failed"; durationMs?: number }>;
-```
-
-- [ ] **Step 4: Implement chain-status.ts**
+- [ ] **Step 4: Implement `chain-status.ts`**
 
 Create `src/core/chain-status.ts`:
 
 ```typescript
 import type { AgentRecord } from "../shared/types.js";
 
-/**
- * Format chain status for display.
- */
 export function formatChainStatus(record: AgentRecord): string {
   const elapsed = record.completedAt
     ? record.completedAt - record.startedAt
     : Date.now() - record.startedAt;
-  const elapsedStr = elapsed >= 60_000
-    ? `${Math.floor(elapsed / 60_000)}m ${Math.floor((elapsed % 60_000) / 1000)}s`
-    : `${Math.floor(elapsed / 1000)}s`;
+  const elapsedStr =
+    elapsed >= 60_000
+      ? `${Math.floor(elapsed / 60_000)}m ${Math.floor((elapsed % 60_000) / 1000)}s`
+      : `${Math.floor(elapsed / 1000)}s`;
 
   const lines: string[] = [
     `Chain: ${record.id}  Status: ${record.status}  Elapsed: ${elapsedStr}`,
-    `Task: ${record.description ?? "—"}`,
-    "",
+    `Task: ${record.description ?? "\u2014"}`,
   ];
 
   if (record.chainSteps && record.chainSteps.length > 0) {
-    lines.push("Steps:");
+    lines.push("", "Steps:");
     for (const step of record.chainSteps) {
-      const icon = step.status === "completed" ? "✓" : step.status === "running" ? "▸" : step.status === "failed" ? "✗" : "○";
-      const dur = step.durationMs ? ` (${Math.floor(step.durationMs / 1000)}s)` : "";
-      lines.push(`  ${icon} ${step.label} — ${step.status}${dur}`);
+      const icon =
+        step.status === "completed"
+          ? "\u2713"
+          : step.status === "running"
+            ? "\u25b8"
+            : step.status === "failed"
+              ? "\u2717"
+              : "\u25cb";
+      const dur =
+        step.durationMs != null
+          ? ` (${Math.floor(step.durationMs / 1000)}s)`
+          : "";
+      const err = step.error ? ` \u2014 ${step.error}` : "";
+      lines.push(`  ${icon} ${step.label} \u2014 ${step.status}${dur}${err}`);
     }
   }
 
   return lines.join("\n");
 }
 
-/**
- * List all chain records (running or completed).
- */
-export function listChains(agents: Map<string, AgentRecord>): AgentRecord[] {
-  return [...agents.values()].filter((r) => r.type === "(chain)");
+export function listChains(agents: AgentRecord[]): AgentRecord[] {
+  return agents.filter((r) => r.type === "(chain)");
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+Note: `listChains` accepts `AgentRecord[]` (matching `deps.manager.listAgents()` return type), NOT `Map<string, AgentRecord>`.
+
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run tests/core/chain-status.test.ts --reporter=verbose`
 Expected: PASS
 
-- [ ] **Step 6: Update fireAndForgetChain to track chainSteps**
+- [ ] **Step 6: Init `chainSteps` in `fireAndForgetChain`**
 
-In `src/core/agent-manager.ts`, in `fireAndForgetChain` (around line 175), add `chainSteps` to the record:
+In `src/core/agent-manager.ts`, inside `fireAndForgetChain` (line 172-183), add `chainSteps: []` to the record literal:
 
 ```typescript
 const record: AgentRecord = {
@@ -168,277 +276,306 @@ const record: AgentRecord = {
   lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
   isBackground: true,
   cwd,
-  chainSteps: [], // Will be updated via onGraphUpdate
+  chainSteps: [],
 };
 ```
 
-- [ ] **Step 7: Add subcommand routing to /chain handler**
+- [ ] **Step 7: Sync `onGraphUpdate` to `record.chainSteps` for background chains**
 
-In `src/core/slash-chain.ts`, update the `/chain` command handler to detect subcommands:
+In `src/core/slash-chain.ts`, in the background chain path (lines 543-558), the `onGraphUpdate` callback currently only updates the chain widget. Add a second line to sync `record.chainSteps`:
 
-```typescript
-handler: async (args, ctx: ExtensionCommandContext) => {
-  const trimmed = args.trim();
-
-  // Subcommand: /chain status [id]
-  if (trimmed.startsWith("status")) {
-    const chainId = trimmed.slice(6).trim();
-    const { formatChainStatus, listChains } = await import("./chain-status.js");
-    const chains = listChains(deps.manager.getAgents());
-    if (chainId) {
-      const record = chains.find((r) => r.id === chainId || r.id.startsWith(chainId));
-      if (!record) { ctx.ui.notify(`Chain not found: ${chainId}`, "error"); return; }
-      ctx.ui.notify(formatChainStatus(record), "info");
-    } else {
-      if (chains.length === 0) { ctx.ui.notify("No chains running.", "info"); return; }
-      ctx.ui.notify(chains.map(formatChainStatus).join("\n\n"), "info");
-    }
-    return;
-  }
-
-  // Subcommand: /chain cancel <id>
-  if (trimmed.startsWith("cancel")) {
-    const chainId = trimmed.slice(6).trim();
-    if (!chainId) { ctx.ui.notify("Usage: /chain cancel <id>", "error"); return; }
-    const success = deps.manager.abort(chainId);
-    ctx.ui.notify(success ? `Chain ${chainId} cancelled.` : `Chain not found or already completed: ${chainId}`, success ? "info" : "error");
-    return;
-  }
-
-  // Normal chain execution
-  const { args: cleanedArgs, bg } = stripExecutionFlags(args);
-  // ... rest of existing handler ...
-}
-```
-
-- [ ] **Step 8: Add getAgents() accessor to AgentManager**
-
-In `src/core/agent-manager.ts`, if not already present:
+Before (line 549):
 
 ```typescript
-getAgents(): Map<string, AgentRecord> {
-  return this.agents;
-}
+      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => deps.manager.getSpawnBudget() }),
 ```
 
-- [ ] **Step 9: Implement step-append for running chains**
-
-In `src/core/chain-execution.ts`, the `consumeChainAppendRequests` is already called (line 409). Add the enqueue function if not already exported:
+After:
 
 ```typescript
-const chainAppendQueue = new Map<string, ChainStep[]>();
-
-export function enqueueChainAppendRequest(runId: string, steps: ChainStep[]): void {
-  const existing = chainAppendQueue.get(runId) ?? [];
-  existing.push(...steps);
-  chainAppendQueue.set(runId, existing);
-}
-
-export function consumeChainAppendRequests(runId: string): ChainStep[] {
-  const steps = chainAppendQueue.get(runId) ?? [];
-  chainAppendQueue.delete(runId);
-  return steps;
-}
+      executeChain({
+        steps: chain,
+        task,
+        spawnAndWait,
+        findAgent,
+        cwd: ctx.cwd,
+        runId: chainRunId,
+        onGraphUpdate: (snapshot) => {
+          deps.chainWidget?.update(snapshot);
+          const record = deps.manager.getRecord(chainRunId);
+          if (record) {
+            record.chainSteps = snapshot.nodes
+              .filter((n) => n.kind === "step" || n.kind === "agent")
+              .map((n) => ({ label: n.label, status: n.status, error: n.error }));
+          }
+        },
+        getSpawnBudget: () => deps.manager.getSpawnBudget(),
+      }),
 ```
 
-- [ ] **Step 10: Run typecheck and tests**
+Also update the foreground path (line 570) similarly:
+
+```typescript
+      onGraphUpdate: (snapshot) => {
+        deps.chainWidget?.update(snapshot);
+        const record = deps.manager.getRecord(chainRunId);
+        if (record) {
+          record.chainSteps = snapshot.nodes
+            .filter((n) => n.kind === "step" || n.kind === "agent")
+            .map((n) => ({ label: n.label, status: n.status, error: n.error }));
+        }
+      },
+```
+
+Note: `deps.manager.getRecord(id)` exists at line 536 and returns `AgentRecord | undefined`.
+
+- [ ] **Step 8: Add subcommand routing to `/chain` handler**
+
+In `src/core/slash-chain.ts`, modify the `/chain` handler (line 613) to detect subcommands before falling through to expression parsing:
+
+```typescript
+    handler: async (args, ctx: ExtensionCommandContext) => {
+      const trimmed = args.trim();
+
+      // Subcommand: /chain status [id]
+      if (trimmed === "status" || trimmed.startsWith("status ")) {
+        const chainId = trimmed === "status" ? "" : trimmed.slice(7).trim();
+        const { formatChainStatus, listChains } = await import("./chain-status.js");
+        const chains = listChains(deps.manager.listAgents());
+        if (chainId) {
+          const record = chains.find((r) => r.id === chainId || r.id.startsWith(chainId));
+          if (!record) {
+            ctx.ui.notify(`Chain not found: ${chainId}`, "error");
+            return;
+          }
+          ctx.ui.notify(formatChainStatus(record), "info");
+        } else {
+          if (chains.length === 0) {
+            ctx.ui.notify("No chains running.", "info");
+            return;
+          }
+          ctx.ui.notify(chains.map(formatChainStatus).join("\n\n"), "info");
+        }
+        return;
+      }
+
+      // Subcommand: /chain cancel <id>
+      if (trimmed === "cancel" || trimmed.startsWith("cancel ")) {
+        const chainId = trimmed === "cancel" ? "" : trimmed.slice(7).trim();
+        if (!chainId) {
+          ctx.ui.notify("Usage: /chain cancel <id>", "error");
+          return;
+        }
+        const success = deps.manager.abort(chainId);
+        ctx.ui.notify(
+          success
+            ? `Chain ${chainId} cancelled.`
+            : `Chain not found or already completed: ${chainId}`,
+          success ? "info" : "error",
+        );
+        return;
+      }
+
+      // Normal chain execution (existing code, unchanged)
+      const { args: cleanedArgs, bg } = stripExecutionFlags(args);
+      const paths = deps.resolvePaths();
+      const agents = deps.discoverAgents(paths).agents;
+
+      const built = buildChainSteps(cleanedArgs, agents, (msg) =>
+        ctx.ui.notify(msg, "error"),
+      );
+      if (!built) return;
+
+      await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg);
+    },
+```
+
+- [ ] **Step 9: Typecheck and run all chain tests**
 
 Run: `npx tsc --noEmit && npx vitest run tests/core/chain-status.test.ts tests/core/chain-execution.test.ts --reporter=verbose`
 Expected: All pass
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add src/core/chain-status.ts src/core/slash-chain.ts src/core/agent-manager.ts src/core/chain-execution.ts src/shared/types.ts tests/core/chain-status.test.ts
-git commit -m "feat(chains): add /chain status, /chain cancel, and step-append"
+git add src/core/chain-status.ts src/core/slash-chain.ts src/core/agent-manager.ts src/shared/types.ts tests/core/chain-status.test.ts
+git commit -m "feat(chains): add /chain status, /chain cancel with live step tracking"
 ```
 
 ---
 
-### Task 2: Chain Clarification TUI
+### Task 2: Wire Chain Clarification TUI into Foreground Execution
 
 **Files:**
-- Create: `src/core/chain-clarify.ts`
-- Modify: `src/core/slash-chain.ts:561-586` (insert clarification before execution)
-- Test: `tests/core/chain-clarify.test.ts`
 
-- [ ] **Step 1: Write the failing test for clarification result**
+- Modify: `src/core/slash-chain.ts:504-512` (add `--yes` to `ExecutionFlags`)
+- Modify: `src/core/slash-chain.ts:60-73` (parse `--yes` flag in `stripExecutionFlags`)
+- Modify: `src/core/slash-chain.ts:504-560` (add clarification gate before `executeChain`)
+- Test: `tests/core/chain-clarify-integration.test.ts`
 
-Create `tests/core/chain-clarify.test.ts`:
+**No new source files.** The TUI component already exists at `src/tui/chain-clarify.ts` with `ChainClarifyComponent` and `ChainClarifyResult` (tested in `tests/chain-clarify.test.ts`).
+
+- [ ] **Step 1: Add `--yes` flag to `ExecutionFlags` and `stripExecutionFlags`**
+
+In `src/core/slash-chain.ts`, update the `ExecutionFlags` interface (line 55):
+
+```typescript
+export interface ExecutionFlags {
+  args: string;
+  bg: boolean;
+  yes: boolean;
+}
+```
+
+Update `stripExecutionFlags` (line 61) to also strip `--yes`:
+
+```typescript
+export function stripExecutionFlags(rawArgs: string): ExecutionFlags {
+  let args = rawArgs.trim();
+  let bg = false;
+  let yes = false;
+  for (;;) {
+    if (args.endsWith(" --bg") || args === "--bg") {
+      args = args === "--bg" ? "" : args.slice(0, -5).trim();
+      bg = true;
+    } else if (args.endsWith(" --fork") || args === "--fork") {
+      args = args === "--fork" ? "" : args.slice(0, -7).trim();
+    } else if (args.endsWith(" --yes") || args === "--yes") {
+      args = args === "--yes" ? "" : args.slice(0, -6).trim();
+      yes = true;
+    } else break;
+  }
+  return { args, bg, yes };
+}
+```
+
+- [ ] **Step 2: Thread `yes` flag through `executeSlashChain`**
+
+Update the `executeSlashChain` signature (line 505) to accept the `yes` flag:
+
+```typescript
+export async function executeSlashChain(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  deps: RuntimeDeps,
+  chain: ChainStep[],
+  task: string,
+  bg = false,
+  yes = false,
+): Promise<void> {
+```
+
+Update both call sites in `registerChainCommands` to pass `yes`:
+
+- `/chain` handler (around line 623): `await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg, yes);`
+- `/run-chain` handler (around line 676): `await executeSlashChain(pi, ctx, deps, chain.steps as ChainStep[], task, bg, yes);`
+
+Note: both call sites destructure from `stripExecutionFlags(args)` which now returns `{ args, bg, yes }`.
+
+- [ ] **Step 3: Add clarification gate in foreground path**
+
+In `executeSlashChain`, insert the clarification gate after line 541 (`const findAgent = ...`) and before the background check at line 543 (`if (bg) {`):
+
+```typescript
+// Clarification TUI — show step preview before foreground execution
+// Skip when: --bg (background), --yes (auto-confirm), or no UI available
+if (!bg && !yes) {
+  const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
+  type ClarifyResult = import("../tui/chain-clarify.js").ChainClarifyResult;
+
+  const result = await ctx.ui.custom<ClarifyResult>(
+    (tui, theme, _kb, done) =>
+      new ChainClarifyComponent(tui, theme, chain, done),
+    {
+      overlay: true,
+      overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" },
+    },
+  );
+
+  if (!result || result.action === "cancel") return;
+  if (result.action === "bg") {
+    bg = true;
+    chain = result.steps; // Apply any edits
+  } else {
+    chain = result.steps; // Apply task/model overrides from TUI
+  }
+}
+```
+
+This uses the same `ctx.ui.custom()` pattern verified in nicobailon (`chain-execution.ts:593-612`) and tintinweb (`index.ts:1685-1697`).
+
+The `ChainClarifyComponent` calls `done({ action, steps })` when the user presses Enter (run), b (background), or Esc (cancel). Overridden task/model values are baked into the returned `steps` array by `applyOverrides()` (chain-clarify.ts:197-210).
+
+- [ ] **Step 4: Make `chain` parameter mutable**
+
+The `chain` parameter in `executeSlashChain` is currently `chain: ChainStep[]`. Since we reassign it from the clarification result, change it to `let`:
+
+At the top of the function body (after destructuring), reassign through `let`:
+
+```typescript
+export async function executeSlashChain(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  deps: RuntimeDeps,
+  inputChain: ChainStep[],
+  task: string,
+  bg = false,
+  yes = false,
+): Promise<void> {
+  let chain = inputChain;
+```
+
+Rename the parameter to `inputChain` and add `let chain = inputChain;` at the top. The rest of the function already uses `chain` throughout, so no further changes are needed.
+
+- [ ] **Step 5: Write integration test for clarification wiring**
+
+Create `tests/core/chain-clarify-integration.test.ts`:
 
 ```typescript
 import { describe, it, expect } from "vitest";
-import { buildClarificationDisplay, type BehaviorOverride, type ChainClarifyResult } from "../src/core/chain-clarify.js";
-import type { ChainStep } from "../src/shared/types.js";
+import { stripExecutionFlags } from "../src/core/slash-chain.js";
 
-describe("buildClarificationDisplay", () => {
-  it("formats steps for display", () => {
-    const steps: ChainStep[] = [
-      { agent: "scout", task: "Explore codebase", phase: "research" },
-      { agent: "planner", task: "Create plan", phase: "planning" },
-    ];
-    const display = buildClarificationDisplay(steps);
-    expect(display).toContain("scout");
-    expect(display).toContain("planner");
-    expect(display).toContain("Explore codebase");
+describe("stripExecutionFlags --yes support", () => {
+  it("strips --yes flag", () => {
+    const result = stripExecutionFlags('scout "task" -> planner --yes');
+    expect(result.yes).toBe(true);
+    expect(result.bg).toBe(false);
+    expect(result.args).toBe('scout "task" -> planner');
   });
 
-  it("shows parallel steps with item count", () => {
-    const steps: ChainStep[] = [
-      { parallel: [{ agent: "worker", task: "t1" }, { agent: "worker", task: "t2" }, { agent: "worker", task: "t3" }] },
-    ];
-    const display = buildClarificationDisplay(steps);
-    expect(display).toContain("parallel");
-    expect(display).toContain("3");
+  it("strips --yes and --bg together", () => {
+    const result = stripExecutionFlags('scout "task" --bg --yes');
+    expect(result.yes).toBe(true);
+    expect(result.bg).toBe(true);
+    expect(result.args).toBe('scout "task"');
   });
-});
 
-describe("ChainClarifyResult", () => {
-  it("type check: result has expected shape", () => {
-    const result: ChainClarifyResult = {
-      confirmed: true,
-      templates: ["task 1", "task 2"],
-      behaviorOverrides: [undefined, { model: "openai/gpt-5.5" }],
-      runInBackground: false,
-    };
-    expect(result.confirmed).toBe(true);
-    expect(result.behaviorOverrides[1]?.model).toBe("openai/gpt-5.5");
+  it("strips --yes alone", () => {
+    const result = stripExecutionFlags("--yes");
+    expect(result.yes).toBe(true);
+    expect(result.args).toBe("");
+  });
+
+  it("does not set yes when flag absent", () => {
+    const result = stripExecutionFlags('scout "task"');
+    expect(result.yes).toBe(false);
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 6: Typecheck and run tests**
 
-Run: `npx vitest run tests/core/chain-clarify.test.ts --reporter=verbose`
-Expected: FAIL — module not found
-
-- [ ] **Step 3: Implement chain-clarify.ts**
-
-Create `src/core/chain-clarify.ts`:
-
-```typescript
-import type { ChainStep, ParallelStep, SequentialStep } from "../shared/types.js";
-
-export interface BehaviorOverride {
-  output?: string | false;
-  reads?: string[] | false;
-  progress?: boolean;
-  model?: string;
-  skills?: string[] | false;
-}
-
-export interface ChainClarifyResult {
-  confirmed: boolean;
-  templates: string[];
-  behaviorOverrides: (BehaviorOverride | undefined)[];
-  runInBackground?: boolean;
-}
-
-function isParallelStep(step: ChainStep): step is ParallelStep {
-  return "parallel" in step;
-}
-
-/**
- * Build a text display of chain steps for confirmation/editing.
- */
-export function buildClarificationDisplay(steps: ChainStep[]): string {
-  const lines: string[] = ["Chain Steps:"];
-
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i];
-    if (isParallelStep(step)) {
-      lines.push(`  ${i + 1}. [parallel] ${step.parallel.length} items (agents: ${[...new Set(step.parallel.map((p) => p.agent))].join(", ")})`);
-      for (const item of step.parallel) {
-        lines.push(`     - ${item.agent}: ${item.task?.slice(0, 60) ?? "(template)"}`);
-      }
-    } else {
-      const seq = step as SequentialStep;
-      const label = seq.label ?? seq.agent;
-      const phase = seq.phase ? ` [${seq.phase}]` : "";
-      lines.push(`  ${i + 1}. ${label}${phase}: ${seq.task?.slice(0, 60) ?? "(template)"}`);
-      if (seq.model) lines.push(`     model: ${seq.model}`);
-      if (seq.output) lines.push(`     output: ${seq.output}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Show clarification TUI and return user's choices.
- * For now, implements a simple confirm/cancel without inline editing.
- * Full interactive editing (cursor movement, field modification) is future work.
- */
-export async function showChainClarification(
-  steps: ChainStep[],
-  task: string,
-  ui: { confirm: (message: string) => Promise<boolean>; notify: (msg: string, level: string) => void },
-): Promise<ChainClarifyResult | undefined> {
-  const display = buildClarificationDisplay(steps);
-  const message = `${display}\n\nTask: ${task}\n\nRun this chain?`;
-
-  const confirmed = await ui.confirm(message);
-  if (!confirmed) return undefined;
-
-  // Default: no overrides
-  const templates = steps.map((step) => {
-    if (isParallelStep(step)) return "";
-    return (step as SequentialStep).task ?? "";
-  });
-
-  return {
-    confirmed: true,
-    templates,
-    behaviorOverrides: steps.map(() => undefined),
-    runInBackground: false,
-  };
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npx vitest run tests/core/chain-clarify.test.ts --reporter=verbose`
-Expected: PASS
-
-- [ ] **Step 5: Wire clarification into slash-chain foreground path**
-
-In `src/core/slash-chain.ts`, in the foreground chain execution path (around line 561), before calling `executeChain`:
-
-```typescript
-// Clarification TUI (skip with --yes flag or for parallel-only chains)
-if (!bg) {
-  const hasSequentialSteps = chain.some((s) => !("parallel" in s));
-  if (hasSequentialSteps) {
-    const { showChainClarification } = await import("./chain-clarify.js");
-    const clarifyResult = await showChainClarification(chain, task, {
-      confirm: async (msg) => {
-        ctx.ui.notify(msg, "info");
-        // For now, auto-confirm (TUI interactive editing is Phase 9.2 enhancement)
-        return true;
-      },
-      notify: (msg, level) => ctx.ui.notify(msg, level as "info" | "error"),
-    });
-    if (!clarifyResult) return; // User cancelled
-    if (clarifyResult.runInBackground) {
-      bg = true; // Switch to background execution
-    }
-  }
-}
-```
-
-- [ ] **Step 6: Run typecheck and tests**
-
-Run: `npx tsc --noEmit && npx vitest run tests/core/chain-clarify.test.ts --reporter=verbose`
+Run: `npx tsc --noEmit && npx vitest run tests/core/chain-clarify-integration.test.ts tests/chain-clarify.test.ts --reporter=verbose`
 Expected: All pass
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/core/chain-clarify.ts src/core/slash-chain.ts tests/core/chain-clarify.test.ts
-git commit -m "feat(chains): add chain clarification TUI (confirmation + display)
+git add src/core/slash-chain.ts tests/core/chain-clarify-integration.test.ts
+git commit -m "feat(chains): wire clarification TUI into foreground execution
 
-Interactive editing (cursor, field modification) deferred to future iteration.
-Currently shows chain steps and confirms before execution."
+Shows interactive step preview (task/model editing, bg switch) before
+running foreground chains. Skip with --yes flag."
 ```
 
 ---
@@ -448,9 +585,14 @@ Currently shows chain steps and confirms before execution."
 - [ ] **Step 1: Run full test suite**
 
 Run: `npx vitest run --reporter=verbose`
-Expected: All tests pass
+Expected: All tests pass (including existing chain-clarify.test.ts, chain-execution.test.ts)
 
 - [ ] **Step 2: Run typecheck**
 
 Run: `npx tsc --noEmit`
 Expected: No errors
+
+- [ ] **Step 3: Run lint**
+
+Run: `npx biome check src/ tests/`
+Expected: No errors (or only pre-existing warnings)
