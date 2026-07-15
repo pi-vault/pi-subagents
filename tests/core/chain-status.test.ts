@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { formatChainStatus, listChains } from "../../src/core/chain-status.js";
 import type { AgentRecord } from "../../src/shared/types.js";
 
@@ -68,9 +68,7 @@ describe("formatChainStatus", () => {
 
   it("shows error on failed step", () => {
     const record = makeRecord({
-      chainSteps: [
-        { label: "worker", status: "failed", error: "Build failed" },
-      ],
+      chainSteps: [{ label: "worker", status: "failed", error: "Build failed" }],
     });
     const output = formatChainStatus(record);
     expect(output).toContain("failed");
@@ -91,9 +89,7 @@ describe("listChains", () => {
   });
 
   it("returns empty array when no chains", () => {
-    const records: AgentRecord[] = [
-      makeRecord({ id: "agent-1", type: "scout" }),
-    ];
+    const records: AgentRecord[] = [makeRecord({ id: "agent-1", type: "scout" })];
     expect(listChains(records)).toHaveLength(0);
   });
 });

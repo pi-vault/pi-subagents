@@ -25,10 +25,7 @@ export function formatChainStatus(record: AgentRecord): string {
             : step.status === "failed"
               ? "\u2717"
               : "\u25cb";
-      const dur =
-        step.durationMs != null
-          ? ` (${Math.floor(step.durationMs / 1000)}s)`
-          : "";
+      const dur = step.durationMs != null ? ` (${Math.floor(step.durationMs / 1000)}s)` : "";
       const err = step.error ? ` \u2014 ${step.error}` : "";
       lines.push(`  ${icon} ${step.label} \u2014 ${step.status}${dur}${err}`);
     }

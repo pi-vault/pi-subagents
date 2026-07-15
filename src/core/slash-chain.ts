@@ -1,13 +1,6 @@
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
-import type {
-  AgentDefinition,
-  ChainStep,
-  SequentialStep,
-} from "../shared/types.js";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
+import type { AgentDefinition, ChainStep, SequentialStep } from "../shared/types.js";
 import { discoverChains } from "./agents.js";
 import { findAgentByName } from "./subagent.js";
 
@@ -317,8 +310,7 @@ const splitGroupBody = (trimmed: string): { inner: string; config: GroupConfig }
       }
     }
   }
-  if (closeIdx === -1)
-    throw new SlashParseError(`Unmatched parentheses in group: '${trimmed}'`);
+  if (closeIdx === -1) throw new SlashParseError(`Unmatched parentheses in group: '${trimmed}'`);
   const inner = trimmed.slice(1, closeIdx);
   const suffix = trimmed.slice(closeIdx + 1).trim();
   if (!suffix) return { inner, config: {} };
@@ -354,18 +346,14 @@ export function parseSingleTaskToken(token: string): ParsedStep {
 export function parseGroupSegment(segment: string): ParsedGroup {
   const trimmed = segment.trim();
   if (!trimmed.startsWith("(")) {
-    throw new SlashParseError(
-      `Parallel group must be wrapped in parentheses: '${trimmed}'`,
-    );
+    throw new SlashParseError(`Parallel group must be wrapped in parentheses: '${trimmed}'`);
   }
   const { inner, config } = splitGroupBody(trimmed);
   const rawParts = splitGroupTasks(inner)
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
   if (rawParts.length < 2) {
-    throw new SlashParseError(
-      "Parallel group must contain at least two tasks separated by ' | '",
-    );
+    throw new SlashParseError("Parallel group must contain at least two tasks separated by ' | '");
   }
   return { kind: "group", tasks: rawParts.map((part) => parseSingleTaskToken(part)), config };
 }
@@ -482,18 +470,10 @@ export function buildChainSteps(
   const chain: ChainStep[] = parsedSteps.map((step, i): ChainStep => {
     if (step.kind === "group") {
       return {
-        parallel: step.tasks.map((t) =>
-          mapParsedStep(t, undefined, false, true),
-        ),
-        ...(step.config.concurrency !== undefined
-          ? { concurrency: step.config.concurrency }
-          : {}),
-        ...(step.config.failFast !== undefined
-          ? { failFast: step.config.failFast }
-          : {}),
-        ...(step.config.worktree !== undefined
-          ? { worktree: step.config.worktree }
-          : {}),
+        parallel: step.tasks.map((t) => mapParsedStep(t, undefined, false, true)),
+        ...(step.config.concurrency !== undefined ? { concurrency: step.config.concurrency } : {}),
+        ...(step.config.failFast !== undefined ? { failFast: step.config.failFast } : {}),
+        ...(step.config.worktree !== undefined ? { worktree: step.config.worktree } : {}),
       } as ChainStep;
     }
     return mapParsedStep(step, sharedTask, i === 0, false) as SequentialStep;
@@ -528,9 +508,7 @@ export async function executeSlashChain(
     stepCwd: string,
     options?: import("./chain-execution.js").StepSpawnOptions,
   ) => {
-    let effectiveAgentDef = options?.skills
-      ? { ...agentDef, skills: options.skills }
-      : agentDef;
+    let effectiveAgentDef = options?.skills ? { ...agentDef, skills: options.skills } : agentDef;
     if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
     return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
       prompt,
@@ -554,8 +532,7 @@ export async function executeSlashChain(
     type ClarifyResult = import("../tui/chain-clarify.js").ChainClarifyResult;
 
     const result = await ctx.ui.custom<ClarifyResult>(
-      (tui, theme, _kb, done) =>
-        new ChainClarifyComponent(tui, theme, chain, done),
+      (tui, theme, _kb, done) => new ChainClarifyComponent(tui, theme, chain, done),
       { overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
     );
 
@@ -636,25 +613,17 @@ export async function executeSlashChain(
   }
 }
 
-export function registerChainCommands(
-  pi: ExtensionAPI,
-  deps: RuntimeDeps,
-): void {
+export function registerChainCommands(pi: ExtensionAPI, deps: RuntimeDeps): void {
   // /chain — inline chain expression
   pi.registerCommand("chain", {
-    description:
-      'Run agents in sequence: /chain scout "task" -> planner',
+    description: 'Run agents in sequence: /chain scout "task" -> planner',
     getArgumentCompletions: (prefix) => {
       try {
         const paths = deps.resolvePaths();
         const agents = deps.discoverAgents(paths).agents;
         const lower = prefix.toLowerCase();
-        const matches = agents.filter((a) =>
-          a.name.toLowerCase().startsWith(lower),
-        );
-        return matches.length > 0
-          ? matches.map((a) => ({ value: a.name, label: a.name }))
-          : null;
+        const matches = agents.filter((a) => a.name.toLowerCase().startsWith(lower));
+        return matches.length > 0 ? matches.map((a) => ({ value: a.name, label: a.name })) : null;
       } catch {
         return null;
       }
@@ -664,16 +633,11 @@ export function registerChainCommands(
 
       // Subcommand: /chain status [id]
       if (trimmed === "status" || trimmed.startsWith("status ")) {
-        const chainId =
-          trimmed === "status" ? "" : trimmed.slice(7).trim();
-        const { formatChainStatus, listChains } = await import(
-          "./chain-status.js"
-        );
+        const chainId = trimmed === "status" ? "" : trimmed.slice(7).trim();
+        const { formatChainStatus, listChains } = await import("./chain-status.js");
         const chains = listChains(deps.manager.listAgents());
         if (chainId) {
-          const record = chains.find(
-            (r) => r.id === chainId || r.id.startsWith(chainId),
-          );
+          const record = chains.find((r) => r.id === chainId || r.id.startsWith(chainId));
           if (!record) {
             ctx.ui.notify(`Chain not found: ${chainId}`, "error");
             return;
@@ -691,8 +655,7 @@ export function registerChainCommands(
 
       // Subcommand: /chain cancel <id>
       if (trimmed === "cancel" || trimmed.startsWith("cancel ")) {
-        const chainId =
-          trimmed === "cancel" ? "" : trimmed.slice(7).trim();
+        const chainId = trimmed === "cancel" ? "" : trimmed.slice(7).trim();
         if (!chainId) {
           ctx.ui.notify("Usage: /chain cancel <id>", "error");
           return;
@@ -712,9 +675,7 @@ export function registerChainCommands(
       const paths = deps.resolvePaths();
       const agents = deps.discoverAgents(paths).agents;
 
-      const built = buildChainSteps(cleanedArgs, agents, (msg) =>
-        ctx.ui.notify(msg, "error"),
-      );
+      const built = buildChainSteps(cleanedArgs, agents, (msg) => ctx.ui.notify(msg, "error"));
       if (!built) return;
 
       await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg, yes);
@@ -723,19 +684,14 @@ export function registerChainCommands(
 
   // /run-chain — execute a saved chain file
   pi.registerCommand("run-chain", {
-    description:
-      "Run a saved chain: /run-chain chainName -- task",
+    description: "Run a saved chain: /run-chain chainName -- task",
     getArgumentCompletions: (prefix) => {
       try {
         const paths = deps.resolvePaths();
         const chains = discoverChains(paths).chains;
         const lower = prefix.toLowerCase();
-        const matches = chains.filter((c) =>
-          c.name.toLowerCase().startsWith(lower),
-        );
-        return matches.length > 0
-          ? matches.map((c) => ({ value: c.name, label: c.name }))
-          : null;
+        const matches = chains.filter((c) => c.name.toLowerCase().startsWith(lower));
+        return matches.length > 0 ? matches.map((c) => ({ value: c.name, label: c.name })) : null;
       } catch {
         return null;
       }
@@ -760,25 +716,13 @@ export function registerChainCommands(
       const chainDiscovery = discoverChains(paths, ctx.cwd);
       const chain = chainDiscovery.chains.find((c) => c.name === chainName);
       if (!chain) {
-        const available =
-          chainDiscovery.chains.map((c) => c.name).join(", ") || "(none)";
-        ctx.ui.notify(
-          `Unknown chain: "${chainName}". Available: ${available}`,
-          "error",
-        );
+        const available = chainDiscovery.chains.map((c) => c.name).join(", ") || "(none)";
+        ctx.ui.notify(`Unknown chain: "${chainName}". Available: ${available}`, "error");
         return;
       }
 
       // ChainStepConfig[] is structurally compatible with ChainStep[] at runtime
-      await executeSlashChain(
-        pi,
-        ctx,
-        deps,
-        chain.steps as ChainStep[],
-        task,
-        bg,
-        yes,
-      );
+      await executeSlashChain(pi, ctx, deps, chain.steps as ChainStep[], task, bg, yes);
     },
   });
 }

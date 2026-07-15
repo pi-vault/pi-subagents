@@ -1,25 +1,17 @@
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { runAgent, resumeAgent } from "./agent-runner.js";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { RuntimeDeps } from "../shared/runtime-deps.js";
+import type { AgentDefinition, AgentRecord, SpawnOptions, ToolActivity } from "../shared/types.js";
+import { resumeAgent, runAgent } from "./agent-runner.js";
+import { createChildGetResultTool, createChildSubagentTool } from "./child-subagent-tool.js";
+import { createContactSupervisorTool } from "./intercom.js";
 import {
-  DEFAULT_MAX_SPAWNS_PER_SESSION,
   checkSpawnLimit,
+  DEFAULT_MAX_SPAWNS_PER_SESSION,
   resolveMaxSpawns,
 } from "./spawn-guard.js";
-import { createWorktree, cleanupWorktree, pruneWorktrees } from "./worktree.js";
-import {
-  createChildSubagentTool,
-  createChildGetResultTool,
-} from "./child-subagent-tool.js";
-import { createContactSupervisorTool } from "./intercom.js";
-import type { RuntimeDeps } from "../shared/runtime-deps.js";
-import type {
-  AgentDefinition,
-  AgentRecord,
-  SpawnOptions,
-  ToolActivity,
-} from "../shared/types.js";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { cleanupWorktree, createWorktree, pruneWorktrees } from "./worktree.js";
 
 let idCounter = 0;
 function generateId(): string {
@@ -79,9 +71,7 @@ export class AgentManager {
     const isBackground = options.isBackground ?? false;
 
     const effectiveMaxDepth =
-      agentDef.maxDepth !== undefined
-        ? Math.min(agentDef.maxDepth, this.maxDepth)
-        : this.maxDepth;
+      agentDef.maxDepth !== undefined ? Math.min(agentDef.maxDepth, this.maxDepth) : this.maxDepth;
     if (currentDepth >= effectiveMaxDepth) {
       throw new Error(
         `Nested delegation blocked: current depth ${currentDepth} reached the nesting limit of ${effectiveMaxDepth}.`,
@@ -113,13 +103,17 @@ export class AgentManager {
       id,
       type: agentDef.name,
       description: options.description ?? options.prompt.slice(0, 80),
-      status:
-        isBackground && this.runningBackground >= this.maxConcurrent ? "queued" : "running",
+      status: isBackground && this.runningBackground >= this.maxConcurrent ? "queued" : "running",
       toolUses: 0,
       turnCount: 0,
       startedAt: Date.now(),
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
-      invocation: { agent: agentDef.name, task: options.prompt, cwd: options.cwd, description: options.description },
+      invocation: {
+        agent: agentDef.name,
+        task: options.prompt,
+        cwd: options.cwd,
+        description: options.description,
+      },
       cwd: options.cwd,
       isBackground,
       compactionCount: 0,
@@ -262,9 +256,7 @@ export class AgentManager {
     }
 
     const effectiveMaxDepth =
-      agentDef.maxDepth !== undefined
-        ? Math.min(agentDef.maxDepth, this.maxDepth)
-        : this.maxDepth;
+      agentDef.maxDepth !== undefined ? Math.min(agentDef.maxDepth, this.maxDepth) : this.maxDepth;
     const allowRecursion =
       agentDef.subagentAgents.length > 0 && (options.currentDepth ?? 0) + 1 < effectiveMaxDepth;
 
@@ -294,9 +286,7 @@ export class AgentManager {
     if (agentDef.intercom) {
       const deps = (options as { _deps?: RuntimeDeps })._deps;
       if (deps?.intercom) {
-        customTools.push(
-          createContactSupervisorTool(deps.intercom, id, agentDef.name),
-        );
+        customTools.push(createContactSupervisorTool(deps.intercom, id, agentDef.name));
       }
     }
 
@@ -346,11 +336,7 @@ export class AgentManager {
       ctx as { model?: unknown; modelRegistry?: unknown },
     )
       .then((result) => {
-        record.status = result.steered
-          ? "steered"
-          : result.aborted
-            ? "aborted"
-            : "completed";
+        record.status = result.steered ? "steered" : result.aborted ? "aborted" : "completed";
         record.result = result.responseText;
         record.session = result.session;
         record.completedAt = Date.now();

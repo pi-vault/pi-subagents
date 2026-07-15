@@ -252,7 +252,13 @@ export interface AgentRecord {
   joinMode?: JoinMode;
   resultConsumed?: boolean;
   pendingSteers?: string[];
-  worktree?: { path: string; branch: string; baseSha: string; workPath: string; syntheticPaths?: string[] };
+  worktree?: {
+    path: string;
+    branch: string;
+    baseSha: string;
+    workPath: string;
+    syntheticPaths?: string[];
+  };
   worktreeResult?: { hasChanges: boolean; branch?: string };
   toolCallId?: string;
   outputFile?: string;
@@ -283,11 +289,7 @@ export interface RunOptions {
   onToolActivity?: (activity: ToolActivity) => void;
   onTextDelta?: (delta: string, fullText: string) => void;
   onTurnEnd?: (turnCount: number) => void;
-  onUsage?: (usage: {
-    input: number;
-    output: number;
-    cacheWrite: number;
-  }) => void;
+  onUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
   onSessionCreated?: (session: unknown) => void;
   toolBudget?: ResolvedToolBudget;
   customTools?: unknown[];
@@ -318,11 +320,7 @@ export interface SpawnOptions {
   onToolActivity?: (activity: ToolActivity) => void;
   onTextDelta?: (delta: string, fullText: string) => void;
   onTurnEnd?: (turnCount: number) => void;
-  onUsage?: (usage: {
-    input: number;
-    output: number;
-    cacheWrite: number;
-  }) => void;
+  onUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
   onSessionCreated?: (session: unknown) => void;
   toolBudget?: ResolvedToolBudget;
   spawnedBy?: string;
