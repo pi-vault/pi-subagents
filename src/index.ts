@@ -297,6 +297,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     },
     setWidgetMode: applyWidgetMode,
     setFleetView: applyFleetView,
+    setMaxSpawnsPerSession: (n) => manager.setMaxSpawnsPerSession(n),
   });
 
   return deps;
