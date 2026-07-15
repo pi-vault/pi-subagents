@@ -11,6 +11,7 @@ export interface SubagentsSettings {
   defaultJoinMode?: JoinMode;
   widgetMode?: WidgetMode;
   fleetView?: boolean;
+  maxSpawnsPerSession?: number;
   modelScope?: ModelScopeConfig;
   watchdog?: WatchdogConfig;
 }
@@ -20,9 +21,11 @@ export interface SettingsAppliers {
   setDefaultJoinMode: (mode: JoinMode) => void;
   setWidgetMode?: (mode: WidgetMode) => void;
   setFleetView?: (enabled: boolean) => void;
+  setMaxSpawnsPerSession?: (n: number) => void;
 }
 
 const MAX_CONCURRENT_CEILING = 1024;
+const MAX_SPAWNS_PER_SESSION_CEILING = 10_000; // upper bound for user-facing settings
 const VALID_JOIN_MODES: ReadonlySet<string> = new Set(["async", "group", "smart"]);
 const VALID_WIDGET_MODES: ReadonlySet<string> = new Set(["all", "background", "off"]);
 
@@ -45,6 +48,13 @@ function sanitize(raw: unknown): SubagentsSettings {
   }
   if (typeof r.fleetView === "boolean") {
     out.fleetView = r.fleetView;
+  }
+  if (
+    Number.isInteger(r.maxSpawnsPerSession) &&
+    (r.maxSpawnsPerSession as number) >= 1 &&
+    (r.maxSpawnsPerSession as number) <= MAX_SPAWNS_PER_SESSION_CEILING
+  ) {
+    out.maxSpawnsPerSession = r.maxSpawnsPerSession as number;
   }
   if (r.modelScope !== undefined) {
     const parsed = parseModelScopeConfig(r.modelScope);
@@ -93,4 +103,5 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (s.defaultJoinMode) appliers.setDefaultJoinMode(s.defaultJoinMode);
   if (s.widgetMode !== undefined) appliers.setWidgetMode?.(s.widgetMode);
   if (s.fleetView !== undefined) appliers.setFleetView?.(s.fleetView);
+  if (typeof s.maxSpawnsPerSession === "number") appliers.setMaxSpawnsPerSession?.(s.maxSpawnsPerSession);
 }

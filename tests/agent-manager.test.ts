@@ -656,3 +656,83 @@ describe("registerExternalRecord / notifyComplete", () => {
     manager.dispose();
   });
 });
+
+describe("per-agent maxDepth", () => {
+  it("uses agent maxDepth when lower than global", () => {
+    const manager = new AgentManager(5);
+    const agentDef = makeAgentDef({ maxDepth: 2 });
+    // Depth 2 should fail because 2 >= agent.maxDepth (2)
+    expect(() =>
+      manager.spawn({}, agentDef, {
+        prompt: "test",
+        cwd: "/tmp",
+        currentDepth: 2,
+        isBackground: true,
+      }),
+    ).toThrow(/nesting limit/i);
+    manager.dispose();
+  });
+
+  it("allows spawn when depth is below agent maxDepth", () => {
+    const manager = new AgentManager(5);
+    const agentDef = makeAgentDef({ maxDepth: 3 });
+    // Depth 1 should succeed (1 < 3)
+    const id = manager.spawn({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 1,
+      isBackground: true,
+    });
+    expect(id).toBeTruthy();
+    manager.dispose();
+  });
+
+  it("uses global maxDepth when agent has no override", () => {
+    const manager = new AgentManager(3);
+    const agentDef = makeAgentDef(); // no maxDepth
+    // Depth 2 should succeed (2 < 3)
+    const id = manager.spawn({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 2,
+      isBackground: true,
+    });
+    expect(id).toBeTruthy();
+    manager.dispose();
+  });
+
+  it("uses global maxDepth when agent maxDepth is higher", () => {
+    const manager = new AgentManager(2);
+    const agentDef = makeAgentDef({ maxDepth: 5 });
+    // Depth 2 should fail because 2 >= global maxDepth (2), even though agent allows 5
+    expect(() =>
+      manager.spawn({}, agentDef, {
+        prompt: "test",
+        cwd: "/tmp",
+        currentDepth: 2,
+        isBackground: true,
+      }),
+    ).toThrow(/nesting limit/i);
+    manager.dispose();
+  });
+
+  it("allowRecursion respects per-agent maxDepth, not global maxDepth", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    // Global maxDepth=3, agent maxDepth=1.
+    // At currentDepth=0: effectiveMaxDepth=1, so (0+1) < 1 = false → allowRecursion=false.
+    // Without the fix, this.maxDepth=3 is used: (0+1) < 3 = true → allowRecursion=true (WRONG).
+    const manager = new AgentManager(3);
+    const agentDef = makeAgentDef({ subagentAgents: ["helper"], maxDepth: 1 });
+    await manager.spawnAndWait({}, agentDef, {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 0,
+    });
+    expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+      agentDef,
+      expect.objectContaining({ allowRecursion: false }),
+      expect.anything(),
+    );
+    manager.dispose();
+  });
+});

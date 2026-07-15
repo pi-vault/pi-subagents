@@ -78,9 +78,13 @@ export class AgentManager {
     const currentDepth = options.currentDepth ?? 0;
     const isBackground = options.isBackground ?? false;
 
-    if (currentDepth >= this.maxDepth) {
+    const effectiveMaxDepth =
+      agentDef.maxDepth !== undefined
+        ? Math.min(agentDef.maxDepth, this.maxDepth)
+        : this.maxDepth;
+    if (currentDepth >= effectiveMaxDepth) {
       throw new Error(
-        `Nested delegation blocked: current depth ${currentDepth} reached the nesting limit of ${this.maxDepth}.`,
+        `Nested delegation blocked: current depth ${currentDepth} reached the nesting limit of ${effectiveMaxDepth}.`,
       );
     }
     if (!isAbsolute(options.cwd)) {
@@ -256,8 +260,12 @@ export class AgentManager {
       }
     }
 
+    const effectiveMaxDepth =
+      agentDef.maxDepth !== undefined
+        ? Math.min(agentDef.maxDepth, this.maxDepth)
+        : this.maxDepth;
     const allowRecursion =
-      agentDef.subagentAgents.length > 0 && (options.currentDepth ?? 0) + 1 < this.maxDepth;
+      agentDef.subagentAgents.length > 0 && (options.currentDepth ?? 0) + 1 < effectiveMaxDepth;
 
     // Build custom tools for child sessions that allow recursion
     let customTools: unknown[] = [];
@@ -555,6 +563,10 @@ export class AgentManager {
 
   setMaxSpawnsPerSession(n: number): void {
     this.maxSpawnsPerSession = n;
+  }
+
+  getSpawnBudget(): number {
+    return Math.max(0, resolveMaxSpawns(this.maxSpawnsPerSession) - this.spawnCount);
   }
 
   getSpawnCount(): number {

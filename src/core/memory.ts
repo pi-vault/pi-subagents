@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -85,6 +86,35 @@ export function resolveMemoryDir(
   }
 
   return { dir: resolved };
+}
+
+/**
+ * Check whether `.pi/agent-memory-local/` is covered by `.gitignore`.
+ * Returns a warning message string if not ignored, undefined otherwise.
+ * Silently returns undefined if the directory doesn't exist, or if not in a git repo.
+ */
+export function checkLocalMemoryGitignore(cwd: string): string | undefined {
+  const localDir = join(cwd, ".pi", "agent-memory-local");
+  if (!existsSync(localDir)) return undefined;
+
+  try {
+    execFileSync("git", ["check-ignore", "-q", localDir], { cwd, stdio: "ignore" });
+    // Exit code 0 means the path IS ignored — no warning needed
+    return undefined;
+  } catch {
+    // Exit code non-zero: not ignored, or not a git repo.
+    // Distinguish: check if we're in a git repo at all.
+    try {
+      execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd, stdio: "ignore" });
+    } catch {
+      // Not a git repo — no warning
+      return undefined;
+    }
+    return (
+      "Local memory directory .pi/agent-memory-local/ is not in .gitignore. " +
+      "Consider adding it to prevent committing agent memory files."
+    );
+  }
 }
 
 type MemoryFileResult =

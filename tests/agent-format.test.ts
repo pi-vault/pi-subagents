@@ -945,3 +945,55 @@ describe("round-trip", () => {
     expect(serialized).toContain("extensions: false");
   });
 });
+
+describe("max_depth frontmatter", () => {
+  test("parses valid max_depth", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nmax_depth: 2\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.agent.maxDepth).toBe(2);
+    }
+  });
+
+  test("parses max_depth of 0", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nmax_depth: 0\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.agent.maxDepth).toBe(0);
+    }
+  });
+
+  test("ignores non-integer max_depth", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nmax_depth: abc\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.agent.maxDepth).toBeUndefined();
+    }
+  });
+
+  test("ignores negative max_depth", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\nmax_depth: -1\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.agent.maxDepth).toBeUndefined();
+    }
+  });
+
+  test("max_depth is undefined when omitted", () => {
+    const content =
+      "---\nname: test\ndescription: A test\ntools: read\n---\nPrompt\n";
+    const result = parseAgentContent("/test.md", content);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.agent.maxDepth).toBeUndefined();
+    }
+  });
+});

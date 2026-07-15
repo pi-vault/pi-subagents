@@ -327,7 +327,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             deps.manager.fireAndForgetChain(
               chainRunId,
               params.task ?? "",
-              executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+              executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => deps.manager.getSpawnBudget() }),
               effectiveCwd,
               () => deps.chainWidget?.clear(),
             );
@@ -353,6 +353,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             runId: chainRunId,
             signal,
             onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
+            getSpawnBudget: () => deps.manager.getSpawnBudget(),
           });
           deps.chainWidget?.clear();
           return {

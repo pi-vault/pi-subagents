@@ -546,7 +546,7 @@ export async function executeSlashChain(
     deps.manager.fireAndForgetChain(
       chainRunId,
       task,
-      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => deps.manager.getSpawnBudget() }),
       ctx.cwd,
       () => deps.chainWidget?.clear(),
     );
@@ -568,6 +568,7 @@ export async function executeSlashChain(
       cwd: ctx.cwd,
       runId: chainRunId,
       onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
+      getSpawnBudget: () => deps.manager.getSpawnBudget(),
     });
     deps.chainWidget?.clear();
     pi.sendMessage({

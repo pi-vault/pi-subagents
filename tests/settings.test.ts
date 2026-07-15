@@ -167,4 +167,50 @@ describe("settings", () => {
     const settings = loadSettings(projectDir);
     expect(settings.modelScope).toBeUndefined();
   });
+
+  it("sanitize preserves valid maxSpawnsPerSession", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ maxSpawnsPerSession: 50 }));
+    const settings = loadSettings(projectDir);
+    expect(settings.maxSpawnsPerSession).toBe(50);
+  });
+
+  it("sanitize strips non-integer maxSpawnsPerSession", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ maxSpawnsPerSession: 3.5 }));
+    const settings = loadSettings(projectDir);
+    expect(settings.maxSpawnsPerSession).toBeUndefined();
+  });
+
+  it("sanitize strips maxSpawnsPerSession below 1", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ maxSpawnsPerSession: 0 }));
+    const settings = loadSettings(projectDir);
+    expect(settings.maxSpawnsPerSession).toBeUndefined();
+  });
+
+  it("sanitize strips maxSpawnsPerSession above 10000", () => {
+    writeFileSync(join(piDir, "subagents.json"), JSON.stringify({ maxSpawnsPerSession: 99999 }));
+    const settings = loadSettings(projectDir);
+    expect(settings.maxSpawnsPerSession).toBeUndefined();
+  });
+
+  it("applySettings calls setMaxSpawnsPerSession when value present", () => {
+    let spawns: number | undefined;
+    const appliers: SettingsAppliers = {
+      setMaxConcurrent: () => {},
+      setDefaultJoinMode: () => {},
+      setMaxSpawnsPerSession: (n) => { spawns = n; },
+    };
+    applySettings({ maxSpawnsPerSession: 25 }, appliers);
+    expect(spawns).toBe(25);
+  });
+
+  it("applySettings does not call setMaxSpawnsPerSession when absent", () => {
+    let called = false;
+    const appliers: SettingsAppliers = {
+      setMaxConcurrent: () => {},
+      setDefaultJoinMode: () => {},
+      setMaxSpawnsPerSession: () => { called = true; },
+    };
+    applySettings({ maxConcurrent: 4 }, appliers);
+    expect(called).toBe(false);
+  });
 });
