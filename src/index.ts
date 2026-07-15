@@ -376,29 +376,37 @@ export function registerSubagentsExtension(
   registerChainCommands(pi, deps);
   registerPromptWorkflowCommands(pi, deps);
 
-  // Watchdog slash command: /watchdog [status|on|off]
+  // Watchdog slash command: /watchdog [status|off|recommend-model]
   pi.registerCommand("watchdog", {
-    description: "Watchdog control: status, off",
+    description: "Watchdog control: status, off, recommend-model",
     handler: async (args) => {
       const sub = args.trim().toLowerCase();
+      const sendMsg = (content: string) =>
+        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+          { customType: "notification", content, display: true } as unknown as Parameters<typeof pi.sendMessage>[0],
+        );
+
       if (sub === "off") {
         deps.watchdog?.dispose();
-        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
-          {
-            customType: "notification",
-            content: "Watchdog disabled for this session.",
-            display: true,
-          } as unknown as Parameters<typeof pi.sendMessage>[0],
+        sendMsg("Watchdog disabled for this session.");
+      } else if (sub === "recommend-model") {
+        const { recommendWatchdogModel, detectProviderFamily } = await import("./core/watchdog-model-selection.js");
+        const currentFamily = detectProviderFamily(
+          capturedCurrentModel?.provider,
+          capturedCurrentModel?.id,
         );
+        const rec = recommendWatchdogModel(currentFamily);
+        sendMsg([
+          `Recommended watchdog model: ${rec.model}`,
+          `Thinking level: ${rec.thinking}`,
+          `Reason: ${rec.reason}`,
+          ``,
+          `To apply, add to .pi/subagents.json:`,
+          `  "watchdog": { "model": "${rec.model}", "thinking": "${rec.thinking}" }`,
+        ].join("\n"));
       } else {
         const st = deps.watchdog?.status() ?? "not initialized";
-        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
-          {
-            customType: "notification",
-            content: `Watchdog status: ${st}`,
-            display: true,
-          } as unknown as Parameters<typeof pi.sendMessage>[0],
-        );
+        sendMsg(`Watchdog status: ${st}`);
       }
     },
   });
@@ -545,6 +553,7 @@ export function registerSubagentsExtension(
     getAll: () => Array<{ id: string; provider: string; name?: string }>;
     find: (provider: string, id: string) => { id: string; provider: string } | undefined;
   } | undefined;
+  let capturedCurrentModel: { provider?: string; id?: string } | undefined;
 
   // RPC handlers for cross-extension communication
   const rpcDispose = registerRpcHandlers(
@@ -562,6 +571,7 @@ export function registerSubagentsExtension(
     deps.fleet?.setUICtx(ctx.ui as unknown as FleetUICtx);
     deps.widget?.onTurnStart();
     capturedModelRegistry = (ctx as { modelRegistry?: typeof capturedModelRegistry }).modelRegistry;
+    capturedCurrentModel = (ctx as { model?: typeof capturedCurrentModel }).model;
   });
 
   // Cleanup on session shutdown
