@@ -4,6 +4,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { JoinMode, WidgetMode } from "../shared/types.js";
 import type { ModelScopeConfig } from "./model-scope.js";
 import { parseModelScopeConfig } from "./model-scope.js";
+import { parseWatchdogConfig, type WatchdogConfig } from "./watchdog.js";
 
 export interface SubagentsSettings {
   maxConcurrent?: number;
@@ -11,6 +12,7 @@ export interface SubagentsSettings {
   widgetMode?: WidgetMode;
   fleetView?: boolean;
   modelScope?: ModelScopeConfig;
+  watchdog?: WatchdogConfig;
 }
 
 export interface SettingsAppliers {
@@ -47,6 +49,9 @@ function sanitize(raw: unknown): SubagentsSettings {
   if (r.modelScope !== undefined) {
     const parsed = parseModelScopeConfig(r.modelScope);
     if (parsed) out.modelScope = parsed;
+  }
+  if (r.watchdog !== undefined) {
+    out.watchdog = parseWatchdogConfig(r.watchdog);
   }
   return out;
 }

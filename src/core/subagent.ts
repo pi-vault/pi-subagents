@@ -328,6 +328,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               chainRunId,
               params.task ?? "",
               executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+              effectiveCwd,
               () => deps.chainWidget?.clear(),
             );
             return {
