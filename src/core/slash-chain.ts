@@ -55,21 +55,26 @@ export type ParsedGroupStep = ParsedStep | ParsedGroup;
 export interface ExecutionFlags {
   args: string;
   bg: boolean;
+  yes: boolean;
 }
 
-/** Extract and strip trailing --bg / --fork flags. */
+/** Extract and strip trailing --bg / --fork / --yes flags. */
 export function stripExecutionFlags(rawArgs: string): ExecutionFlags {
   let args = rawArgs.trim();
   let bg = false;
+  let yes = false;
   for (;;) {
     if (args.endsWith(" --bg") || args === "--bg") {
       args = args === "--bg" ? "" : args.slice(0, -5).trim();
       bg = true;
     } else if (args.endsWith(" --fork") || args === "--fork") {
       args = args === "--fork" ? "" : args.slice(0, -7).trim();
+    } else if (args.endsWith(" --yes") || args === "--yes") {
+      args = args === "--yes" ? "" : args.slice(0, -6).trim();
+      yes = true;
     } else break;
   }
-  return { args, bg };
+  return { args, bg, yes };
 }
 
 // ---------------------------------------------------------------------------
@@ -506,10 +511,12 @@ export async function executeSlashChain(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   deps: RuntimeDeps,
-  chain: ChainStep[],
+  inputChain: ChainStep[],
   task: string,
   bg = false,
+  yes = false,
 ): Promise<void> {
+  let chain = inputChain;
   const paths = deps.resolvePaths();
   const loadedConfig = deps.loadConfig(paths);
   const discovery = deps.discoverAgents(paths);
@@ -539,6 +546,23 @@ export async function executeSlashChain(
     if (!agent) throw new Error(`Unknown agent: "${name}"`);
     return agent;
   };
+
+  // Clarification TUI — show step preview before foreground execution
+  // Skip when: --bg (background), --yes (auto-confirm), or no UI available
+  if (!bg && !yes) {
+    const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
+    type ClarifyResult = import("../tui/chain-clarify.js").ChainClarifyResult;
+
+    const result = await ctx.ui.custom<ClarifyResult>(
+      (tui, theme, _kb, done) =>
+        new ChainClarifyComponent(tui, theme, chain, done),
+      { overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
+    );
+
+    if (!result || result.action === "cancel") return;
+    chain = result.steps; // Apply any task/model edits from the TUI
+    if (result.action === "bg") bg = true;
+  }
 
   // Background chain path
   if (bg) {
@@ -684,7 +708,7 @@ export function registerChainCommands(
       }
 
       // Normal chain execution
-      const { args: cleanedArgs, bg } = stripExecutionFlags(args);
+      const { args: cleanedArgs, bg, yes } = stripExecutionFlags(args);
       const paths = deps.resolvePaths();
       const agents = deps.discoverAgents(paths).agents;
 
@@ -693,7 +717,7 @@ export function registerChainCommands(
       );
       if (!built) return;
 
-      await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg);
+      await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg, yes);
     },
   });
 
@@ -717,7 +741,7 @@ export function registerChainCommands(
       }
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
-      const { args: cleanedArgs, bg } = stripExecutionFlags(args);
+      const { args: cleanedArgs, bg, yes } = stripExecutionFlags(args);
       const usage = "Usage: /run-chain <chainName> -- <task>";
 
       const delimiterIndex = cleanedArgs.indexOf(" -- ");
@@ -753,6 +777,7 @@ export function registerChainCommands(
         chain.steps as ChainStep[],
         task,
         bg,
+        yes,
       );
     },
   });
