@@ -1,11 +1,11 @@
 import { resolve } from "node:path";
-import { Type } from "typebox";
 import type {
   AgentSession,
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
@@ -15,39 +15,27 @@ import type {
   SubagentExecutionDetails,
   SubagentToolInput,
 } from "../shared/types.js";
-import { validateToolBudget } from "./tool-budget.js";
-import { checkModelScope, type ModelSource } from "./model-scope.js";
-import { loadSettings } from "./settings.js";
-import {
-  renderSubagentCall,
-  renderSubagentResult,
-} from "../tui/render.js";
 import { createActivityTracker } from "../tui/activity.js";
 import { describeActivity } from "../tui/format.js";
+import { renderSubagentCall, renderSubagentResult } from "../tui/render.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
 import { resolveModel } from "./model-resolver.js";
-import {
-  createOutputFilePath,
-  streamToOutputFile,
-  writeInitialEntry,
-} from "./output-file.js";
+import { checkModelScope, type ModelSource } from "./model-scope.js";
+import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import { loadSettings } from "./settings.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
+import { validateToolBudget } from "./tool-budget.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
   task: Type.String({ description: "Task to delegate to the agent" }),
-  cwd: Type.Optional(
-    Type.String({ description: "Working directory for the subagent" }),
-  ),
+  cwd: Type.Optional(Type.String({ description: "Working directory for the subagent" })),
   model: Type.Optional(
     Type.String({
-      description:
-        "Model override (provider/modelId or fuzzy name like 'haiku', 'sonnet')",
+      description: "Model override (provider/modelId or fuzzy name like 'haiku', 'sonnet')",
     }),
   ),
-  thinking: Type.Optional(
-    Type.String({ description: "Thinking level: off, low, medium, high" }),
-  ),
+  thinking: Type.Optional(Type.String({ description: "Thinking level: off, low, medium, high" })),
   max_turns: Type.Optional(
     Type.Number({
       description: "Maximum agentic turns before stopping",
@@ -56,8 +44,7 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   ),
   isolated: Type.Optional(
     Type.Boolean({
-      description:
-        "If true, agent gets no extension/MCP tools, only built-in tools",
+      description: "If true, agent gets no extension/MCP tools, only built-in tools",
     }),
   ),
   inherit_context: Type.Optional(
@@ -70,18 +57,12 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
       description: "Run in background and return agent ID immediately",
     }),
   ),
-  resume: Type.Optional(
-    Type.String({ description: "Agent ID to resume from previous context" }),
-  ),
-  isolation: Type.Optional(
-    Type.String({ description: "Run agent in a temporary git worktree" }),
-  ),
+  resume: Type.Optional(Type.String({ description: "Agent ID to resume from previous context" })),
+  isolation: Type.Optional(Type.String({ description: "Run agent in a temporary git worktree" })),
   tool_budget: Type.Optional(
     Type.Object(
       {
-        soft: Type.Optional(
-          Type.Number({ minimum: 1, description: "Advisory nudge threshold" }),
-        ),
+        soft: Type.Optional(Type.Number({ minimum: 1, description: "Advisory nudge threshold" })),
         hard: Type.Number({ minimum: 1, description: "Hard block threshold" }),
         block: Type.Optional(
           Type.Union([Type.Array(Type.String()), Type.Literal("*")], {
@@ -125,8 +106,7 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   ),
   clarify: Type.Optional(
     Type.Boolean({
-      description:
-        "If true, show chain preview TUI before execution (interactive only).",
+      description: "If true, show chain preview TUI before execution (interactive only).",
     }),
   ),
 });
@@ -136,9 +116,7 @@ export function findAgentByName(
   requestedName: string,
 ): AgentDefinition | undefined {
   const normalized = requestedName.trim().toLowerCase();
-  return discovery.agents.find(
-    (agent) => agent.name.trim().toLowerCase() === normalized,
-  );
+  return discovery.agents.find((agent) => agent.name.trim().toLowerCase() === normalized);
 }
 
 function listAvailableAgents(discovery: AgentDiscoveryResult): string {
@@ -166,9 +144,7 @@ function parseAndResolveAgent(
 ): AgentDefinition {
   const requestedAgent = (input.agent ?? "").trim();
   if (!requestedAgent) {
-    throw new Error(
-      `Missing agent. Available agents: ${listAvailableAgents(discovery)}`,
-    );
+    throw new Error(`Missing agent. Available agents: ${listAvailableAgents(discovery)}`);
   }
   if (!input.task.trim()) {
     throw new Error(
@@ -184,10 +160,7 @@ function parseAndResolveAgent(
   return agent;
 }
 
-export function registerSubagentTool(
-  pi: ExtensionAPI,
-  deps: RuntimeDeps,
-): void {
+export function registerSubagentTool(pi: ExtensionAPI, deps: RuntimeDeps): void {
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
@@ -205,8 +178,7 @@ chain: [
 Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
     parameters: SUBAGENT_TOOL_PARAMETERS,
     renderCall: renderSubagentCall,
-    renderResult: (result, options, theme) =>
-      renderSubagentResult(result, options, theme),
+    renderResult: (result, options, theme) => renderSubagentResult(result, options, theme),
     async execute(
       _toolCallId,
       params: SubagentToolInput,
@@ -221,11 +193,29 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       const discovery = deps.discoverAgents(paths);
 
       const stubDetails = (o: Partial<SubagentExecutionDetails>): SubagentExecutionDetails => ({
-        status: "error", agent: "", task: "", sourcePath: "", cwd: effectiveCwd,
-        maxTurns: 0, durationMs: 0, childSessionDir: "", childSessionPath: "",
-        stopReason: "error", exitCode: null, stderr: "",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
-        recentToolActivity: [], ...o,
+        status: "error",
+        agent: "",
+        task: "",
+        sourcePath: "",
+        cwd: effectiveCwd,
+        maxTurns: 0,
+        durationMs: 0,
+        childSessionDir: "",
+        childSessionPath: "",
+        stopReason: "error",
+        exitCode: null,
+        stderr: "",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          contextTokens: 0,
+          cost: 0,
+          turns: 0,
+        },
+        recentToolActivity: [],
+        ...o,
       });
 
       // --- Chain mode dispatch ---
@@ -250,7 +240,9 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             ).ui;
             if (customUI?.custom) {
               const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
-              const result = await customUI.custom<import("../tui/chain-clarify.js").ChainClarifyResult>(
+              const result = await customUI.custom<
+                import("../tui/chain-clarify.js").ChainClarifyResult
+              >(
                 (tui, theme, _kb, done) =>
                   new ChainClarifyComponent(
                     tui,
@@ -263,7 +255,11 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                 return {
                   content: [{ type: "text", text: "Chain cancelled." }],
                   isError: false,
-                  details: stubDetails({ agent: "(chain)", task: params.task ?? "", status: "aborted" as const }),
+                  details: stubDetails({
+                    agent: "(chain)",
+                    task: params.task ?? "",
+                    status: "aborted" as const,
+                  }),
                 };
               }
               if (result.action === "bg") {
@@ -327,12 +323,31 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             deps.manager.fireAndForgetChain(
               chainRunId,
               params.task ?? "",
-              executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => deps.manager.getSpawnBudget() }),
+              executeChain({
+                steps: chainSteps,
+                task: params.task ?? "",
+                spawnAndWait,
+                findAgent,
+                cwd: effectiveCwd,
+                runId: chainRunId,
+                onGraphUpdate: (snapshot) => {
+                  deps.chainWidget?.update(snapshot);
+                  const record = deps.manager.getRecord(chainRunId);
+                  if (record) {
+                    record.chainSteps = snapshot.nodes
+                      .filter((n) => n.kind === "step" || n.kind === "agent")
+                      .map((n) => ({ label: n.label, status: n.status, error: n.error }));
+                  }
+                },
+                getSpawnBudget: () => deps.manager.getSpawnBudget(),
+              }),
               effectiveCwd,
               () => deps.chainWidget?.clear(),
             );
             return {
-              content: [{ type: "text", text: `Chain started in background.\nChain ID: ${chainRunId}` }],
+              content: [
+                { type: "text", text: `Chain started in background.\nChain ID: ${chainRunId}` },
+              ],
               isError: false,
               details: stubDetails({
                 status: "success",
@@ -386,7 +401,9 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           params.chain_append.steps as ChainStep[],
         );
         return {
-          content: [{ type: "text", text: `Steps appended to chain ${params.chain_append.chain_id}.` }],
+          content: [
+            { type: "text", text: `Steps appended to chain ${params.chain_append.chain_id}.` },
+          ],
           isError: false,
           details: stubDetails({
             status: "success",
@@ -400,7 +417,12 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       // --- Guard: agent required for single mode ---
       if (!params.agent) {
         return {
-          content: [{ type: "text", text: "Missing 'agent'. Provide 'agent' for single mode or 'chain' for chain mode." }],
+          content: [
+            {
+              type: "text",
+              text: "Missing 'agent'. Provide 'agent' for single mode or 'chain' for chain mode.",
+            },
+          ],
           isError: true,
           details: stubDetails({ task: params.task ?? "", stderr: "Missing agent" }),
         };
@@ -476,7 +498,15 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                   stopReason: "error",
                   exitCode: null,
                   stderr: `Unknown model: "${resolved.model}". Available models: ${available}`,
-                  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+                  usage: {
+                    input: 0,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    contextTokens: 0,
+                    cost: 0,
+                    turns: 0,
+                  },
                   recentToolActivity: [],
                 },
               };
@@ -538,7 +568,15 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           stopReason: "background",
           exitCode: null as null,
           stderr: "",
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            contextTokens: 0,
+            cost: 0,
+            turns: 0,
+          },
           recentToolActivity: [] as SubagentExecutionDetails["recentToolActivity"],
         };
 
@@ -550,7 +588,12 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             return {
               content: [{ type: "text", text: validated.error }],
               isError: true,
-              details: { ...detailBase, status: "error" as const, stopReason: "error", stderr: validated.error },
+              details: {
+                ...detailBase,
+                status: "error" as const,
+                stopReason: "error",
+                stderr: validated.error,
+              },
             };
           }
           resolvedBudget = validated.budget;
@@ -589,11 +632,12 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             isError: resumed.status === "error",
             details: {
               ...detailBase,
-              status: resumed.status === "completed"
-                ? "success" as const
-                : resumed.status === "error"
-                  ? "error" as const
-                  : "aborted" as const,
+              status:
+                resumed.status === "completed"
+                  ? ("success" as const)
+                  : resumed.status === "error"
+                    ? ("error" as const)
+                    : ("aborted" as const),
               durationMs: resumed.durationMs ?? 0,
               stopReason: resumed.status,
               stderr: resumed.error ?? "",
@@ -618,7 +662,12 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               try {
                 const sessionPath = createOutputFilePath(effectiveCwd, id, `bg-${Date.now()}`);
                 writeInitialEntry(sessionPath, id, params.task.trim(), effectiveCwd);
-                const cleanup = streamToOutputFile(session as AgentSession, sessionPath, id, effectiveCwd);
+                const cleanup = streamToOutputFile(
+                  session as AgentSession,
+                  sessionPath,
+                  id,
+                  effectiveCwd,
+                );
                 const bgRecord = deps.manager.getRecord(id);
                 if (bgRecord) {
                   bgRecord.outputFile = sessionPath;
@@ -640,12 +689,16 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           const bgRecord = deps.manager.getRecord(id);
           const queued = bgRecord?.status === "queued";
           return {
-            content: [{ type: "text", text:
-              `Agent ${queued ? "queued" : "started"} in background.\n` +
-              `Agent ID: ${id}\n` +
-              `You will be notified when this agent completes.\n` +
-              `Use get_subagent_result to retrieve full results, or steer_subagent to send messages.`,
-            }],
+            content: [
+              {
+                type: "text",
+                text:
+                  `Agent ${queued ? "queued" : "started"} in background.\n` +
+                  `Agent ID: ${id}\n` +
+                  `You will be notified when this agent completes.\n` +
+                  `Use get_subagent_result to retrieve full results, or steer_subagent to send messages.`,
+              },
+            ],
             isError: false,
             details: {
               ...detailBase,
@@ -749,7 +802,15 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             stopReason: "error",
             exitCode: null,
             stderr: message,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextTokens: 0, cost: 0, turns: 0 },
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              contextTokens: 0,
+              cost: 0,
+              turns: 0,
+            },
             recentToolActivity: [],
           },
         };
@@ -758,10 +819,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
   });
 }
 
-export function registerAgentCommand(
-  pi: ExtensionAPI,
-  deps: RuntimeDeps,
-): void {
+export function registerAgentCommand(pi: ExtensionAPI, deps: RuntimeDeps): void {
   pi.registerCommand("agent", {
     description: "Run a discovered pi-subagents agent in the foreground",
     handler: async (args, ctx: ExtensionCommandContext) => {
@@ -772,8 +830,7 @@ export function registerAgentCommand(
 
       try {
         const agentDef = parseAndResolveAgent(discovery, input);
-        const maxTurns =
-          agentDef.maxTurns ?? loadedConfig.config.defaultMaxTurns;
+        const maxTurns = agentDef.maxTurns ?? loadedConfig.config.defaultMaxTurns;
 
         const { record } = await deps.manager.spawnAndWait(ctx, agentDef, {
           prompt: input.task.trim(),

@@ -1,13 +1,6 @@
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-} from "@earendil-works/pi-coding-agent";
-import type {
-  AgentDefinition,
-  ChainStep,
-  SequentialStep,
-} from "../shared/types.js";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
+import type { AgentDefinition, ChainStep, SequentialStep } from "../shared/types.js";
 import { discoverChains } from "./agents.js";
 import { findAgentByName } from "./subagent.js";
 
@@ -55,21 +48,26 @@ export type ParsedGroupStep = ParsedStep | ParsedGroup;
 export interface ExecutionFlags {
   args: string;
   bg: boolean;
+  yes: boolean;
 }
 
-/** Extract and strip trailing --bg / --fork flags. */
+/** Extract and strip trailing --bg / --fork / --yes flags. */
 export function stripExecutionFlags(rawArgs: string): ExecutionFlags {
   let args = rawArgs.trim();
   let bg = false;
+  let yes = false;
   for (;;) {
     if (args.endsWith(" --bg") || args === "--bg") {
       args = args === "--bg" ? "" : args.slice(0, -5).trim();
       bg = true;
     } else if (args.endsWith(" --fork") || args === "--fork") {
       args = args === "--fork" ? "" : args.slice(0, -7).trim();
+    } else if (args.endsWith(" --yes") || args === "--yes") {
+      args = args === "--yes" ? "" : args.slice(0, -6).trim();
+      yes = true;
     } else break;
   }
-  return { args, bg };
+  return { args, bg, yes };
 }
 
 // ---------------------------------------------------------------------------
@@ -312,8 +310,7 @@ const splitGroupBody = (trimmed: string): { inner: string; config: GroupConfig }
       }
     }
   }
-  if (closeIdx === -1)
-    throw new SlashParseError(`Unmatched parentheses in group: '${trimmed}'`);
+  if (closeIdx === -1) throw new SlashParseError(`Unmatched parentheses in group: '${trimmed}'`);
   const inner = trimmed.slice(1, closeIdx);
   const suffix = trimmed.slice(closeIdx + 1).trim();
   if (!suffix) return { inner, config: {} };
@@ -349,18 +346,14 @@ export function parseSingleTaskToken(token: string): ParsedStep {
 export function parseGroupSegment(segment: string): ParsedGroup {
   const trimmed = segment.trim();
   if (!trimmed.startsWith("(")) {
-    throw new SlashParseError(
-      `Parallel group must be wrapped in parentheses: '${trimmed}'`,
-    );
+    throw new SlashParseError(`Parallel group must be wrapped in parentheses: '${trimmed}'`);
   }
   const { inner, config } = splitGroupBody(trimmed);
   const rawParts = splitGroupTasks(inner)
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
   if (rawParts.length < 2) {
-    throw new SlashParseError(
-      "Parallel group must contain at least two tasks separated by ' | '",
-    );
+    throw new SlashParseError("Parallel group must contain at least two tasks separated by ' | '");
   }
   return { kind: "group", tasks: rawParts.map((part) => parseSingleTaskToken(part)), config };
 }
@@ -477,18 +470,10 @@ export function buildChainSteps(
   const chain: ChainStep[] = parsedSteps.map((step, i): ChainStep => {
     if (step.kind === "group") {
       return {
-        parallel: step.tasks.map((t) =>
-          mapParsedStep(t, undefined, false, true),
-        ),
-        ...(step.config.concurrency !== undefined
-          ? { concurrency: step.config.concurrency }
-          : {}),
-        ...(step.config.failFast !== undefined
-          ? { failFast: step.config.failFast }
-          : {}),
-        ...(step.config.worktree !== undefined
-          ? { worktree: step.config.worktree }
-          : {}),
+        parallel: step.tasks.map((t) => mapParsedStep(t, undefined, false, true)),
+        ...(step.config.concurrency !== undefined ? { concurrency: step.config.concurrency } : {}),
+        ...(step.config.failFast !== undefined ? { failFast: step.config.failFast } : {}),
+        ...(step.config.worktree !== undefined ? { worktree: step.config.worktree } : {}),
       } as ChainStep;
     }
     return mapParsedStep(step, sharedTask, i === 0, false) as SequentialStep;
@@ -506,10 +491,12 @@ export async function executeSlashChain(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   deps: RuntimeDeps,
-  chain: ChainStep[],
+  inputChain: ChainStep[],
   task: string,
   bg = false,
+  yes = false,
 ): Promise<void> {
+  let chain = inputChain;
   const paths = deps.resolvePaths();
   const loadedConfig = deps.loadConfig(paths);
   const discovery = deps.discoverAgents(paths);
@@ -521,9 +508,7 @@ export async function executeSlashChain(
     stepCwd: string,
     options?: import("./chain-execution.js").StepSpawnOptions,
   ) => {
-    let effectiveAgentDef = options?.skills
-      ? { ...agentDef, skills: options.skills }
-      : agentDef;
+    let effectiveAgentDef = options?.skills ? { ...agentDef, skills: options.skills } : agentDef;
     if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
     return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
       prompt,
@@ -540,13 +525,46 @@ export async function executeSlashChain(
     return agent;
   };
 
+  // Clarification TUI — show step preview before foreground execution
+  // Skip when: --bg (background), --yes (auto-confirm), or no UI available
+  if (!bg && !yes) {
+    const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
+    type ClarifyResult = import("../tui/chain-clarify.js").ChainClarifyResult;
+
+    const result = await ctx.ui.custom<ClarifyResult>(
+      (tui, theme, _kb, done) => new ChainClarifyComponent(tui, theme, chain, done),
+      { overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
+    );
+
+    if (!result || result.action === "cancel") return;
+    chain = result.steps; // Apply any task/model edits from the TUI
+    if (result.action === "bg") bg = true;
+  }
+
   // Background chain path
   if (bg) {
     const { executeChain } = await import("./chain-execution.js");
     deps.manager.fireAndForgetChain(
       chainRunId,
       task,
-      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => deps.manager.getSpawnBudget() }),
+      executeChain({
+        steps: chain,
+        task,
+        spawnAndWait,
+        findAgent,
+        cwd: ctx.cwd,
+        runId: chainRunId,
+        onGraphUpdate: (snapshot) => {
+          deps.chainWidget?.update(snapshot);
+          const record = deps.manager.getRecord(chainRunId);
+          if (record) {
+            record.chainSteps = snapshot.nodes
+              .filter((n) => n.kind === "step" || n.kind === "agent")
+              .map((n) => ({ label: n.label, status: n.status, error: n.error }));
+          }
+        },
+        getSpawnBudget: () => deps.manager.getSpawnBudget(),
+      }),
       ctx.cwd,
       () => deps.chainWidget?.clear(),
     );
@@ -587,64 +605,91 @@ export async function executeSlashChain(
   }
 }
 
-export function registerChainCommands(
-  pi: ExtensionAPI,
-  deps: RuntimeDeps,
-): void {
+export function registerChainCommands(pi: ExtensionAPI, deps: RuntimeDeps): void {
   // /chain — inline chain expression
   pi.registerCommand("chain", {
-    description:
-      'Run agents in sequence: /chain scout "task" -> planner',
+    description: 'Run agents in sequence: /chain scout "task" -> planner',
     getArgumentCompletions: (prefix) => {
       try {
         const paths = deps.resolvePaths();
         const agents = deps.discoverAgents(paths).agents;
         const lower = prefix.toLowerCase();
-        const matches = agents.filter((a) =>
-          a.name.toLowerCase().startsWith(lower),
-        );
-        return matches.length > 0
-          ? matches.map((a) => ({ value: a.name, label: a.name }))
-          : null;
+        const matches = agents.filter((a) => a.name.toLowerCase().startsWith(lower));
+        return matches.length > 0 ? matches.map((a) => ({ value: a.name, label: a.name })) : null;
       } catch {
         return null;
       }
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
-      const { args: cleanedArgs, bg } = stripExecutionFlags(args);
+      const trimmed = args.trim();
+
+      // Subcommand: /chain status [id]
+      if (trimmed === "status" || trimmed.startsWith("status ")) {
+        const chainId = trimmed === "status" ? "" : trimmed.slice(7).trim();
+        const { formatChainStatus } = await import("./chain-status.js");
+        const chains = deps.manager.listAgents().filter((r) => r.type === "(chain)");
+        if (chainId) {
+          const record = chains.find((r) => r.id === chainId || r.id.startsWith(chainId));
+          if (!record) {
+            ctx.ui.notify(`Chain not found: ${chainId}`, "error");
+            return;
+          }
+          ctx.ui.notify(formatChainStatus(record), "info");
+        } else {
+          if (chains.length === 0) {
+            ctx.ui.notify("No chains running.", "info");
+            return;
+          }
+          ctx.ui.notify(chains.map(formatChainStatus).join("\n\n"), "info");
+        }
+        return;
+      }
+
+      // Subcommand: /chain cancel <id>
+      if (trimmed === "cancel" || trimmed.startsWith("cancel ")) {
+        const chainId = trimmed === "cancel" ? "" : trimmed.slice(7).trim();
+        if (!chainId) {
+          ctx.ui.notify("Usage: /chain cancel <id>", "error");
+          return;
+        }
+        const success = deps.manager.abort(chainId);
+        ctx.ui.notify(
+          success
+            ? `Chain ${chainId} cancelled.`
+            : `Chain not found or already completed: ${chainId}`,
+          success ? "info" : "error",
+        );
+        return;
+      }
+
+      // Normal chain execution
+      const { args: cleanedArgs, bg, yes } = stripExecutionFlags(args);
       const paths = deps.resolvePaths();
       const agents = deps.discoverAgents(paths).agents;
 
-      const built = buildChainSteps(cleanedArgs, agents, (msg) =>
-        ctx.ui.notify(msg, "error"),
-      );
+      const built = buildChainSteps(cleanedArgs, agents, (msg) => ctx.ui.notify(msg, "error"));
       if (!built) return;
 
-      await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg);
+      await executeSlashChain(pi, ctx, deps, built.chain, built.task, bg, yes);
     },
   });
 
   // /run-chain — execute a saved chain file
   pi.registerCommand("run-chain", {
-    description:
-      "Run a saved chain: /run-chain chainName -- task",
+    description: "Run a saved chain: /run-chain chainName -- task",
     getArgumentCompletions: (prefix) => {
       try {
         const paths = deps.resolvePaths();
         const chains = discoverChains(paths).chains;
         const lower = prefix.toLowerCase();
-        const matches = chains.filter((c) =>
-          c.name.toLowerCase().startsWith(lower),
-        );
-        return matches.length > 0
-          ? matches.map((c) => ({ value: c.name, label: c.name }))
-          : null;
+        const matches = chains.filter((c) => c.name.toLowerCase().startsWith(lower));
+        return matches.length > 0 ? matches.map((c) => ({ value: c.name, label: c.name })) : null;
       } catch {
         return null;
       }
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
-      const { args: cleanedArgs, bg } = stripExecutionFlags(args);
+      const { args: cleanedArgs, bg, yes } = stripExecutionFlags(args);
       const usage = "Usage: /run-chain <chainName> -- <task>";
 
       const delimiterIndex = cleanedArgs.indexOf(" -- ");
@@ -663,24 +708,13 @@ export function registerChainCommands(
       const chainDiscovery = discoverChains(paths, ctx.cwd);
       const chain = chainDiscovery.chains.find((c) => c.name === chainName);
       if (!chain) {
-        const available =
-          chainDiscovery.chains.map((c) => c.name).join(", ") || "(none)";
-        ctx.ui.notify(
-          `Unknown chain: "${chainName}". Available: ${available}`,
-          "error",
-        );
+        const available = chainDiscovery.chains.map((c) => c.name).join(", ") || "(none)";
+        ctx.ui.notify(`Unknown chain: "${chainName}". Available: ${available}`, "error");
         return;
       }
 
       // ChainStepConfig[] is structurally compatible with ChainStep[] at runtime
-      await executeSlashChain(
-        pi,
-        ctx,
-        deps,
-        chain.steps as ChainStep[],
-        task,
-        bg,
-      );
+      await executeSlashChain(pi, ctx, deps, chain.steps as ChainStep[], task, bg, yes);
     },
   });
 }
