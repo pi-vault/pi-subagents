@@ -10,6 +10,7 @@ import type {
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import { discoverChains } from "./agents.js";
 import { findAgentByName } from "./subagent.js";
+import { resolveMaxSpawns } from "./spawn-guard.js";
 
 export class SlashParseError extends Error {}
 
@@ -546,7 +547,7 @@ export async function executeSlashChain(
     deps.manager.fireAndForgetChain(
       chainRunId,
       task,
-      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s) }),
+      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => { const max = resolveMaxSpawns(deps.manager.getMaxSpawnsPerSession()); return Math.max(0, max - deps.manager.getSpawnCount()); } }),
       ctx.cwd,
       () => deps.chainWidget?.clear(),
     );
@@ -568,6 +569,10 @@ export async function executeSlashChain(
       cwd: ctx.cwd,
       runId: chainRunId,
       onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
+      getSpawnBudget: () => {
+        const max = resolveMaxSpawns(deps.manager.getMaxSpawnsPerSession());
+        return Math.max(0, max - deps.manager.getSpawnCount());
+      },
     });
     deps.chainWidget?.clear();
     pi.sendMessage({

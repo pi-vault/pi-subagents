@@ -49,6 +49,7 @@ export interface ChainExecutionParams {
   signal?: AbortSignal;
   onGraphUpdate?: (snapshot: WorkflowGraphSnapshot) => void;
   isAsync?: boolean;
+  getSpawnBudget?: () => number;
 }
 
 export interface ChainExecutionResult {
@@ -66,7 +67,7 @@ function agentDefaults(agentDef: AgentDefinition): AgentBehaviorDefaults {
 export async function executeChain(
   params: ChainExecutionParams,
 ): Promise<ChainExecutionResult> {
-  const { steps, task, spawnAndWait, findAgent, cwd, runId, signal, onGraphUpdate } = params;
+  const { steps, task, spawnAndWait, findAgent, cwd, runId, signal, onGraphUpdate, getSpawnBudget } = params;
 
   // 1. Validate output bindings
   validateChainOutputBindings(steps);
@@ -121,13 +122,36 @@ export async function executeChain(
       // --- Parallel step ---
       const taskTemplates = template as string[];
 
+      // Check spawn budget for batch
+      let itemsToRun = step.parallel;
+      if (getSpawnBudget) {
+        const budget = getSpawnBudget();
+        if (budget <= 0) {
+          for (let i = 0; i < step.parallel.length; i++) {
+            stepStatuses[flatIndex + i] = { status: "failed", error: "spawn limit reached" };
+          }
+          emitSnapshot(stepIndex, flatIndex);
+          return {
+            content: `Chain failed at parallel step ${stepIndex + 1}: subagent spawn limit reached for this session (0 budget remaining, ${step.parallel.length} items requested).`,
+            isError: true,
+            workflowGraph: finalSnapshot(),
+          };
+        }
+        if (budget < step.parallel.length) {
+          itemsToRun = step.parallel.slice(0, budget);
+          for (let i = budget; i < step.parallel.length; i++) {
+            stepStatuses[flatIndex + i] = { status: "skipped", error: "insufficient spawn budget" };
+          }
+        }
+      }
+
       // Mark all parallel items as running
-      for (let i = 0; i < step.parallel.length; i++) {
+      for (let i = 0; i < itemsToRun.length; i++) {
         stepStatuses[flatIndex + i] = { status: "running" };
       }
       emitSnapshot(stepIndex, flatIndex);
 
-      const promises = step.parallel.map(async (item, i) => {
+      const promises = itemsToRun.map(async (item, i) => {
         const agentDef = findAgent(item.agent);
 
         // Resolve step behavior and build instructions
@@ -258,6 +282,29 @@ export async function executeChain(
         items = items.slice(0, step.expand.maxItems);
       }
 
+      // Check spawn budget for dynamic batch
+      let dynamicItemsToRun = items as unknown[];
+      if (getSpawnBudget) {
+        const budget = getSpawnBudget();
+        if (budget <= 0) {
+          stepStatuses[flatIndex] = { status: "failed", error: "spawn limit reached" };
+          emitSnapshot(stepIndex, flatIndex);
+          return {
+            content: `Chain failed at dynamic step ${stepIndex + 1}: subagent spawn limit reached.`,
+            isError: true,
+            workflowGraph: finalSnapshot(),
+          };
+        }
+        if (budget < (items as unknown[]).length) {
+          dynamicItemsToRun = (items as unknown[]).slice(0, budget);
+          // Annotate the single step node to indicate truncation
+          stepStatuses[flatIndex] = {
+            status: "running",
+            error: `budget: running ${budget} of ${(items as unknown[]).length} items`,
+          };
+        }
+      }
+
       // Resolve behavior once (shared across all dynamic items)
       const dynAgentDef = findAgent(step.parallel.agent);
       const dynBehavior = resolveStepBehavior(agentDefaults(dynAgentDef), {
@@ -283,7 +330,7 @@ export async function executeChain(
       if (dynBehavior.model) dynOptions.model = dynBehavior.model;
 
       const dynamicResults = await Promise.all(
-        (items as unknown[]).map(async (item) => {
+        dynamicItemsToRun.map(async (item) => {
           let taskStr = step.parallel.task ?? "{previous}";
           // Replace item template variables
           const itemName = step.expand.item ?? "item";

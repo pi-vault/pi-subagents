@@ -543,3 +543,169 @@ describe("executeChain — chain directory cleanup", () => {
     expect(existsSync(chainDir!)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Spawn budget for parallel steps (Task 4)
+// ---------------------------------------------------------------------------
+
+describe("executeChain — spawn budget for parallel steps", () => {
+  test("reduces parallelism when spawn budget is insufficient", async () => {
+    const mockDeps = makeMockDeps([
+      { result: "alpha result" },
+      { result: "beta result" },
+    ]);
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "alpha", task: "do alpha" },
+          { agent: "beta", task: "do beta" },
+          { agent: "gamma", task: "do gamma" },
+          { agent: "delta", task: "do delta" },
+        ],
+      } satisfies ParallelStep,
+    ];
+
+    const result = await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: mockDeps.spawnAndWait,
+      findAgent: mockDeps.findAgent,
+      cwd: "/tmp",
+      runId: "test-run",
+      getSpawnBudget: () => 2,
+    });
+
+    // Only 2 items should have been spawned (budget = 2)
+    expect(mockDeps.spawnAndWait).toHaveBeenCalledTimes(2);
+    expect(result.isError).toBe(false);
+  });
+
+  test("spawns all items when budget is sufficient", async () => {
+    const mockDeps = makeMockDeps([
+      { result: "alpha result" },
+      { result: "beta result" },
+      { result: "gamma result" },
+    ]);
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "alpha", task: "do alpha" },
+          { agent: "beta", task: "do beta" },
+          { agent: "gamma", task: "do gamma" },
+        ],
+      } satisfies ParallelStep,
+    ];
+
+    const result = await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: mockDeps.spawnAndWait,
+      findAgent: mockDeps.findAgent,
+      cwd: "/tmp",
+      runId: "test-run",
+      getSpawnBudget: () => 100,
+    });
+
+    expect(mockDeps.spawnAndWait).toHaveBeenCalledTimes(3);
+    expect(result.isError).toBe(false);
+  });
+
+  test("returns error when budget is zero", async () => {
+    const mockDeps = makeMockDeps([]);
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "alpha", task: "do alpha" },
+          { agent: "beta", task: "do beta" },
+        ],
+      } satisfies ParallelStep,
+    ];
+
+    const result = await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: mockDeps.spawnAndWait,
+      findAgent: mockDeps.findAgent,
+      cwd: "/tmp",
+      runId: "test-run",
+      getSpawnBudget: () => 0,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/spawn/i);
+    expect(mockDeps.spawnAndWait).not.toHaveBeenCalled();
+  });
+
+  test("spawns all items when getSpawnBudget is not provided", async () => {
+    const mockDeps = makeMockDeps([
+      { result: "alpha result" },
+      { result: "beta result" },
+    ]);
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "alpha", task: "do alpha" },
+          { agent: "beta", task: "do beta" },
+        ],
+      } satisfies ParallelStep,
+    ];
+
+    const result = await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: mockDeps.spawnAndWait,
+      findAgent: mockDeps.findAgent,
+      cwd: "/tmp",
+      runId: "test-run",
+    });
+
+    // No budget function = no limit
+    expect(mockDeps.spawnAndWait).toHaveBeenCalledTimes(2);
+    expect(result.isError).toBe(false);
+  });
+
+  test("budget is checked per parallel step across multi-step chain", async () => {
+    // Step 1: sequential (consumes 1 spawn from the mock)
+    // Step 2: parallel with 3 items, but budget returns 2 on second call
+    let callCount = 0;
+    const mockDeps = makeMockDeps([
+      { result: "seq output" },    // sequential step
+      { result: "par result 1" },  // parallel item 1
+      { result: "par result 2" },  // parallel item 2
+    ]);
+
+    const steps: ChainStep[] = [
+      { agent: "planner", task: "plan {task}" },
+      {
+        parallel: [
+          { agent: "worker-a", task: "work a" },
+          { agent: "worker-b", task: "work b" },
+          { agent: "worker-c", task: "work c" },
+        ],
+      } satisfies ParallelStep,
+    ];
+
+    const result = await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait: mockDeps.spawnAndWait,
+      findAgent: mockDeps.findAgent,
+      cwd: "/tmp",
+      runId: "test-run",
+      getSpawnBudget: () => {
+        callCount++;
+        return 2; // always 2 remaining (budget callback is called per-step)
+      },
+    });
+
+    // Sequential step ran (1 call), then parallel step ran 2 of 3 items (2 calls)
+    expect(mockDeps.spawnAndWait).toHaveBeenCalledTimes(3);
+    expect(result.isError).toBe(false);
+    // Budget callback was called at least once (for the parallel step)
+    expect(callCount).toBeGreaterThanOrEqual(1);
+  });
+});

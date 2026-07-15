@@ -565,6 +565,10 @@ export class AgentManager {
     this.maxSpawnsPerSession = n;
   }
 
+  getMaxSpawnsPerSession(): number {
+    return this.maxSpawnsPerSession;
+  }
+
   getSpawnCount(): number {
     return this.spawnCount;
   }
