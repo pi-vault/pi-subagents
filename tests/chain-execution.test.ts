@@ -709,3 +709,95 @@ describe("executeChain — spawn budget for parallel steps", () => {
     expect(callCount).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Concurrency limiting (Phase 8)
+// ---------------------------------------------------------------------------
+
+describe("executeChain — concurrency limiting", () => {
+  test.each([
+    { name: "step.concurrency=2 caps 4 items", items: 4, concurrency: 2, globalLimit: undefined, expectedMax: 2 },
+    { name: "globalConcurrencyLimit=1 caps 3 items", items: 3, concurrency: undefined, globalLimit: 1, expectedMax: 1 },
+    { name: "no concurrency field: all run at once", items: 3, concurrency: undefined, globalLimit: undefined, expectedMax: 3 },
+  ])("$name", async ({ items, concurrency, globalLimit, expectedMax }) => {
+    let maxConcurrent = 0;
+    let current = 0;
+
+    const spawnAndWait = vi.fn(async () => {
+      current++;
+      maxConcurrent = Math.max(maxConcurrent, current);
+      await new Promise((r) => setTimeout(r, 20));
+      current--;
+      return { id: "a", record: makeRecord("completed", "done") };
+    });
+
+    const steps: ChainStep[] = [
+      {
+        parallel: Array.from({ length: items }, (_, i) => ({ agent: "worker", task: `t${i}` })),
+        ...(concurrency != null && { concurrency }),
+      },
+    ];
+
+    await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait,
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-run",
+      ...(globalLimit != null && { globalConcurrencyLimit: globalLimit }),
+    });
+
+    expect(maxConcurrent).toBeLessThanOrEqual(expectedMax);
+    expect(maxConcurrent).toBeGreaterThanOrEqual(expectedMax);
+    expect(spawnAndWait).toHaveBeenCalledTimes(items);
+  });
+
+  test("respects step.concurrency limit for dynamic parallel steps", async () => {
+    let maxConcurrent = 0;
+    let current = 0;
+    let callCount = 0;
+
+    const spawnAndWait = vi.fn(async (_agentDef: AgentDefinition, _prompt: string, _cwd: string) => {
+      callCount++;
+      if (callCount === 1) {
+        // Scout: returns structured output for 4 items
+        return {
+          id: "scout",
+          record: makeRecord(
+            "completed",
+            JSON.stringify({ items: [{ name: "a" }, { name: "b" }, { name: "c" }, { name: "d" }] }),
+          ),
+        };
+      }
+      // Workers: track concurrency
+      current++;
+      maxConcurrent = Math.max(maxConcurrent, current);
+      await new Promise((r) => setTimeout(r, 20));
+      current--;
+      return { id: "worker", record: makeRecord("completed", "done") };
+    });
+
+    const dynamicStep: DynamicParallelStep = {
+      expand: { from: { output: "data", path: "/items" }, item: "item" },
+      parallel: { agent: "worker", task: "{item.name}" },
+      collect: { as: "results" },
+      concurrency: 2,
+    };
+
+    await executeChain({
+      steps: [
+        { agent: "scout", task: "scan", as: "data", outputSchema: { type: "object" } },
+        dynamicStep,
+      ],
+      task: "test",
+      spawnAndWait,
+      findAgent: (name) => makeAgentDef(name),
+      cwd: "/tmp",
+      runId: "test-dyn-concurrency",
+    });
+
+    expect(maxConcurrent).toBeLessThanOrEqual(2);
+    expect(callCount).toBe(5); // 1 scout + 4 workers
+  });
+});
