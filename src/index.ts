@@ -24,6 +24,7 @@ import {
   createIntercomTool,
   type IntercomRequest,
 } from "./core/intercom.js";
+import { checkLocalMemoryGitignore } from "./core/memory.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
 import { createWatchdogRuntime, parseWatchdogConfig } from "./core/watchdog.js";
@@ -299,6 +300,19 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     setFleetView: applyFleetView,
     setMaxSpawnsPerSession: (n) => manager.setMaxSpawnsPerSession(n),
   });
+
+  // One-time gitignore check for local memory
+  const gitignoreWarning = checkLocalMemoryGitignore(process.cwd());
+  if (gitignoreWarning) {
+    (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+      {
+        customType: "subagent-notification",
+        content: gitignoreWarning,
+        display: true,
+      } as unknown as Parameters<typeof pi.sendMessage>[0],
+      { deliverAs: "followUp" },
+    );
+  }
 
   return deps;
 }

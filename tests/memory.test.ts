@@ -1,10 +1,12 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   buildMemoryInjection,
+  checkLocalMemoryGitignore,
   parseMemoryConfig,
   readMemoryFile,
   resolveMemoryDir,
@@ -266,5 +268,50 @@ describe("buildMemoryInjection", () => {
       true,
     );
     expect(result).toContain("truncated");
+  });
+});
+
+describe("checkLocalMemoryGitignore", () => {
+  it("returns warning when local dir exists and is not gitignored", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "mem-gi-"));
+    execSync("git init", { cwd: tmpDir, stdio: "ignore" });
+    mkdirSync(join(tmpDir, ".pi", "agent-memory-local"), { recursive: true });
+
+    const result = checkLocalMemoryGitignore(tmpDir);
+    expect(result).toContain(".pi/agent-memory-local");
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns undefined when local dir is gitignored", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "mem-gi-"));
+    execSync("git init", { cwd: tmpDir, stdio: "ignore" });
+    mkdirSync(join(tmpDir, ".pi", "agent-memory-local"), { recursive: true });
+    writeFileSync(join(tmpDir, ".gitignore"), ".pi/agent-memory-local/\n");
+
+    const result = checkLocalMemoryGitignore(tmpDir);
+    expect(result).toBeUndefined();
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns undefined when local dir does not exist", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "mem-gi-"));
+    execSync("git init", { cwd: tmpDir, stdio: "ignore" });
+
+    const result = checkLocalMemoryGitignore(tmpDir);
+    expect(result).toBeUndefined();
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns undefined when not in a git repo", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "mem-gi-"));
+    mkdirSync(join(tmpDir, ".pi", "agent-memory-local"), { recursive: true });
+
+    const result = checkLocalMemoryGitignore(tmpDir);
+    expect(result).toBeUndefined();
+
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 });
