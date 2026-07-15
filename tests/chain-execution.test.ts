@@ -709,3 +709,120 @@ describe("executeChain — spawn budget for parallel steps", () => {
     expect(callCount).toBeGreaterThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Concurrency limiting (Phase 8)
+// ---------------------------------------------------------------------------
+
+describe("executeChain — concurrency limiting", () => {
+  test("respects step.concurrency limit for parallel steps", async () => {
+    let maxConcurrent = 0;
+    let current = 0;
+
+    const spawnAndWait = vi.fn(async () => {
+      current++;
+      maxConcurrent = Math.max(maxConcurrent, current);
+      await new Promise((r) => setTimeout(r, 20));
+      current--;
+      return { id: "a", record: makeRecord("completed", "done") };
+    });
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "worker", task: "t1" },
+          { agent: "worker", task: "t2" },
+          { agent: "worker", task: "t3" },
+          { agent: "worker", task: "t4" },
+        ],
+        concurrency: 2,
+      },
+    ];
+
+    await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait,
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-run",
+    });
+
+    expect(maxConcurrent).toBeLessThanOrEqual(2);
+    expect(spawnAndWait).toHaveBeenCalledTimes(4);
+  });
+
+  test("globalConcurrencyLimit caps across all parallel items", async () => {
+    let maxConcurrent = 0;
+    let current = 0;
+
+    const spawnAndWait = vi.fn(async () => {
+      current++;
+      maxConcurrent = Math.max(maxConcurrent, current);
+      await new Promise((r) => setTimeout(r, 20));
+      current--;
+      return { id: "a", record: makeRecord("completed", "done") };
+    });
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "worker", task: "t1" },
+          { agent: "worker", task: "t2" },
+          { agent: "worker", task: "t3" },
+        ],
+        // No per-step limit, so defaults to items.length (3)
+      },
+    ];
+
+    await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait,
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-run",
+      globalConcurrencyLimit: 1,
+    });
+
+    // Global limit of 1 means at most 1 concurrent spawn
+    expect(maxConcurrent).toBe(1);
+    expect(spawnAndWait).toHaveBeenCalledTimes(3);
+  });
+
+  test("without concurrency field, all parallel items run at once", async () => {
+    let maxConcurrent = 0;
+    let current = 0;
+
+    const spawnAndWait = vi.fn(async () => {
+      current++;
+      maxConcurrent = Math.max(maxConcurrent, current);
+      await new Promise((r) => setTimeout(r, 20));
+      current--;
+      return { id: "a", record: makeRecord("completed", "done") };
+    });
+
+    const steps: ChainStep[] = [
+      {
+        parallel: [
+          { agent: "worker", task: "t1" },
+          { agent: "worker", task: "t2" },
+          { agent: "worker", task: "t3" },
+        ],
+      },
+    ];
+
+    await executeChain({
+      steps,
+      task: "test",
+      spawnAndWait,
+      findAgent: () => makeAgentDef("worker"),
+      cwd: "/tmp",
+      runId: "test-run",
+    });
+
+    // Default: step limit = items.length, global limit = 20 => all 3 run at once
+    expect(maxConcurrent).toBe(3);
+    expect(spawnAndWait).toHaveBeenCalledTimes(3);
+  });
+});

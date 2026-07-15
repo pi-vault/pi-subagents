@@ -25,6 +25,11 @@ import {
 import { consumeChainAppendRequests } from "./chain-append.js";
 import { buildWorkflowGraphSnapshot } from "./workflow-graph.js";
 import { validateToolBudget } from "./tool-budget.js";
+import {
+  Semaphore,
+  mapConcurrent,
+  DEFAULT_GLOBAL_CONCURRENCY_LIMIT,
+} from "./semaphore.js";
 
 export interface StepSpawnOptions {
   toolBudget?: ResolvedToolBudget;
@@ -50,6 +55,7 @@ export interface ChainExecutionParams {
   onGraphUpdate?: (snapshot: WorkflowGraphSnapshot) => void;
   isAsync?: boolean;
   getSpawnBudget?: () => number;
+  globalConcurrencyLimit?: number;
 }
 
 export interface ChainExecutionResult {
@@ -68,6 +74,10 @@ export async function executeChain(
   params: ChainExecutionParams,
 ): Promise<ChainExecutionResult> {
   const { steps, task, spawnAndWait, findAgent, cwd, runId, signal, onGraphUpdate, getSpawnBudget } = params;
+
+  const globalSemaphore = new Semaphore(
+    params.globalConcurrencyLimit ?? DEFAULT_GLOBAL_CONCURRENCY_LIMIT,
+  );
 
   // 1. Validate output bindings
   validateChainOutputBindings(steps);
@@ -151,64 +161,68 @@ export async function executeChain(
       }
       emitSnapshot(stepIndex, flatIndex);
 
-      const promises = itemsToRun.map(async (item, i) => {
-        const agentDef = findAgent(item.agent);
+      const stepLimit = step.concurrency ?? itemsToRun.length;
+      const parallelResults = await mapConcurrent(
+        itemsToRun,
+        stepLimit,
+        async (item, i) => {
+          const agentDef = findAgent(item.agent);
 
-        // Resolve step behavior and build instructions
-        const behavior = resolveStepBehavior(agentDefaults(agentDef), {
-          output: item.output,
-          outputMode: item.outputMode,
-          reads: item.reads,
-          progress: item.progress,
-          skills: item.skills,
-          model: item.model,
-        });
-        const isFirstProgress = behavior.progress && !progressCreated;
-        if (isFirstProgress) progressCreated = true;
-        const { prefix, suffix } = buildChainInstructions(behavior, chainDir, isFirstProgress);
+          // Resolve step behavior and build instructions
+          const behavior = resolveStepBehavior(agentDefaults(agentDef), {
+            output: item.output,
+            outputMode: item.outputMode,
+            reads: item.reads,
+            progress: item.progress,
+            skills: item.skills,
+            model: item.model,
+          });
+          const isFirstProgress = behavior.progress && !progressCreated;
+          if (isFirstProgress) progressCreated = true;
+          const { prefix, suffix } = buildChainInstructions(behavior, chainDir, isFirstProgress);
 
-        let taskStr = taskTemplates[i] ?? "{previous}";
-        taskStr = taskStr
-          .replace(/\{task\}/g, task)
-          .replace(/\{previous\}/g, prev)
-          .replace(/\{chain_dir\}/g, chainDir);
-        taskStr = resolveOutputReferences(taskStr, outputs);
+          let taskStr = taskTemplates[i] ?? "{previous}";
+          taskStr = taskStr
+            .replace(/\{task\}/g, task)
+            .replace(/\{previous\}/g, prev)
+            .replace(/\{chain_dir\}/g, chainDir);
+          taskStr = resolveOutputReferences(taskStr, outputs);
 
-        const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
+          const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
 
-        // Build spawn options
-        const parallelOptions: StepSpawnOptions = {};
-        if (item.toolBudget) {
-          const validated = validateToolBudget(item.toolBudget);
-          if (!validated.error && validated.budget) parallelOptions.toolBudget = validated.budget;
-        }
-        if (step.worktree) parallelOptions.isolation = "worktree";
-        if (behavior.skills && behavior.skills.length > 0) {
-          parallelOptions.skills = behavior.skills;
-        }
-        if (behavior.model) parallelOptions.model = behavior.model;
+          // Build spawn options
+          const parallelOptions: StepSpawnOptions = {};
+          if (item.toolBudget) {
+            const validated = validateToolBudget(item.toolBudget);
+            if (!validated.error && validated.budget) parallelOptions.toolBudget = validated.budget;
+          }
+          if (step.worktree) parallelOptions.isolation = "worktree";
+          if (behavior.skills && behavior.skills.length > 0) {
+            parallelOptions.skills = behavior.skills;
+          }
+          if (behavior.model) parallelOptions.model = behavior.model;
 
-        const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, parallelOptions);
-        const output = record.result ?? "";
-        const itemFlatIndex = flatIndex + i;
+          const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, parallelOptions);
+          const output = record.result ?? "";
+          const itemFlatIndex = flatIndex + i;
 
-        stepStatuses[itemFlatIndex] = {
-          status: record.status === "error" ? "failed" : "completed",
-          error: record.error,
-        };
-        emitSnapshot(stepIndex, itemFlatIndex);
+          stepStatuses[itemFlatIndex] = {
+            status: record.status === "error" ? "failed" : "completed",
+            error: record.error,
+          };
+          emitSnapshot(stepIndex, itemFlatIndex);
 
-        if (item.as) {
-          outputs[item.as] = outputEntryFromResult(
-            item.agent,
-            output,
-            stepIndex,
-          );
-        }
-        return { output, status: record.status, agent: item.agent };
-      });
-
-      const parallelResults = await Promise.all(promises);
+          if (item.as) {
+            outputs[item.as] = outputEntryFromResult(
+              item.agent,
+              output,
+              stepIndex,
+            );
+          }
+          return { output, status: record.status, agent: item.agent };
+        },
+        globalSemaphore,
+      );
 
       // Check for failures
       const failed = parallelResults.filter((r) => r.status === "error");
@@ -329,15 +343,15 @@ export async function executeChain(
       }
       if (dynBehavior.model) dynOptions.model = dynBehavior.model;
 
-      const dynamicResults = await Promise.all(
-        dynamicItemsToRun.map(async (item) => {
+      const dynStepLimit = step.concurrency ?? dynamicItemsToRun.length;
+      const dynamicResults = await mapConcurrent(
+        dynamicItemsToRun,
+        dynStepLimit,
+        async (item) => {
           let taskStr = step.parallel.task ?? "{previous}";
-          // Replace item template variables
           const itemName = step.expand.item ?? "item";
           if (item && typeof item === "object") {
-            for (const [k, v] of Object.entries(
-              item as Record<string, unknown>,
-            )) {
+            for (const [k, v] of Object.entries(item as Record<string, unknown>)) {
               taskStr = taskStr.replace(
                 new RegExp(`\\{${itemName}\\.${k}\\}`, "g"),
                 String(v),
@@ -350,11 +364,19 @@ export async function executeChain(
             .replace(/\{chain_dir\}/g, chainDir);
           taskStr = resolveOutputReferences(taskStr, outputs);
 
-          const fullPrompt = [dynPrefix, taskStr, dynSuffix].filter(Boolean).join("\n\n");
+          const fullPrompt = [dynPrefix, taskStr, dynSuffix]
+            .filter(Boolean)
+            .join("\n\n");
 
-          const { record } = await spawnAndWait(dynAgentDef, fullPrompt, cwd, dynOptions);
+          const { record } = await spawnAndWait(
+            dynAgentDef,
+            fullPrompt,
+            cwd,
+            dynOptions,
+          );
           return { output: record.result ?? "", status: record.status };
-        }),
+        },
+        globalSemaphore,
       );
 
       // Check for failures (failFast)
