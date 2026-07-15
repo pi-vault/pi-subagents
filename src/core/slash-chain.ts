@@ -585,15 +585,7 @@ export async function executeSlashChain(
       findAgent,
       cwd: ctx.cwd,
       runId: chainRunId,
-      onGraphUpdate: (snapshot) => {
-        deps.chainWidget?.update(snapshot);
-        const record = deps.manager.getRecord(chainRunId);
-        if (record) {
-          record.chainSteps = snapshot.nodes
-            .filter((n) => n.kind === "step" || n.kind === "agent")
-            .map((n) => ({ label: n.label, status: n.status, error: n.error }));
-        }
-      },
+      onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
       getSpawnBudget: () => deps.manager.getSpawnBudget(),
     });
     deps.chainWidget?.clear();
