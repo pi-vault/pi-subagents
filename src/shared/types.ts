@@ -252,7 +252,7 @@ export interface AgentRecord {
   joinMode?: JoinMode;
   resultConsumed?: boolean;
   pendingSteers?: string[];
-  worktree?: { path: string; branch: string; baseSha: string; workPath: string };
+  worktree?: { path: string; branch: string; baseSha: string; workPath: string; syntheticPaths?: string[] };
   worktreeResult?: { hasChanges: boolean; branch?: string };
   toolCallId?: string;
   outputFile?: string;
