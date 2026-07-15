@@ -161,7 +161,7 @@ export async function executeChain(
       }
       emitSnapshot(stepIndex, flatIndex);
 
-      const stepLimit = step.concurrency ?? itemsToRun.length;
+      const stepLimit = Math.max(1, step.concurrency ?? itemsToRun.length);
       const parallelResults = await mapConcurrent(
         itemsToRun,
         stepLimit,
@@ -343,7 +343,7 @@ export async function executeChain(
       }
       if (dynBehavior.model) dynOptions.model = dynBehavior.model;
 
-      const dynStepLimit = step.concurrency ?? dynamicItemsToRun.length;
+      const dynStepLimit = Math.max(1, step.concurrency ?? dynamicItemsToRun.length);
       const dynamicResults = await mapConcurrent(
         dynamicItemsToRun,
         dynStepLimit,
@@ -464,10 +464,19 @@ export async function executeChain(
       emitSnapshot(stepIndex, flatIndex);
 
       if (seqStep.as) {
+        let structured: unknown;
+        if (seqStep.outputSchema) {
+          try {
+            structured = JSON.parse(output) as unknown;
+          } catch {
+            // output is not valid JSON; structured remains undefined
+          }
+        }
         outputs[seqStep.as] = outputEntryFromResult(
           seqStep.agent,
           output,
           stepIndex,
+          structured,
         );
       }
       prev = output;

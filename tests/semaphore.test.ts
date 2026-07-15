@@ -92,4 +92,9 @@ describe("mapConcurrent", () => {
     const results = await mapConcurrent([], 4, async (item) => item);
     expect(results).toEqual([]);
   });
+
+  it("handles zero or negative limit by treating it as 1", async () => {
+    const results = await mapConcurrent([1, 2, 3], 0, async (item) => item * 2);
+    expect(results).toEqual([2, 4, 6]);
+  });
 });

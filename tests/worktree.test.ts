@@ -5,26 +5,26 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createWorktree, cleanupWorktree, findWorktreeTaskCwdConflict } from "../src/core/worktree.js";
 
+function initTestRepo(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: dir, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, stdio: "pipe" });
+  writeFileSync(join(dir, "file.txt"), "hello");
+  execFileSync("git", ["add", "-A"], { cwd: dir, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: dir, stdio: "pipe" });
+}
+
+function cleanTestRepo(dir: string): void {
+  try { execFileSync("git", ["worktree", "prune"], { cwd: dir, stdio: "pipe" }); } catch {}
+  rmSync(dir, { recursive: true, force: true });
+}
+
 describe("worktree", () => {
   const testDir = join(tmpdir(), `pi-worktree-test-${Date.now()}`);
 
-  beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
-    execFileSync("git", ["init"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: testDir, stdio: "pipe" });
-    writeFileSync(join(testDir, "file.txt"), "hello");
-    execFileSync("git", ["add", "-A"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["commit", "-m", "init"], { cwd: testDir, stdio: "pipe" });
-  });
-
-  afterEach(() => {
-    // Clean up worktrees before removing the repo
-    try {
-      execFileSync("git", ["worktree", "prune"], { cwd: testDir, stdio: "pipe" });
-    } catch {}
-    rmSync(testDir, { recursive: true, force: true });
-  });
+  beforeEach(() => initTestRepo(testDir));
+  afterEach(() => cleanTestRepo(testDir));
 
   it("creates a worktree in a valid git repo", () => {
     const wt = createWorktree(testDir, "test-agent");
@@ -63,20 +63,8 @@ describe("worktree", () => {
 describe("worktree — node_modules linking", () => {
   const testDir = join(tmpdir(), `pi-wt-link-${Date.now()}`);
 
-  beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
-    execFileSync("git", ["init"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: testDir, stdio: "pipe" });
-    writeFileSync(join(testDir, "file.txt"), "hello");
-    execFileSync("git", ["add", "-A"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["commit", "-m", "init"], { cwd: testDir, stdio: "pipe" });
-  });
-
-  afterEach(() => {
-    try { execFileSync("git", ["worktree", "prune"], { cwd: testDir, stdio: "pipe" }); } catch {}
-    rmSync(testDir, { recursive: true, force: true });
-  });
+  beforeEach(() => initTestRepo(testDir));
+  afterEach(() => cleanTestRepo(testDir));
 
   it("symlinks node_modules into worktree when present in repo root", () => {
     mkdirSync(join(testDir, "node_modules", "foo"), { recursive: true });
@@ -99,20 +87,8 @@ describe("worktree — node_modules linking", () => {
 describe("worktree — setup hook", () => {
   const testDir = join(tmpdir(), `pi-wt-hook-${Date.now()}`);
 
-  beforeEach(() => {
-    mkdirSync(testDir, { recursive: true });
-    execFileSync("git", ["init"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd: testDir, stdio: "pipe" });
-    writeFileSync(join(testDir, "file.txt"), "hello");
-    execFileSync("git", ["add", "-A"], { cwd: testDir, stdio: "pipe" });
-    execFileSync("git", ["commit", "-m", "init"], { cwd: testDir, stdio: "pipe" });
-  });
-
-  afterEach(() => {
-    try { execFileSync("git", ["worktree", "prune"], { cwd: testDir, stdio: "pipe" }); } catch {}
-    rmSync(testDir, { recursive: true, force: true });
-  });
+  beforeEach(() => initTestRepo(testDir));
+  afterEach(() => cleanTestRepo(testDir));
 
   it("runs .pi/worktree-setup.sh and captures syntheticPaths from stdout", () => {
     mkdirSync(join(testDir, ".pi"), { recursive: true });
@@ -146,7 +122,7 @@ describe("worktree — setup hook", () => {
     const wt = createWorktree(testDir, "no-hook-test");
     expect(wt).toBeDefined();
     if (wt) {
-      expect(wt.syntheticPaths ?? []).toEqual([]);
+      expect(wt.syntheticPaths).toBeUndefined();
       cleanupWorktree(testDir, wt, "test");
     }
   });

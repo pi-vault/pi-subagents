@@ -75,7 +75,8 @@ export function createWorktree(cwd: string, agentId: string): WorktreeInfo | und
 
     // Symlink node_modules if present in repo root
     const syntheticPaths: string[] = [];
-    const repoNodeModules = join(realpathSync(topLevel), "node_modules");
+    const realTopLevel = realpathSync(topLevel);
+    const repoNodeModules = join(realTopLevel, "node_modules");
     const wtNodeModules = join(worktreePath, "node_modules");
     if (existsSync(repoNodeModules) && !existsSync(wtNodeModules)) {
       try {
@@ -87,12 +88,12 @@ export function createWorktree(cwd: string, agentId: string): WorktreeInfo | und
     }
 
     // Run setup hook if .pi/worktree-setup.sh exists
-    const setupHook = join(realpathSync(topLevel), ".pi", "worktree-setup.sh");
+    const setupHook = join(realTopLevel, ".pi", "worktree-setup.sh");
     if (existsSync(setupHook)) {
       try {
         const hookInput = JSON.stringify({
           version: 1,
-          repoRoot: realpathSync(topLevel),
+          repoRoot: realTopLevel,
           worktreePath,
           agentCwd: subdir ? join(worktreePath, subdir) : worktreePath,
           branch,

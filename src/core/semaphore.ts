@@ -54,7 +54,8 @@ export async function mapConcurrent<T, R>(
     }
   }
 
-  const workers = Array.from({ length: Math.min(limit, items.length) }, () =>
+  const effectiveLimit = Math.max(1, Math.floor(limit) || 1);
+  const workers = Array.from({ length: Math.min(effectiveLimit, items.length) }, () =>
     worker(),
   );
   await Promise.all(workers);
