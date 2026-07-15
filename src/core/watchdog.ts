@@ -46,6 +46,16 @@ export interface WatchdogConfig {
     thinking?: string;
     overrides: Record<string, WatchdogChildOverride>;
   };
+  autoFollow: {
+    /** Resume agent to fix blockers. Default: false. */
+    blockers: boolean;
+    /** Resume agent to fix concerns. Default: false. */
+    concerns: boolean;
+    /** Maximum steering attempts before giving up. Default: 2. */
+    maxAttempts: number;
+    /** Stop if the same warning key repeats this many times. Default: 2. */
+    stalemateRepeats: number;
+  };
   lsp: {
     enabled: boolean;
     timeoutMs: number;
@@ -166,6 +176,7 @@ const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   enabled: false,
   reviewChangesOnly: true,
   children: { enabled: false, overrides: {} },
+  autoFollow: { blockers: false, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
   lsp: {
     enabled: true,
     timeoutMs: 3_000,
@@ -182,6 +193,7 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
     return {
       ...DEFAULT_WATCHDOG_CONFIG,
       children: { ...DEFAULT_WATCHDOG_CONFIG.children, overrides: {} },
+      autoFollow: { ...DEFAULT_WATCHDOG_CONFIG.autoFollow },
       lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
     };
   }
@@ -190,6 +202,7 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
   const config: WatchdogConfig = {
     ...DEFAULT_WATCHDOG_CONFIG,
     children: { ...DEFAULT_WATCHDOG_CONFIG.children, overrides: {} },
+    autoFollow: { ...DEFAULT_WATCHDOG_CONFIG.autoFollow },
     lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
   };
 
@@ -197,6 +210,14 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
   if (typeof r.model === "string") config.model = r.model;
   if (typeof r.thinking === "string") config.thinking = r.thinking;
   if (typeof r.reviewChangesOnly === "boolean") config.reviewChangesOnly = r.reviewChangesOnly;
+
+  if (r.autoFollow && typeof r.autoFollow === "object") {
+    const af = r.autoFollow as Record<string, unknown>;
+    if (typeof af.blockers === "boolean") config.autoFollow.blockers = af.blockers;
+    if (typeof af.concerns === "boolean") config.autoFollow.concerns = af.concerns;
+    if (typeof af.maxAttempts === "number") config.autoFollow.maxAttempts = af.maxAttempts;
+    if (typeof af.stalemateRepeats === "number") config.autoFollow.stalemateRepeats = af.stalemateRepeats;
+  }
 
   if (r.children && typeof r.children === "object") {
     const ch = r.children as Record<string, unknown>;
@@ -242,6 +263,8 @@ export interface WatchdogRuntimeOptions {
   onWarnings?: (agentId: string, warnings: WatchdogWarning[]) => void;
   /** Return session messages for turn-delta mode (reviewChangesOnly: false). */
   getSessionMessages?: (agentId: string) => unknown[] | undefined;
+  /** Resume a completed agent with a steering message. Used by auto-follow. */
+  resumeAgent?: (agentId: string, message: string) => Promise<void>;
 }
 
 /**
@@ -258,6 +281,58 @@ export function createWatchdogRuntime(
   let disposed = false;
   const globalSeen = new Set<string>();
 
+  /** Compute a stable key for a warning set to detect stalemates. */
+  function warningKey(warnings: WatchdogWarning[]): string {
+    return warnings.map((w) => w.summary.toLowerCase().trim()).sort().join("|");
+  }
+
+  /** Should auto-follow run given these warnings? */
+  function shouldAutoFollow(warnings: WatchdogWarning[]): boolean {
+    if (!options?.resumeAgent) return false;
+    const hasBlockers = warnings.some((w) => w.severity === "blocker");
+    const hasConcerns = warnings.some((w) => w.severity === "concern");
+    return (config.autoFollow.blockers && hasBlockers) || (config.autoFollow.concerns && hasConcerns);
+  }
+
+  /** Run steering loop after initial review. Returns final warnings (empty = all fixed). */
+  async function attemptAutoFollow(
+    agentId: string,
+    initialWarnings: WatchdogWarning[],
+    reReview: () => Promise<WatchdogWarning[]>,
+  ): Promise<WatchdogWarning[]> {
+    if (!shouldAutoFollow(initialWarnings)) return initialWarnings;
+
+    let warnings = initialWarnings;
+    let lastKey = warningKey(warnings);
+    let repeatCount = 0;
+
+    for (let attempt = 0; attempt < config.autoFollow.maxAttempts; attempt++) {
+      const steerMsg = [
+        "Watchdog found issues that need fixing:",
+        ...warnings.map((w) => `- [${w.severity}] ${w.summary}: ${w.recommendedAction}`),
+        "",
+        "Please address these issues.",
+      ].join("\n");
+
+      await options!.resumeAgent!(agentId, steerMsg);
+
+      const newWarnings = await reReview();
+      if (newWarnings.length === 0) return [];
+
+      const newKey = warningKey(newWarnings);
+      if (newKey === lastKey) {
+        repeatCount++;
+        if (repeatCount >= config.autoFollow.stalemateRepeats) return newWarnings;
+      } else {
+        repeatCount = 0;
+        lastKey = newKey;
+      }
+      warnings = newWarnings;
+    }
+
+    return warnings;
+  }
+
   async function handleAgentEnd(agentId: string, cwd: string): Promise<WatchdogWarning[]> {
     if (!config.enabled || disposed) return [];
 
@@ -273,9 +348,12 @@ export function createWatchdogRuntime(
             turnDelta = formatWatchdogTurnDelta(messages, 10);
           }
         }
-        const warnings = options?.runReview
-          ? await options.runReview(turnDelta, "N/A (turn-delta mode)", agentId)
-          : await runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, globalSeen);
+        const runReview = () => options?.runReview
+          ? options.runReview(turnDelta, "N/A (turn-delta mode)", agentId)
+          : runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, globalSeen);
+
+        let warnings = await runReview();
+        warnings = await attemptAutoFollow(agentId, warnings, runReview);
         if (warnings.length > 0) options?.onWarnings?.(agentId, warnings);
         return warnings;
       } finally {
@@ -311,12 +389,12 @@ export function createWatchdogRuntime(
         }
       }
 
-      let warnings: WatchdogWarning[];
-      if (options?.runReview) {
-        warnings = await options.runReview(diff, lspOutput, agentId);
-      } else {
-        warnings = await runDefaultReview(config, diff, lspOutput, agentId, globalSeen);
-      }
+      const runReview = () => options?.runReview
+        ? options.runReview(diff, lspOutput, agentId)
+        : runDefaultReview(config, diff, lspOutput, agentId, globalSeen);
+
+      let warnings = await runReview();
+      warnings = await attemptAutoFollow(agentId, warnings, runReview);
 
       if (warnings.length > 0) {
         options?.onWarnings?.(agentId, warnings);

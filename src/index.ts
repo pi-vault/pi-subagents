@@ -128,6 +128,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   const watchdogConfig = parseWatchdogConfig(settings.watchdog);
   // Late-bound: manager is constructed below; callbacks are only invoked async after that
   let sessionMessageSource: ((agentId: string) => unknown[] | undefined) | undefined;
+  let resumeAgentFn: ((id: string, msg: string) => Promise<void>) | undefined;
   const watchdog = createWatchdogRuntime(watchdogConfig, {
     onWarnings: (agentId, warnings) => {
       for (const w of warnings) {
@@ -144,6 +145,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
       }
     },
     getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
+    resumeAgent: async (agentId, message) => { await resumeAgentFn?.(agentId, message); },
   });
 
   // Intercom: child↔parent communication channel
@@ -268,6 +270,8 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     if (!record?.session) return undefined;
     return (record.session as { messages?: unknown[] }).messages;
   };
+  // Wire resume agent for watchdog auto-follow steering
+  resumeAgentFn = async (id, msg) => { await manager.resume(id, msg); };
 
   function sendNudge(record: Parameters<typeof formatTaskNotification>[0]): void {
     const notification = formatTaskNotification(record);
