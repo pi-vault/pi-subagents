@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { AgentManager } from "./core/agent-manager.js";
 import { getAgentConversation } from "./core/agent-runner.js";
@@ -28,6 +28,7 @@ import { checkLocalMemoryGitignore } from "./core/memory.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
 import { createWatchdogRuntime, parseWatchdogConfig } from "./core/watchdog.js";
+import { formatWatchdogWarningText } from "./core/watchdog-render.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import type { JoinMode, NotificationDetails, WidgetMode } from "./shared/types.js";
 import type { AgentActivity } from "./tui/activity.js";
@@ -132,7 +133,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
             customType: "watchdog-warning",
             content,
             display: true,
-            details: { agentId, ...w },
+            details: { agentId, ...w, state: "displayed" },
           } as unknown as Parameters<typeof pi.sendMessage>[0],
           { deliverAs: "followUp", triggerTurn: true },
         );
@@ -339,6 +340,35 @@ export function registerSubagentsExtension(
       0,
       0,
     );
+  });
+
+  // Watchdog warning renderer with severity colors and state labels
+  pi.registerMessageRenderer("watchdog-warning", (msg, opts, theme) => {
+    const d = (msg as { details?: {
+      severity?: string; summary?: string; evidence?: string;
+      recommendedAction?: string; category?: string; state?: string;
+      autoFollowAttempt?: number; agentId?: string;
+    } }).details;
+    const fallback = typeof (msg as { content?: string }).content === "string"
+      ? (msg as { content: string }).content : "";
+    if (!d?.summary) return new Text(fallback, 0, 0);
+    const t = theme as {
+      fg: (color: string, text: string) => string;
+      bold: (text: string) => string;
+    };
+    const parts = formatWatchdogWarningText(d as Parameters<typeof formatWatchdogWarningText>[0]);
+    const header = t.fg(parts.color, t.bold(parts.header));
+    const container = new Container();
+    container.addChild(new Text(header, 0, 0));
+    if (opts.expanded) {
+      container.addChild(new Spacer(1));
+      container.addChild(new Text(t.fg("dim", parts.evidenceLine), 0, 0));
+      container.addChild(new Text(t.fg("dim", parts.actionLine), 0, 0));
+      container.addChild(new Text(t.fg("dim", parts.categoryLine), 0, 0));
+    } else if (d.evidence) {
+      container.addChild(new Text(t.fg("dim", `  \u23BF  ${parts.evidenceLine}`), 0, 0));
+    }
+    return container;
   });
 
   registerSubagentTool(pi, deps);

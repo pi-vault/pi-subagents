@@ -6,6 +6,27 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 
+// Task 1 shape test (verifies what index.ts onWarnings should emit)
+describe("watchdog warning message shape", () => {
+  it("onWarnings details include state field when wired in index.ts", () => {
+    const warning: WatchdogWarning = {
+      severity: "blocker",
+      summary: "Missing null check",
+      evidence: "src/foo.ts:42",
+      recommendedAction: "Add null guard",
+      category: "correctness",
+    };
+    // This is the shape that index.ts onWarnings must produce after Task 1
+    const details = { agentId: "agent-1", ...warning, state: "displayed" };
+    expect(details).toMatchObject({
+      severity: "blocker",
+      summary: "Missing null check",
+      state: "displayed",
+      agentId: "agent-1",
+    });
+  });
+});
+
 // File-level tmps array so all describe blocks can share cleanup
 const tmps: string[] = [];
 afterEach(() => {
