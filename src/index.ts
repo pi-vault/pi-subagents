@@ -624,7 +624,7 @@ export function registerSubagentsExtension(
 
   // Parent-session tool interception: block tools when a session-level budget is configured.
   // Complements subagent budget enforcement in agent-runner.ts — covers the parent agent.
-  const parentBudgetRaw = loadConfig(resolvePaths()).config.toolBudget;
+  const parentBudgetRaw = deps.loadConfig(deps.resolvePaths()).config.toolBudget;
   const { budget: parentBudget } = validateToolBudget(parentBudgetRaw);
 
   let parentToolCount = 0;

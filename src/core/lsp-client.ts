@@ -309,7 +309,8 @@ function initializeParams(rootUri: string) {
 }
 
 function severityLabel(sev: number | undefined): "error" | "warning" {
-  return sev === 1 ? "error" : "warning";
+  if (sev === undefined || sev === 1) return "error";
+  return "warning";
 }
 
 function convertDiagnostics(target: TargetFile, raw: unknown[]): LspDiagnosticEntry[] {
