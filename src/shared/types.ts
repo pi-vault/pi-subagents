@@ -259,6 +259,12 @@ export interface AgentRecord {
   outputCleanup?: () => void;
   compactionCount?: number;
   spawnedBy?: string;
+  chainSteps?: Array<{
+    label: string;
+    status: WorkflowNodeStatus;
+    durationMs?: number;
+    error?: string;
+  }>;
 }
 
 export interface RunOptions {

@@ -546,7 +546,24 @@ export async function executeSlashChain(
     deps.manager.fireAndForgetChain(
       chainRunId,
       task,
-      executeChain({ steps: chain, task, spawnAndWait, findAgent, cwd: ctx.cwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => deps.manager.getSpawnBudget() }),
+      executeChain({
+        steps: chain,
+        task,
+        spawnAndWait,
+        findAgent,
+        cwd: ctx.cwd,
+        runId: chainRunId,
+        onGraphUpdate: (snapshot) => {
+          deps.chainWidget?.update(snapshot);
+          const record = deps.manager.getRecord(chainRunId);
+          if (record) {
+            record.chainSteps = snapshot.nodes
+              .filter((n) => n.kind === "step" || n.kind === "agent")
+              .map((n) => ({ label: n.label, status: n.status, error: n.error }));
+          }
+        },
+        getSpawnBudget: () => deps.manager.getSpawnBudget(),
+      }),
       ctx.cwd,
       () => deps.chainWidget?.clear(),
     );
@@ -567,7 +584,15 @@ export async function executeSlashChain(
       findAgent,
       cwd: ctx.cwd,
       runId: chainRunId,
-      onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
+      onGraphUpdate: (snapshot) => {
+        deps.chainWidget?.update(snapshot);
+        const record = deps.manager.getRecord(chainRunId);
+        if (record) {
+          record.chainSteps = snapshot.nodes
+            .filter((n) => n.kind === "step" || n.kind === "agent")
+            .map((n) => ({ label: n.label, status: n.status, error: n.error }));
+        }
+      },
       getSpawnBudget: () => deps.manager.getSpawnBudget(),
     });
     deps.chainWidget?.clear();
@@ -611,6 +636,54 @@ export function registerChainCommands(
       }
     },
     handler: async (args, ctx: ExtensionCommandContext) => {
+      const trimmed = args.trim();
+
+      // Subcommand: /chain status [id]
+      if (trimmed === "status" || trimmed.startsWith("status ")) {
+        const chainId =
+          trimmed === "status" ? "" : trimmed.slice(7).trim();
+        const { formatChainStatus, listChains } = await import(
+          "./chain-status.js"
+        );
+        const chains = listChains(deps.manager.listAgents());
+        if (chainId) {
+          const record = chains.find(
+            (r) => r.id === chainId || r.id.startsWith(chainId),
+          );
+          if (!record) {
+            ctx.ui.notify(`Chain not found: ${chainId}`, "error");
+            return;
+          }
+          ctx.ui.notify(formatChainStatus(record), "info");
+        } else {
+          if (chains.length === 0) {
+            ctx.ui.notify("No chains running.", "info");
+            return;
+          }
+          ctx.ui.notify(chains.map(formatChainStatus).join("\n\n"), "info");
+        }
+        return;
+      }
+
+      // Subcommand: /chain cancel <id>
+      if (trimmed === "cancel" || trimmed.startsWith("cancel ")) {
+        const chainId =
+          trimmed === "cancel" ? "" : trimmed.slice(7).trim();
+        if (!chainId) {
+          ctx.ui.notify("Usage: /chain cancel <id>", "error");
+          return;
+        }
+        const success = deps.manager.abort(chainId);
+        ctx.ui.notify(
+          success
+            ? `Chain ${chainId} cancelled.`
+            : `Chain not found or already completed: ${chainId}`,
+          success ? "info" : "error",
+        );
+        return;
+      }
+
+      // Normal chain execution
       const { args: cleanedArgs, bg } = stripExecutionFlags(args);
       const paths = deps.resolvePaths();
       const agents = deps.discoverAgents(paths).agents;

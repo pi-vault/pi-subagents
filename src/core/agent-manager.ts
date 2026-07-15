@@ -180,6 +180,7 @@ export class AgentManager {
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       isBackground: true,
       cwd,
+      chainSteps: [],
     };
     this.registerExternalRecord(id, record);
     promise
