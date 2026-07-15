@@ -283,7 +283,8 @@ export async function executeChain(
       }
 
       // Check spawn budget for dynamic batch
-      let dynamicItemsToRun = items as unknown[];
+      const itemsArr = items as unknown[];
+      let dynamicItemsToRun = itemsArr;
       if (getSpawnBudget) {
         const budget = getSpawnBudget();
         if (budget <= 0) {
@@ -295,12 +296,11 @@ export async function executeChain(
             workflowGraph: finalSnapshot(),
           };
         }
-        if (budget < (items as unknown[]).length) {
-          dynamicItemsToRun = (items as unknown[]).slice(0, budget);
-          // Annotate the single step node to indicate truncation
+        if (budget < itemsArr.length) {
+          dynamicItemsToRun = itemsArr.slice(0, budget);
           stepStatuses[flatIndex] = {
             status: "running",
-            error: `budget: running ${budget} of ${(items as unknown[]).length} items`,
+            error: `budget: running ${budget} of ${itemsArr.length} items`,
           };
         }
       }

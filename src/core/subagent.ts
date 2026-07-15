@@ -32,7 +32,6 @@ import {
   writeInitialEntry,
 } from "./output-file.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
-import { resolveMaxSpawns } from "./spawn-guard.js";
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
@@ -328,7 +327,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             deps.manager.fireAndForgetChain(
               chainRunId,
               params.task ?? "",
-              executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => { const max = resolveMaxSpawns(deps.manager.getMaxSpawnsPerSession()); return Math.max(0, max - deps.manager.getSpawnCount()); } }),
+              executeChain({ steps: chainSteps, task: params.task ?? "", spawnAndWait, findAgent, cwd: effectiveCwd, runId: chainRunId, onGraphUpdate: (s) => deps.chainWidget?.update(s), getSpawnBudget: () => deps.manager.getSpawnBudget() }),
               effectiveCwd,
               () => deps.chainWidget?.clear(),
             );
@@ -354,10 +353,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             runId: chainRunId,
             signal,
             onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
-            getSpawnBudget: () => {
-              const max = resolveMaxSpawns(deps.manager.getMaxSpawnsPerSession());
-              return Math.max(0, max - deps.manager.getSpawnCount());
-            },
+            getSpawnBudget: () => deps.manager.getSpawnBudget(),
           });
           deps.chainWidget?.clear();
           return {
