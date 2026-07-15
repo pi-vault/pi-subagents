@@ -626,8 +626,8 @@ export function registerChainCommands(pi: ExtensionAPI, deps: RuntimeDeps): void
       // Subcommand: /chain status [id]
       if (trimmed === "status" || trimmed.startsWith("status ")) {
         const chainId = trimmed === "status" ? "" : trimmed.slice(7).trim();
-        const { formatChainStatus, listChains } = await import("./chain-status.js");
-        const chains = listChains(deps.manager.listAgents());
+        const { formatChainStatus } = await import("./chain-status.js");
+        const chains = deps.manager.listAgents().filter((r) => r.type === "(chain)");
         if (chainId) {
           const record = chains.find((r) => r.id === chainId || r.id.startsWith(chainId));
           if (!record) {

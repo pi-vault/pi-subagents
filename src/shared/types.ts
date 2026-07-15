@@ -268,7 +268,6 @@ export interface AgentRecord {
   chainSteps?: Array<{
     label: string;
     status: WorkflowNodeStatus;
-    durationMs?: number;
     error?: string;
   }>;
 }

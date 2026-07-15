@@ -1,5 +1,7 @@
 import type { AgentRecord } from "../shared/types.js";
 
+const statusIcon: Record<string, string> = { completed: "\u2713", running: "\u25b8", failed: "\u2717" };
+
 export function formatChainStatus(record: AgentRecord): string {
   const elapsed = record.completedAt
     ? record.completedAt - record.startedAt
@@ -17,23 +19,11 @@ export function formatChainStatus(record: AgentRecord): string {
   if (record.chainSteps && record.chainSteps.length > 0) {
     lines.push("", "Steps:");
     for (const step of record.chainSteps) {
-      const icon =
-        step.status === "completed"
-          ? "\u2713"
-          : step.status === "running"
-            ? "\u25b8"
-            : step.status === "failed"
-              ? "\u2717"
-              : "\u25cb";
-      const dur = step.durationMs != null ? ` (${Math.floor(step.durationMs / 1000)}s)` : "";
+      const icon = statusIcon[step.status] ?? "\u25cb";
       const err = step.error ? ` \u2014 ${step.error}` : "";
-      lines.push(`  ${icon} ${step.label} \u2014 ${step.status}${dur}${err}`);
+      lines.push(`  ${icon} ${step.label} \u2014 ${step.status}${err}`);
     }
   }
 
   return lines.join("\n");
-}
-
-export function listChains(agents: AgentRecord[]): AgentRecord[] {
-  return agents.filter((r) => r.type === "(chain)");
 }

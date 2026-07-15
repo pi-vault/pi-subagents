@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatChainStatus, listChains } from "../../src/core/chain-status.js";
+import { formatChainStatus } from "../../src/core/chain-status.js";
 import type { AgentRecord } from "../../src/shared/types.js";
 
 function makeRecord(overrides: Partial<AgentRecord>): AgentRecord {
@@ -20,7 +20,7 @@ describe("formatChainStatus", () => {
   it("formats a running chain with step statuses", () => {
     const record = makeRecord({
       chainSteps: [
-        { label: "scout", status: "completed", durationMs: 15000 },
+        { label: "scout", status: "completed" },
         { label: "planner", status: "running" },
         { label: "worker", status: "pending" },
       ],
@@ -45,14 +45,14 @@ describe("formatChainStatus", () => {
     expect(output).toMatch(/2m/);
   });
 
-  it("shows duration for completed chain", () => {
+  it("shows elapsed for completed chain", () => {
     const now = Date.now();
     const record = makeRecord({
       id: "chain-3",
       status: "completed",
       startedAt: now - 30_000,
       completedAt: now,
-      chainSteps: [{ label: "step1", status: "completed", durationMs: 30000 }],
+      chainSteps: [{ label: "step1", status: "completed" }],
     });
     const output = formatChainStatus(record);
     expect(output).toContain("completed");
@@ -73,23 +73,5 @@ describe("formatChainStatus", () => {
     const output = formatChainStatus(record);
     expect(output).toContain("failed");
     expect(output).toContain("Build failed");
-  });
-});
-
-describe("listChains", () => {
-  it("filters to chain-type records", () => {
-    const records: AgentRecord[] = [
-      makeRecord({ id: "chain-1", type: "(chain)" }),
-      makeRecord({ id: "agent-1", type: "scout" }),
-      makeRecord({ id: "chain-2", type: "(chain)" }),
-    ];
-    const chains = listChains(records);
-    expect(chains).toHaveLength(2);
-    expect(chains.map((c) => c.id)).toEqual(["chain-1", "chain-2"]);
-  });
-
-  it("returns empty array when no chains", () => {
-    const records: AgentRecord[] = [makeRecord({ id: "agent-1", type: "scout" })];
-    expect(listChains(records)).toHaveLength(0);
   });
 });
