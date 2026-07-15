@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { AgentManager } from "./core/agent-manager.js";
@@ -12,6 +12,7 @@ import {
   exportAgentToUserScope,
 } from "./core/agents.js";
 import { loadConfig, saveConfig } from "./core/config.js";
+import { evaluateToolCall, validateToolBudget } from "./core/tool-budget.js";
 import { GroupJoinManager } from "./core/group-join-manager.js";
 import { resolvePaths } from "./core/paths.js";
 import { applySettings, loadSettings } from "./core/settings.js";
@@ -621,6 +622,39 @@ export function registerSubagentsExtension(
     capturedCurrentModel = (ctx as { model?: typeof capturedCurrentModel }).model;
   });
 
+  // Parent-session tool interception: block tools when a session-level budget is configured.
+  // Complements subagent budget enforcement in agent-runner.ts — covers the parent agent.
+  const parentBudgetRaw = deps.loadConfig(deps.resolvePaths()).config.toolBudget;
+  const { budget: parentBudget } = validateToolBudget(parentBudgetRaw);
+
+  let parentToolCount = 0;
+  let parentSoftNudged = false;
+
+  if (parentBudget) {
+    pi.on("tool_call", (event: ToolCallEvent): ToolCallEventResult | undefined => {
+      const toolName = event.toolName;
+      parentToolCount++;
+
+      const result = evaluateToolCall(parentBudget, parentToolCount, toolName);
+
+      if (result.outcome === "hard-blocked") {
+        return { block: true, reason: result.message ?? "Tool budget hard limit reached." };
+      }
+
+      if (result.outcome === "soft-reached" && !parentSoftNudged) {
+        parentSoftNudged = true;
+        try {
+          (pi as { sendUserMessage?: (content: string, options: { deliverAs: "steer" }) => unknown })
+            .sendUserMessage?.(result.message ?? "Tool budget soft limit reached.", { deliverAs: "steer" });
+        } catch {
+          // Advisory — don't fail the tool call
+        }
+      }
+
+      return undefined;
+    });
+  }
+
   // Cleanup on session shutdown
   pi.on("session_shutdown", () => {
     rpcDispose.dispose();
@@ -640,6 +674,10 @@ export function registerSubagentsExtension(
   pi.on("session_before_switch", () => {
     deps.manager.resetSpawnCounter();
     deps.manager.clearCompleted();
+    if (parentBudget) {
+      parentToolCount = 0;
+      parentSoftNudged = false;
+    }
   });
 
   pi.registerCommand("agents", {

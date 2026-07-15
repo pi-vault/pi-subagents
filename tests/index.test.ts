@@ -527,6 +527,34 @@ describe("TUI wiring", () => {
     expect(registeredEvents).toContain("tool_execution_start");
   });
 
+  test("registerSubagentsExtension registers a tool_call handler when toolBudget is configured", () => {
+    const { pi, registeredEvents } = createPiWithEventCapture();
+    registerSubagentsExtension(
+      pi,
+      createMenuDeps({
+        loadConfig: () => ({
+          exists: true,
+          config: {
+            maxConcurrency: 3,
+            maxRecursiveLevel: 3,
+            defaultMaxTurns: 0,
+            graceTurns: 5,
+            defaultJoinMode: "smart",
+            maxSpawnsPerSession: 40,
+            toolBudget: { hard: 10, soft: 8 },
+          },
+        }),
+      }),
+    );
+    expect(registeredEvents).toContain("tool_call");
+  });
+
+  test("registerSubagentsExtension does not register tool_call when no toolBudget", () => {
+    const { pi, registeredEvents } = createPiWithEventCapture();
+    registerSubagentsExtension(pi, createMenuDeps());
+    expect(registeredEvents).not.toContain("tool_call");
+  });
+
   test("fleet registers onTerminalInput when tool_execution_start fires", async () => {
     const { pi, handlers } = createPiWithEventCapture();
     const deps = createRuntimeDeps(pi);

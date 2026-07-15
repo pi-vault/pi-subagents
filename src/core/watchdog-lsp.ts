@@ -1,6 +1,7 @@
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
+import { collectWithLanguageServer } from "./lsp-client.js";
 
 export interface LspDiagnostic {
   file: string;
@@ -24,8 +25,7 @@ export interface LspConfig {
 
 const TS_JS_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts"]);
 
-const TSC_OUTPUT_REGEX =
-  /^(.+)\((\d+),\d+\):\s+(error|warning)\s+(TS\d+):\s+(.+)$/;
+const TSC_OUTPUT_REGEX = /^(.+)\((\d+),\d+\):\s+(error|warning)\s+(TS\d+):\s+(.+)$/;
 
 /**
  * Parse tsc --noEmit output into structured diagnostics.
@@ -89,7 +89,13 @@ export async function collectLspDiagnostics(
     });
     return { status: "ok", diagnostics: [] };
   } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; killed?: boolean; signal?: string; status?: number | null };
+    const e = err as {
+      stdout?: string;
+      stderr?: string;
+      killed?: boolean;
+      signal?: string;
+      status?: number | null;
+    };
     // Timeout or signal kill → unavailable
     if (e.killed || e.signal === "SIGTERM") {
       return { status: "timeout", diagnostics: [] };
@@ -103,4 +109,38 @@ export async function collectLspDiagnostics(
     }
     return { status: "ok", diagnostics };
   }
+}
+
+/**
+ * Collect diagnostics using typescript-language-server (preferred) or tsc --noEmit (fallback).
+ *
+ * The LSP path gives per-file incremental diagnostics without a full project recompile.
+ * Falls back to batch tsc when typescript-language-server is unavailable.
+ */
+export async function collectDiagnostics(
+  cwd: string,
+  changedPaths: string[],
+  config: LspConfig,
+): Promise<LspResult> {
+  const lspResult = await collectWithLanguageServer(cwd, changedPaths, {
+    timeoutMs: config.timeoutMs,
+    maxFiles: config.maxFiles,
+    maxDiagnostics: config.maxDiagnostics,
+  });
+
+  if (lspResult.status !== "unavailable") {
+    return {
+      status: lspResult.status,
+      diagnostics: lspResult.diagnostics.map((d) => ({
+        file: d.file,
+        line: d.line,
+        severity: d.severity,
+        message: d.message,
+        code: d.code,
+      })),
+    };
+  }
+
+  // Fallback to batch tsc --noEmit
+  return collectLspDiagnostics(cwd, changedPaths, config);
 }
