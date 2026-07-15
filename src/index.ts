@@ -126,6 +126,8 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
   // Watchdog: adversarial reviewer at agent-end boundaries
   const watchdogConfig = parseWatchdogConfig(settings.watchdog);
+  // Late-bound: manager is constructed below; callbacks are only invoked async after that
+  let sessionMessageSource: ((agentId: string) => unknown[] | undefined) | undefined;
   const watchdog = createWatchdogRuntime(watchdogConfig, {
     onWarnings: (agentId, warnings) => {
       for (const w of warnings) {
@@ -141,6 +143,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
         );
       }
     },
+    getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
   });
 
   // Intercom: child↔parent communication channel
@@ -258,6 +261,13 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
   // Apply spawn limit from config
   manager.setMaxSpawnsPerSession(loadConfig(resolvePaths()).config.maxSpawnsPerSession);
+
+  // Wire session message source for watchdog turn-delta mode (late-bound, manager now exists)
+  sessionMessageSource = (agentId) => {
+    const record = manager.getRecord(agentId);
+    if (!record?.session) return undefined;
+    return (record.session as { messages?: unknown[] }).messages;
+  };
 
   function sendNudge(record: Parameters<typeof formatTaskNotification>[0]): void {
     const notification = formatTaskNotification(record);

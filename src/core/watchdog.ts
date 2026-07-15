@@ -38,6 +38,8 @@ export interface WatchdogConfig {
   enabled: boolean;
   model?: string;
   thinking?: string;
+  /** When true (default), review git diff. When false, review the agent's conversation. */
+  reviewChangesOnly: boolean;
   children: {
     enabled: boolean;
     model?: string;
@@ -162,6 +164,7 @@ export function createWatchdogWarnTool(
 
 const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   enabled: false,
+  reviewChangesOnly: true,
   children: { enabled: false, overrides: {} },
   lsp: {
     enabled: true,
@@ -193,6 +196,7 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
   if (typeof r.enabled === "boolean") config.enabled = r.enabled;
   if (typeof r.model === "string") config.model = r.model;
   if (typeof r.thinking === "string") config.thinking = r.thinking;
+  if (typeof r.reviewChangesOnly === "boolean") config.reviewChangesOnly = r.reviewChangesOnly;
 
   if (r.children && typeof r.children === "object") {
     const ch = r.children as Record<string, unknown>;
@@ -236,6 +240,8 @@ export interface WatchdogRuntimeOptions {
   runReview?: (diff: string, lspOutput: string, agentId: string) => Promise<WatchdogWarning[]>;
   /** Called when warnings are produced. */
   onWarnings?: (agentId: string, warnings: WatchdogWarning[]) => void;
+  /** Return session messages for turn-delta mode (reviewChangesOnly: false). */
+  getSessionMessages?: (agentId: string) => unknown[] | undefined;
 }
 
 /**
@@ -254,6 +260,28 @@ export function createWatchdogRuntime(
 
   async function handleAgentEnd(agentId: string, cwd: string): Promise<WatchdogWarning[]> {
     if (!config.enabled || disposed) return [];
+
+    // Turn-delta mode: review conversation instead of git diff
+    if (!config.reviewChangesOnly) {
+      currentStatus = "reviewing";
+      try {
+        let turnDelta = "(no conversation data available)";
+        if (options?.getSessionMessages) {
+          const messages = options.getSessionMessages(agentId);
+          if (messages && messages.length > 0) {
+            const { formatWatchdogTurnDelta } = await import("./watchdog-turn-delta.js");
+            turnDelta = formatWatchdogTurnDelta(messages, 10);
+          }
+        }
+        const warnings = options?.runReview
+          ? await options.runReview(turnDelta, "N/A (turn-delta mode)", agentId)
+          : await runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, globalSeen);
+        if (warnings.length > 0) options?.onWarnings?.(agentId, warnings);
+        return warnings;
+      } finally {
+        currentStatus = config.enabled && !disposed ? "idle" : "disabled";
+      }
+    }
 
     const signature = computeChangeSignature(cwd);
     if (!signature) return [];

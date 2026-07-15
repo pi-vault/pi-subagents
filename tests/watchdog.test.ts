@@ -382,3 +382,70 @@ describe("WatchdogRuntime", () => {
     expect(runtime.status()).toBe("idle");
   });
 });
+
+describe("turn-delta mode", () => {
+  it("passes turn-delta to runReview when reviewChangesOnly is false", async () => {
+    let reviewInput = "";
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: async (diff) => {
+          reviewInput = diff;
+          return [];
+        },
+        getSessionMessages: () => [
+          { role: "assistant", content: [{ type: "tool_use", name: "read_file", input: { path: "/x.ts" } }] },
+        ],
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", "/tmp/nonexistent");
+    expect(reviewInput).toContain("read_file");
+    expect(reviewInput).toContain("/x.ts");
+  });
+
+  it("uses fallback text when no messages are available", async () => {
+    let reviewInput = "";
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: async (diff) => {
+          reviewInput = diff;
+          return [];
+        },
+        getSessionMessages: () => undefined,
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", "/tmp");
+    expect(reviewInput).toContain("no conversation data");
+  });
+
+  it("calls onWarnings when turn-delta review produces warnings", async () => {
+    const emitted: WatchdogWarning[] = [];
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: async () => [
+          { severity: "blocker", summary: "Missing error handling", evidence: "src/x.ts:5", recommendedAction: "Add try/catch", category: "correctness" },
+        ],
+        onWarnings: (_id, ws) => emitted.push(...ws),
+        getSessionMessages: () => [{ role: "user", content: "Do the task" }],
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", "/tmp");
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].summary).toBe("Missing error handling");
+  });
+
+  it("parses reviewChangesOnly false from config", () => {
+    const config = parseWatchdogConfig({ enabled: true, reviewChangesOnly: false });
+    expect(config.reviewChangesOnly).toBe(false);
+  });
+
+  it("defaults reviewChangesOnly to true", () => {
+    const config = parseWatchdogConfig({ enabled: true });
+    expect(config.reviewChangesOnly).toBe(true);
+  });
+});
