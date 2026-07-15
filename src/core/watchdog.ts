@@ -384,8 +384,8 @@ export function createWatchdogRuntime(
         let lspOutput = "No LSP issues found";
         if (config.lsp.enabled) {
           try {
-            const { collectLspDiagnostics } = await import("./watchdog-lsp.js");
-            const lspResult = await collectLspDiagnostics(cwd, signature.changedPaths, config.lsp);
+            const { collectDiagnostics } = await import("./watchdog-lsp.js");
+            const lspResult = await collectDiagnostics(cwd, signature.changedPaths, config.lsp);
             if (lspResult.diagnostics.length > 0) {
               lspOutput = lspResult.diagnostics
                 .map((d) => `${d.file}:${d.line} ${d.severity} ${d.code ?? ""}: ${d.message}`)
