@@ -66,7 +66,7 @@ const PROVIDER_NAME = "typescript-language-server";
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const MAX_STDERR_LENGTH = 4096;
 
-interface LspCommand {
+export interface LspCommand {
   command: string;
   args: string[];
   label: string;
