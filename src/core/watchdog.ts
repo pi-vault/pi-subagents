@@ -185,26 +185,22 @@ const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   },
 };
 
-/**
- * Parse watchdog config from settings, merging with defaults.
- */
-export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
-  if (!raw || typeof raw !== "object") {
-    return {
-      ...DEFAULT_WATCHDOG_CONFIG,
-      children: { ...DEFAULT_WATCHDOG_CONFIG.children, overrides: {} },
-      autoFollow: { ...DEFAULT_WATCHDOG_CONFIG.autoFollow },
-      lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
-    };
-  }
-  const r = raw as Record<string, unknown>;
-
-  const config: WatchdogConfig = {
+function freshDefault(): WatchdogConfig {
+  return {
     ...DEFAULT_WATCHDOG_CONFIG,
     children: { ...DEFAULT_WATCHDOG_CONFIG.children, overrides: {} },
     autoFollow: { ...DEFAULT_WATCHDOG_CONFIG.autoFollow },
     lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
   };
+}
+
+/**
+ * Parse watchdog config from settings, merging with defaults.
+ */
+export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
+  if (!raw || typeof raw !== "object") return freshDefault();
+  const r = raw as Record<string, unknown>;
+  const config = freshDefault();
 
   if (typeof r.enabled === "boolean") config.enabled = r.enabled;
   if (typeof r.model === "string") config.model = r.model;

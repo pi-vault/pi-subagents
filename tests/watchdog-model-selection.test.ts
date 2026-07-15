@@ -30,23 +30,20 @@ describe("detectProviderFamily", () => {
 });
 
 describe("recommendWatchdogModel", () => {
-  it("recommends anthropic opus for openai sessions", () => {
+  it("recommends anthropic for openai sessions", () => {
     const result = recommendWatchdogModel("openai");
     expect(result.model).toContain("anthropic");
-    expect(result.family).toBe("opus");
     expect(result.thinking).toBe("high");
   });
 
-  it("recommends openai gpt for anthropic sessions", () => {
+  it("recommends openai for anthropic sessions", () => {
     const result = recommendWatchdogModel("anthropic");
     expect(result.model).toContain("openai");
-    expect(result.family).toBe("gpt");
     expect(result.thinking).toBe("high");
   });
 
-  it("defaults to opus for unknown provider", () => {
+  it("defaults to anthropic for unknown provider", () => {
     const result = recommendWatchdogModel("unknown");
-    expect(result.family).toBe("opus");
     expect(result.model).toContain("anthropic");
   });
 

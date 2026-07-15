@@ -3,7 +3,6 @@
 export type ProviderFamily = "openai" | "anthropic" | "unknown";
 
 export interface ModelRecommendation {
-  family: "opus" | "gpt";
   model: string;
   thinking: string;
   reason: string;
@@ -36,26 +35,11 @@ export function detectProviderFamily(
 export function recommendWatchdogModel(
   currentFamily: ProviderFamily,
 ): ModelRecommendation {
-  if (currentFamily === "openai") {
-    return {
-      family: "opus",
-      model: STRONG_MODELS.opus.model,
-      thinking: "high",
-      reason: `Use ${STRONG_MODELS.opus.label} with thinking:high as a cross-provider watchdog. Different model families catch different classes of issues.`,
-    };
-  }
-  if (currentFamily === "anthropic") {
-    return {
-      family: "gpt",
-      model: STRONG_MODELS.gpt.model,
-      thinking: "high",
-      reason: `Use ${STRONG_MODELS.gpt.label} with thinking:high as a cross-provider watchdog. Different model families catch different classes of issues.`,
-    };
-  }
+  const pick = currentFamily === "anthropic" ? "gpt" : "opus";
+  const m = STRONG_MODELS[pick];
   return {
-    family: "opus",
-    model: STRONG_MODELS.opus.model,
+    model: m.model,
     thinking: "high",
-    reason: `Default recommendation: ${STRONG_MODELS.opus.label} with thinking:high for independent code review.`,
+    reason: `Use ${m.label} with thinking:high as a cross-provider watchdog. Different model families catch different classes of issues.`,
   };
 }
