@@ -221,6 +221,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
           onWarnings: (agentId, ws) => {
             for (const w of ws) sendWarning(agentId, w);
           },
+          getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
         });
         childWatchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd())
           .catch((err) => { console.error("[watchdog/child] handleAgentEnd failed:", err); })

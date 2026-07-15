@@ -577,4 +577,78 @@ describe("auto-follow steering", () => {
     expect(config.autoFollow.concerns).toBe(false);
     expect(config.autoFollow.maxAttempts).toBe(2);
   });
+
+  it("re-review receives fresh diff (not stale captured diff)", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-fresh-diff-");
+    const diffsSeen: string[] = [];
+    let callCount = 0;
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: true, concerns: false, maxAttempts: 1, stalemateRepeats: 2 } }),
+      {
+        runReview: async (diff) => {
+          diffsSeen.push(diff);
+          callCount++;
+          return [{ severity: "blocker", summary: "Bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" }];
+        },
+        resumeAgent: async () => {
+          // Simulate agent modifying a file between reviews
+          writeFileSync(join(tmp, "file.ts"), `const x = ${callCount + 10};`);
+        },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    // Should have been called twice (initial + 1 re-review from maxAttempts=1)
+    expect(diffsSeen.length).toBe(2);
+    // The second diff should differ from the first (fresh data, not stale)
+    expect(diffsSeen[0]).not.toBe(diffsSeen[1]);
+  });
+
+  it("re-review does not deduplicate via globalSeen (fresh seen per re-review)", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-fresh-seen-");
+    let callCount = 0;
+    const warningCounts: number[] = [];
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 3 } }),
+      {
+        runReview: async () => {
+          callCount++;
+          const warnings: WatchdogWarning[] = [{ severity: "blocker", summary: "Same bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" }];
+          warningCounts.push(warnings.length);
+          return warnings;
+        },
+        resumeAgent: async () => {},
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    // All re-review calls should return 1 warning (not 0 due to dedup)
+    expect(warningCounts.every(c => c === 1)).toBe(true);
+    // Should have called runReview 3 times: initial + 2 from maxAttempts=2
+    expect(callCount).toBe(3);
+  });
+
+  it("resumes for concerns when autoFollow.concerns is true", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-concerns-enabled-");
+    const resumed: string[] = [];
+    let callCount = 0;
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: false, concerns: true, maxAttempts: 1, stalemateRepeats: 2 } }),
+      {
+        runReview: async () => {
+          callCount++;
+          return callCount === 1
+            ? [{ severity: "concern", summary: "Style issue", evidence: "file.ts:1", recommendedAction: "Refactor", category: "other" }]
+            : [];
+        },
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    expect(resumed).toHaveLength(1);
+  });
 });

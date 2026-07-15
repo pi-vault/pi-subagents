@@ -340,20 +340,29 @@ export function createWatchdogRuntime(
     if (!config.reviewChangesOnly) {
       currentStatus = "reviewing";
       try {
-        let turnDelta = "(no conversation data available)";
-        if (options?.getSessionMessages) {
-          const messages = options.getSessionMessages(agentId);
-          if (messages && messages.length > 0) {
-            const { formatWatchdogTurnDelta } = await import("./watchdog-turn-delta.js");
-            turnDelta = formatWatchdogTurnDelta(messages, 10);
+        // Re-fetches messages on each call (agent may have new conversation after resume)
+        const runReview = async () => {
+          let turnDelta = "(no conversation data available)";
+          if (options?.getSessionMessages) {
+            const messages = options.getSessionMessages(agentId);
+            if (messages && messages.length > 0) {
+              const { formatWatchdogTurnDelta } = await import("./watchdog-turn-delta.js");
+              turnDelta = formatWatchdogTurnDelta(messages, 10);
+            }
           }
-        }
-        const runReview = () => options?.runReview
-          ? options.runReview(turnDelta, "N/A (turn-delta mode)", agentId)
-          : runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, globalSeen);
+          if (options?.runReview) {
+            return options.runReview(turnDelta, "N/A (turn-delta mode)", agentId);
+          }
+          const localSeen = new Set<string>();
+          return runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, localSeen);
+        };
 
         let warnings = await runReview();
         warnings = await attemptAutoFollow(agentId, warnings, runReview);
+
+        // Add final warnings to globalSeen for cross-agent dedup
+        for (const w of warnings) globalSeen.add(w.summary.toLowerCase().trim());
+
         if (warnings.length > 0) options?.onWarnings?.(agentId, warnings);
         return warnings;
       } finally {
@@ -366,35 +375,48 @@ export function createWatchdogRuntime(
 
     currentStatus = "reviewing";
     try {
-      let diff: string;
-      try {
-        diff = execFileSync("git", ["diff", "--stat", "--patch", "--", ...signature.changedPaths], { cwd, stdio: "pipe", encoding: "utf-8", timeout: 10_000, maxBuffer: 256 * 1024 });
-        if (diff.length > 8192) diff = diff.slice(0, 8192) + "\n... (truncated)";
-      } catch {
-        diff = "(unable to get diff)";
-      }
-
-      let lspOutput = "No LSP issues found";
-      if (config.lsp.enabled) {
+      // Recomputes diff + LSP on each call (required for auto-follow re-reviews)
+      const getFreshDiffAndLsp = async (): Promise<{ diff: string; lspOutput: string }> => {
+        let diff: string;
         try {
-          const { collectLspDiagnostics } = await import("./watchdog-lsp.js");
-          const lspResult = await collectLspDiagnostics(cwd, signature.changedPaths, config.lsp);
-          if (lspResult.diagnostics.length > 0) {
-            lspOutput = lspResult.diagnostics
-              .map((d) => `${d.file}:${d.line} ${d.severity} ${d.code ?? ""}: ${d.message}`)
-              .join("\n");
-          }
+          diff = execFileSync("git", ["diff", "--stat", "--patch", "--", ...signature.changedPaths], { cwd, stdio: "pipe", encoding: "utf-8", timeout: 10_000, maxBuffer: 256 * 1024 });
+          if (diff.length > 8192) diff = diff.slice(0, 8192) + "\n... (truncated)";
         } catch {
-          lspOutput = "LSP diagnostics unavailable";
+          diff = "(unable to get diff)";
         }
-      }
 
-      const runReview = () => options?.runReview
-        ? options.runReview(diff, lspOutput, agentId)
-        : runDefaultReview(config, diff, lspOutput, agentId, globalSeen);
+        let lspOutput = "No LSP issues found";
+        if (config.lsp.enabled) {
+          try {
+            const { collectLspDiagnostics } = await import("./watchdog-lsp.js");
+            const lspResult = await collectLspDiagnostics(cwd, signature.changedPaths, config.lsp);
+            if (lspResult.diagnostics.length > 0) {
+              lspOutput = lspResult.diagnostics
+                .map((d) => `${d.file}:${d.line} ${d.severity} ${d.code ?? ""}: ${d.message}`)
+                .join("\n");
+            }
+          } catch {
+            lspOutput = "LSP diagnostics unavailable";
+          }
+        }
+        return { diff, lspOutput };
+      };
+
+      const runReview = async () => {
+        const { diff, lspOutput } = await getFreshDiffAndLsp();
+        if (options?.runReview) {
+          return options.runReview(diff, lspOutput, agentId);
+        }
+        // Use a local seen set so re-reviews don't deduplicate against previous rounds
+        const localSeen = new Set<string>();
+        return runDefaultReview(config, diff, lspOutput, agentId, localSeen);
+      };
 
       let warnings = await runReview();
       warnings = await attemptAutoFollow(agentId, warnings, runReview);
+
+      // After auto-follow completes, add final warnings to globalSeen for cross-agent dedup
+      for (const w of warnings) globalSeen.add(w.summary.toLowerCase().trim());
 
       if (warnings.length > 0) {
         options?.onWarnings?.(agentId, warnings);
