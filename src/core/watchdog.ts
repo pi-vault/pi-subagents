@@ -28,10 +28,34 @@ export interface ChangeSignature {
   changedPaths: string[];
 }
 
+export interface WatchdogChildOverride {
+  enabled?: boolean;
+  model?: string;
+  thinking?: string;
+}
+
 export interface WatchdogConfig {
   enabled: boolean;
   model?: string;
   thinking?: string;
+  /** When true (default), review git diff. When false, review the agent's conversation. */
+  reviewChangesOnly: boolean;
+  children: {
+    enabled: boolean;
+    model?: string;
+    thinking?: string;
+    overrides: Record<string, WatchdogChildOverride>;
+  };
+  autoFollow: {
+    /** Resume agent to fix blockers. Default: false. */
+    blockers: boolean;
+    /** Resume agent to fix concerns. Default: false. */
+    concerns: boolean;
+    /** Maximum steering attempts before giving up. Default: 2. */
+    maxAttempts: number;
+    /** Stop if the same warning key repeats this many times. Default: 2. */
+    stalemateRepeats: number;
+  };
   lsp: {
     enabled: boolean;
     timeoutMs: number;
@@ -150,6 +174,9 @@ export function createWatchdogWarnTool(
 
 const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   enabled: false,
+  reviewChangesOnly: true,
+  children: { enabled: false, overrides: {} },
+  autoFollow: { blockers: false, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
   lsp: {
     enabled: true,
     timeoutMs: 3_000,
@@ -158,26 +185,45 @@ const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   },
 };
 
+function freshDefault(): WatchdogConfig {
+  return {
+    ...DEFAULT_WATCHDOG_CONFIG,
+    children: { ...DEFAULT_WATCHDOG_CONFIG.children, overrides: {} },
+    autoFollow: { ...DEFAULT_WATCHDOG_CONFIG.autoFollow },
+    lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
+  };
+}
+
 /**
  * Parse watchdog config from settings, merging with defaults.
  */
 export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
-  if (!raw || typeof raw !== "object") {
-    return {
-      ...DEFAULT_WATCHDOG_CONFIG,
-      lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
-    };
-  }
+  if (!raw || typeof raw !== "object") return freshDefault();
   const r = raw as Record<string, unknown>;
-
-  const config: WatchdogConfig = {
-    ...DEFAULT_WATCHDOG_CONFIG,
-    lsp: { ...DEFAULT_WATCHDOG_CONFIG.lsp },
-  };
+  const config = freshDefault();
 
   if (typeof r.enabled === "boolean") config.enabled = r.enabled;
   if (typeof r.model === "string") config.model = r.model;
   if (typeof r.thinking === "string") config.thinking = r.thinking;
+  if (typeof r.reviewChangesOnly === "boolean") config.reviewChangesOnly = r.reviewChangesOnly;
+
+  if (r.autoFollow && typeof r.autoFollow === "object") {
+    const af = r.autoFollow as Record<string, unknown>;
+    if (typeof af.blockers === "boolean") config.autoFollow.blockers = af.blockers;
+    if (typeof af.concerns === "boolean") config.autoFollow.concerns = af.concerns;
+    if (typeof af.maxAttempts === "number") config.autoFollow.maxAttempts = af.maxAttempts;
+    if (typeof af.stalemateRepeats === "number") config.autoFollow.stalemateRepeats = af.stalemateRepeats;
+  }
+
+  if (r.children && typeof r.children === "object") {
+    const ch = r.children as Record<string, unknown>;
+    if (typeof ch.enabled === "boolean") config.children.enabled = ch.enabled;
+    if (typeof ch.model === "string") config.children.model = ch.model;
+    if (typeof ch.thinking === "string") config.children.thinking = ch.thinking;
+    if (ch.overrides && typeof ch.overrides === "object") {
+      config.children.overrides = ch.overrides as typeof config.children.overrides;
+    }
+  }
 
   if (r.lsp && typeof r.lsp === "object") {
     const lsp = r.lsp as Record<string, unknown>;
@@ -211,6 +257,10 @@ export interface WatchdogRuntimeOptions {
   runReview?: (diff: string, lspOutput: string, agentId: string) => Promise<WatchdogWarning[]>;
   /** Called when warnings are produced. */
   onWarnings?: (agentId: string, warnings: WatchdogWarning[]) => void;
+  /** Return session messages for turn-delta mode (reviewChangesOnly: false). */
+  getSessionMessages?: (agentId: string) => unknown[] | undefined;
+  /** Resume a completed agent with a steering message. Used by auto-follow. */
+  resumeAgent?: (agentId: string, message: string) => Promise<void>;
 }
 
 /**
@@ -227,43 +277,142 @@ export function createWatchdogRuntime(
   let disposed = false;
   const globalSeen = new Set<string>();
 
+  /** Compute a stable key for a warning set to detect stalemates. */
+  function warningKey(warnings: WatchdogWarning[]): string {
+    return warnings.map((w) => w.summary.toLowerCase().trim()).sort().join("|");
+  }
+
+  /** Should auto-follow run given these warnings? */
+  function shouldAutoFollow(warnings: WatchdogWarning[]): boolean {
+    if (!options?.resumeAgent) return false;
+    const hasBlockers = warnings.some((w) => w.severity === "blocker");
+    const hasConcerns = warnings.some((w) => w.severity === "concern");
+    return (config.autoFollow.blockers && hasBlockers) || (config.autoFollow.concerns && hasConcerns);
+  }
+
+  /** Run steering loop after initial review. Returns final warnings (empty = all fixed). */
+  async function attemptAutoFollow(
+    agentId: string,
+    initialWarnings: WatchdogWarning[],
+    reReview: () => Promise<WatchdogWarning[]>,
+  ): Promise<WatchdogWarning[]> {
+    if (!shouldAutoFollow(initialWarnings)) return initialWarnings;
+
+    let warnings = initialWarnings;
+    let lastKey = warningKey(warnings);
+    let repeatCount = 0;
+
+    for (let attempt = 0; attempt < config.autoFollow.maxAttempts; attempt++) {
+      const steerMsg = [
+        "Watchdog found issues that need fixing:",
+        ...warnings.map((w) => `- [${w.severity}] ${w.summary}: ${w.recommendedAction}`),
+        "",
+        "Please address these issues.",
+      ].join("\n");
+
+      await options!.resumeAgent!(agentId, steerMsg);
+
+      const newWarnings = await reReview();
+      if (newWarnings.length === 0) return [];
+
+      const newKey = warningKey(newWarnings);
+      if (newKey === lastKey) {
+        repeatCount++;
+        if (repeatCount >= config.autoFollow.stalemateRepeats) return newWarnings;
+      } else {
+        repeatCount = 0;
+        lastKey = newKey;
+      }
+      warnings = newWarnings;
+    }
+
+    return warnings;
+  }
+
   async function handleAgentEnd(agentId: string, cwd: string): Promise<WatchdogWarning[]> {
     if (!config.enabled || disposed) return [];
+
+    // Turn-delta mode: review conversation instead of git diff
+    if (!config.reviewChangesOnly) {
+      currentStatus = "reviewing";
+      try {
+        // Re-fetches messages on each call (agent may have new conversation after resume)
+        const runReview = async () => {
+          let turnDelta = "(no conversation data available)";
+          if (options?.getSessionMessages) {
+            const messages = options.getSessionMessages(agentId);
+            if (messages && messages.length > 0) {
+              const { formatWatchdogTurnDelta } = await import("./watchdog-turn-delta.js");
+              turnDelta = formatWatchdogTurnDelta(messages, 10);
+            }
+          }
+          if (options?.runReview) {
+            return options.runReview(turnDelta, "N/A (turn-delta mode)", agentId);
+          }
+          const localSeen = new Set<string>();
+          return runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, localSeen);
+        };
+
+        let warnings = await runReview();
+        warnings = await attemptAutoFollow(agentId, warnings, runReview);
+
+        // Add final warnings to globalSeen for cross-agent dedup
+        for (const w of warnings) globalSeen.add(w.summary.toLowerCase().trim());
+
+        if (warnings.length > 0) options?.onWarnings?.(agentId, warnings);
+        return warnings;
+      } finally {
+        currentStatus = config.enabled && !disposed ? "idle" : "disabled";
+      }
+    }
 
     const signature = computeChangeSignature(cwd);
     if (!signature) return [];
 
     currentStatus = "reviewing";
     try {
-      let diff: string;
-      try {
-        diff = execFileSync("git", ["diff", "--stat", "--patch", "--", ...signature.changedPaths], { cwd, stdio: "pipe", encoding: "utf-8", timeout: 10_000, maxBuffer: 256 * 1024 });
-        if (diff.length > 8192) diff = diff.slice(0, 8192) + "\n... (truncated)";
-      } catch {
-        diff = "(unable to get diff)";
-      }
-
-      let lspOutput = "No LSP issues found";
-      if (config.lsp.enabled) {
+      // Recomputes diff + LSP on each call (required for auto-follow re-reviews)
+      const getFreshDiffAndLsp = async (): Promise<{ diff: string; lspOutput: string }> => {
+        let diff: string;
         try {
-          const { collectLspDiagnostics } = await import("./watchdog-lsp.js");
-          const lspResult = await collectLspDiagnostics(cwd, signature.changedPaths, config.lsp);
-          if (lspResult.diagnostics.length > 0) {
-            lspOutput = lspResult.diagnostics
-              .map((d) => `${d.file}:${d.line} ${d.severity} ${d.code ?? ""}: ${d.message}`)
-              .join("\n");
-          }
+          diff = execFileSync("git", ["diff", "--stat", "--patch", "--", ...signature.changedPaths], { cwd, stdio: "pipe", encoding: "utf-8", timeout: 10_000, maxBuffer: 256 * 1024 });
+          if (diff.length > 8192) diff = diff.slice(0, 8192) + "\n... (truncated)";
         } catch {
-          lspOutput = "LSP diagnostics unavailable";
+          diff = "(unable to get diff)";
         }
-      }
 
-      let warnings: WatchdogWarning[];
-      if (options?.runReview) {
-        warnings = await options.runReview(diff, lspOutput, agentId);
-      } else {
-        warnings = await runDefaultReview(config, diff, lspOutput, agentId, globalSeen);
-      }
+        let lspOutput = "No LSP issues found";
+        if (config.lsp.enabled) {
+          try {
+            const { collectLspDiagnostics } = await import("./watchdog-lsp.js");
+            const lspResult = await collectLspDiagnostics(cwd, signature.changedPaths, config.lsp);
+            if (lspResult.diagnostics.length > 0) {
+              lspOutput = lspResult.diagnostics
+                .map((d) => `${d.file}:${d.line} ${d.severity} ${d.code ?? ""}: ${d.message}`)
+                .join("\n");
+            }
+          } catch {
+            lspOutput = "LSP diagnostics unavailable";
+          }
+        }
+        return { diff, lspOutput };
+      };
+
+      const runReview = async () => {
+        const { diff, lspOutput } = await getFreshDiffAndLsp();
+        if (options?.runReview) {
+          return options.runReview(diff, lspOutput, agentId);
+        }
+        // Use a local seen set so re-reviews don't deduplicate against previous rounds
+        const localSeen = new Set<string>();
+        return runDefaultReview(config, diff, lspOutput, agentId, localSeen);
+      };
+
+      let warnings = await runReview();
+      warnings = await attemptAutoFollow(agentId, warnings, runReview);
+
+      // After auto-follow completes, add final warnings to globalSeen for cross-agent dedup
+      for (const w of warnings) globalSeen.add(w.summary.toLowerCase().trim());
 
       if (warnings.length > 0) {
         options?.onWarnings?.(agentId, warnings);

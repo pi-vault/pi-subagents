@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { AgentManager } from "./core/agent-manager.js";
 import { getAgentConversation } from "./core/agent-runner.js";
@@ -28,6 +28,9 @@ import { checkLocalMemoryGitignore } from "./core/memory.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
 import { createWatchdogRuntime, parseWatchdogConfig } from "./core/watchdog.js";
+import type { WatchdogWarning } from "./core/watchdog.js";
+import { resolveChildWatchdogConfig } from "./core/watchdog-child.js";
+import { formatWatchdogWarningText } from "./core/watchdog-render.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import type { JoinMode, NotificationDetails, WidgetMode } from "./shared/types.js";
 import type { AgentActivity } from "./tui/activity.js";
@@ -123,6 +126,9 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
   // Watchdog: adversarial reviewer at agent-end boundaries
   const watchdogConfig = parseWatchdogConfig(settings.watchdog);
+  // Late-bound: manager is constructed below; callbacks are only invoked async after that
+  let sessionMessageSource: ((agentId: string) => unknown[] | undefined) | undefined;
+  let resumeAgentFn: ((id: string, msg: string) => Promise<void>) | undefined;
   const watchdog = createWatchdogRuntime(watchdogConfig, {
     onWarnings: (agentId, warnings) => {
       for (const w of warnings) {
@@ -132,12 +138,14 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
             customType: "watchdog-warning",
             content,
             display: true,
-            details: { agentId, ...w },
+            details: { agentId, ...w, state: "displayed" },
           } as unknown as Parameters<typeof pi.sendMessage>[0],
           { deliverAs: "followUp", triggerTurn: true },
         );
       }
     },
+    getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
+    resumeAgent: async (agentId, message) => { await resumeAgentFn?.(agentId, message); },
   });
 
   // Intercom: child↔parent communication channel
@@ -189,9 +197,40 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
     // Trigger watchdog review non-blocking after agent completes
     if (watchdog.status() !== "disabled" && record.status === "completed") {
-      watchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd()).catch((err) => {
-        console.error("[watchdog] handleAgentEnd failed:", err);
-      });
+      const childConfig = resolveChildWatchdogConfig(watchdogConfig, record.type);
+      if (childConfig) {
+        // Child-specific review: run with potentially different model/thinking
+        const childOverrideConfig = {
+          ...watchdogConfig,
+          ...(childConfig.model ? { model: childConfig.model } : {}),
+          ...(childConfig.thinking ? { thinking: childConfig.thinking } : {}),
+        };
+        const sendWarning = (agentId: string, w: WatchdogWarning) => {
+          const content = `[watchdog/child/${w.severity}] ${w.summary}\nEvidence: ${w.evidence}\nAction: ${w.recommendedAction}`;
+          (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+            {
+              customType: "watchdog-warning",
+              content,
+              display: true,
+              details: { agentId, ...w, state: "displayed", source: "child" },
+            } as unknown as Parameters<typeof pi.sendMessage>[0],
+            { deliverAs: "followUp", triggerTurn: true },
+          );
+        };
+        const childWatchdog = createWatchdogRuntime(childOverrideConfig, {
+          onWarnings: (agentId, ws) => {
+            for (const w of ws) sendWarning(agentId, w);
+          },
+          getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
+        });
+        childWatchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd())
+          .catch((err) => { console.error("[watchdog/child] handleAgentEnd failed:", err); })
+          .finally(() => { childWatchdog.dispose(); });
+      } else {
+        watchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd()).catch((err) => {
+          console.error("[watchdog] handleAgentEnd failed:", err);
+        });
+      }
     }
 
     // TUI: mark agent finished immediately regardless of notification path
@@ -225,6 +264,15 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
   // Apply spawn limit from config
   manager.setMaxSpawnsPerSession(loadConfig(resolvePaths()).config.maxSpawnsPerSession);
+
+  // Wire session message source for watchdog turn-delta mode (late-bound, manager now exists)
+  sessionMessageSource = (agentId) => {
+    const record = manager.getRecord(agentId);
+    if (!record?.session) return undefined;
+    return (record.session as { messages?: unknown[] }).messages;
+  };
+  // Wire resume agent for watchdog auto-follow steering
+  resumeAgentFn = async (id, msg) => { await manager.resume(id, msg); };
 
   function sendNudge(record: Parameters<typeof formatTaskNotification>[0]): void {
     const notification = formatTaskNotification(record);
@@ -341,34 +389,71 @@ export function registerSubagentsExtension(
     );
   });
 
+  // Watchdog warning renderer with severity colors and state labels
+  pi.registerMessageRenderer("watchdog-warning", (msg, opts, theme) => {
+    const d = (msg as { details?: {
+      severity?: string; summary?: string; evidence?: string;
+      recommendedAction?: string; category?: string; state?: string;
+      autoFollowAttempt?: number; agentId?: string;
+    } }).details;
+    const fallback = typeof (msg as { content?: string }).content === "string"
+      ? (msg as { content: string }).content : "";
+    if (!d?.summary) return new Text(fallback, 0, 0);
+    const t = theme as {
+      fg: (color: string, text: string) => string;
+      bold: (text: string) => string;
+    };
+    const parts = formatWatchdogWarningText(d as Parameters<typeof formatWatchdogWarningText>[0]);
+    const header = t.fg(parts.color, t.bold(parts.header));
+    const container = new Container();
+    container.addChild(new Text(header, 0, 0));
+    if (opts.expanded) {
+      container.addChild(new Spacer(1));
+      container.addChild(new Text(t.fg("dim", parts.evidenceLine), 0, 0));
+      container.addChild(new Text(t.fg("dim", parts.actionLine), 0, 0));
+      container.addChild(new Text(t.fg("dim", parts.categoryLine), 0, 0));
+    } else if (d.evidence) {
+      container.addChild(new Text(t.fg("dim", `  \u23BF  ${parts.evidenceLine}`), 0, 0));
+    }
+    return container;
+  });
+
   registerSubagentTool(pi, deps);
   registerAgentCommand(pi, deps);
   registerChainCommands(pi, deps);
   registerPromptWorkflowCommands(pi, deps);
 
-  // Watchdog slash command: /watchdog [status|on|off]
+  // Watchdog slash command: /watchdog [status|off|recommend-model]
   pi.registerCommand("watchdog", {
-    description: "Watchdog control: status, off",
+    description: "Watchdog control: status, off, recommend-model",
     handler: async (args) => {
       const sub = args.trim().toLowerCase();
+      const sendMsg = (content: string) =>
+        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+          { customType: "notification", content, display: true } as unknown as Parameters<typeof pi.sendMessage>[0],
+        );
+
       if (sub === "off") {
         deps.watchdog?.dispose();
-        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
-          {
-            customType: "notification",
-            content: "Watchdog disabled for this session.",
-            display: true,
-          } as unknown as Parameters<typeof pi.sendMessage>[0],
+        sendMsg("Watchdog disabled for this session.");
+      } else if (sub === "recommend-model") {
+        const { recommendWatchdogModel, detectProviderFamily } = await import("./core/watchdog-model-selection.js");
+        const currentFamily = detectProviderFamily(
+          capturedCurrentModel?.provider,
+          capturedCurrentModel?.id,
         );
+        const rec = recommendWatchdogModel(currentFamily);
+        sendMsg([
+          `Recommended watchdog model: ${rec.model}`,
+          `Thinking level: ${rec.thinking}`,
+          `Reason: ${rec.reason}`,
+          ``,
+          `To apply, add to .pi/subagents.json:`,
+          `  "watchdog": { "model": "${rec.model}", "thinking": "${rec.thinking}" }`,
+        ].join("\n"));
       } else {
         const st = deps.watchdog?.status() ?? "not initialized";
-        (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
-          {
-            customType: "notification",
-            content: `Watchdog status: ${st}`,
-            display: true,
-          } as unknown as Parameters<typeof pi.sendMessage>[0],
-        );
+        sendMsg(`Watchdog status: ${st}`);
       }
     },
   });
@@ -515,6 +600,7 @@ export function registerSubagentsExtension(
     getAll: () => Array<{ id: string; provider: string; name?: string }>;
     find: (provider: string, id: string) => { id: string; provider: string } | undefined;
   } | undefined;
+  let capturedCurrentModel: { provider?: string; id?: string } | undefined;
 
   // RPC handlers for cross-extension communication
   const rpcDispose = registerRpcHandlers(
@@ -532,6 +618,7 @@ export function registerSubagentsExtension(
     deps.fleet?.setUICtx(ctx.ui as unknown as FleetUICtx);
     deps.widget?.onTurnStart();
     capturedModelRegistry = (ctx as { modelRegistry?: typeof capturedModelRegistry }).modelRegistry;
+    capturedCurrentModel = (ctx as { model?: typeof capturedCurrentModel }).model;
   });
 
   // Cleanup on session shutdown

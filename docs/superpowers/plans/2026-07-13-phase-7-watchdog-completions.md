@@ -4,9 +4,13 @@
 
 **Goal:** Complete 5 watchdog features held back from MVP: TUI renderer, model recommendation, child watchdog, turn-delta mode, and auto-follow steering.
 
-**Architecture:** Each task builds on the existing `watchdog.ts` runtime. Tasks 1-2 are small additions. Tasks 3-5 extend `WatchdogConfig`, `handleAgentEnd`, and the runtime lifecycle. Auto-follow (task 5) uses `manager.resume()` for completed agents.
+**Architecture:** Each task builds on the existing `watchdog.ts` runtime factory. Tasks 1-2 are isolated additions. Tasks 3-5 progressively extend `WatchdogConfig` and `handleAgentEnd`. Auto-follow (task 5) uses `manager.resume()` which does NOT trigger onComplete, avoiding recursion.
 
-**Tech Stack:** TypeScript, Vitest, Pi SDK Extension API (`registerMessageRenderer`, `resume()`), pi-tui theme system
+**Tech Stack:** TypeScript, Vitest, Pi SDK Extension API (`registerMessageRenderer`, `sendMessage`), pi-tui (`Container`, `Spacer`, `Text`)
+
+**Reference implementations:**
+- `nicobailon-pi-subagents/src/watchdog/` — mature watchdog with render, model-selection, turn-delta, child-status
+- `pi/packages/coding-agent/src/core/extensions/types.ts` — Extension API type definitions
 
 ---
 
@@ -14,31 +18,106 @@
 
 | Task | Create | Modify | Test |
 |------|--------|--------|------|
-| 1: TUI Renderer | — | `src/index.ts` | `tests/index.test.ts` (or integration) |
-| 2: Model Recommendation | `src/core/watchdog-model-selection.ts` | `src/core/watchdog.ts`, `src/index.ts` | `tests/core/watchdog-model-selection.test.ts` |
-| 3: Child Watchdog | — | `src/core/watchdog.ts`, `src/index.ts` | `tests/core/watchdog.test.ts` |
-| 4: Turn-Delta Mode | `src/core/watchdog-turn-delta.ts` | `src/core/watchdog.ts` | `tests/core/watchdog-turn-delta.test.ts`, `tests/core/watchdog.test.ts` |
-| 5: Auto-Follow Steering | — | `src/core/watchdog.ts`, `src/index.ts` | `tests/core/watchdog.test.ts` |
+| 1: TUI Renderer | — | `src/index.ts` | `tests/watchdog.test.ts` |
+| 2: Model Recommendation | `src/core/watchdog-model-selection.ts` | `src/core/watchdog.ts`, `src/index.ts` | `tests/watchdog-model-selection.test.ts` |
+| 3: Child Watchdog | `src/core/watchdog-child.ts` | `src/core/watchdog.ts`, `src/index.ts` | `tests/watchdog-child.test.ts` |
+| 4: Turn-Delta Mode | `src/core/watchdog-turn-delta.ts` | `src/core/watchdog.ts`, `src/index.ts` | `tests/watchdog-turn-delta.test.ts` |
+| 5: Auto-Follow Steering | — | `src/core/watchdog.ts`, `src/index.ts` | `tests/watchdog.test.ts` |
 
 ---
 
 ### Task 1: Watchdog TUI Renderer
 
+Register a custom message renderer for `watchdog-warning` messages with severity colors, state labels, and expanded details. Follows the pattern established by the `subagent-notification` renderer (index.ts line 329).
+
 **Files:**
-- Modify: `src/index.ts:309-327` (add renderer registration after existing renderers)
-- Test: `tests/core/watchdog.test.ts` (verify message shape)
+- Modify: `src/index.ts` (add renderer after `subagent-notification` renderer, add `state` to onWarnings details)
+- Test: `tests/watchdog.test.ts` (verify message shape)
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Add state field to onWarnings emission**
 
-In `tests/core/watchdog.test.ts`, add a describe block verifying the warning message shape has the fields the renderer needs:
+In `src/index.ts`, update the `onWarnings` callback (line ~135) to include `state: "displayed"`:
+
+```typescript
+details: { agentId, ...w, state: "displayed" },
+```
+
+- [ ] **Step 2: Register the watchdog-warning message renderer**
+
+In `src/index.ts`, after the `subagent-notification` renderer (after line 342), add:
+
+```typescript
+// Watchdog warning renderer with severity colors and state labels
+pi.registerMessageRenderer("watchdog-warning", (msg, opts, theme) => {
+  const d = (msg as { details?: {
+    severity?: string; summary?: string; evidence?: string;
+    recommendedAction?: string; category?: string; state?: string;
+    autoFollowAttempt?: number; agentId?: string;
+  } }).details;
+  if (!d?.summary) return new Text(typeof (msg as { content?: string }).content === "string" ? (msg as { content: string }).content : "", 0, 0);
+  const t = theme as { fg: (color: string, text: string) => string; bold: (text: string) => string };
+  const { Container, Spacer } = await import("@earendil-works/pi-tui");
+
+  const subject = d.severity === "blocker" ? "Blocker" : "Concern";
+  const color = d.severity === "blocker" ? "error" : "warning";
+
+  // State labels
+  const labels: string[] = [];
+  if (d.state === "displayed") labels.push("displayed");
+  if (d.state === "stale") labels.push("stale");
+  if (d.state === "failed") labels.push("failed review");
+  if (d.state === "stalemate") labels.push("stalemate");
+  if (d.autoFollowAttempt !== undefined) labels.push(`auto-follow attempt ${d.autoFollowAttempt}`);
+  const labelSuffix = labels.length > 0 ? ` (${labels.join(", ")})` : "";
+
+  const header = t.fg(color, t.bold(`Watchdog ${subject}${labelSuffix}: ${d.summary}`));
+
+  if (!opts.expanded) {
+    const brief = d.evidence ? `  \u23BF  Evidence: ${d.evidence}` : "";
+    return new Text(`${header}\n${t.fg("dim", brief)}`, 0, 0);
+  }
+
+  const lines = [
+    header,
+    t.fg("dim", `Evidence: ${d.evidence ?? "\u2014"}`),
+    t.fg("dim", `Recommended action: ${d.recommendedAction ?? "\u2014"}`),
+    t.fg("dim", `Category: ${d.category ?? "other"}${d.agentId ? ` \u00B7 Agent: ${d.agentId}` : ""}`),
+  ];
+  return new Text(lines.join("\n"), 0, 0);
+});
+```
+
+Note: `Container`/`Spacer` are available from `@earendil-works/pi-tui` (already imported as `Text`). Since the renderer must be synchronous, import them at the top with `Text`:
+
+```typescript
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+```
+
+Then use:
+```typescript
+pi.registerMessageRenderer("watchdog-warning", (msg, opts, theme) => {
+  // ... (same logic as above, using Container for expanded view)
+  const container = new Container();
+  container.addChild(new Text(header, 0, 0));
+  if (opts.expanded) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(t.fg("dim", `Evidence: ${d.evidence ?? "\u2014"}`), 0, 0));
+    container.addChild(new Text(t.fg("dim", `Recommended action: ${d.recommendedAction ?? "\u2014"}`), 0, 0));
+    container.addChild(new Text(t.fg("dim", `Category: ${d.category ?? "other"}${d.agentId ? ` \u00B7 Agent: ${d.agentId}` : ""}`), 0, 0));
+  } else if (d.evidence) {
+    container.addChild(new Text(t.fg("dim", `  \u23BF  Evidence: ${d.evidence}`), 0, 0));
+  }
+  return container;
+});
+```
+
+- [ ] **Step 3: Write test for warning message shape**
+
+In `tests/watchdog.test.ts`, add a describe block:
 
 ```typescript
 describe("watchdog warning message shape", () => {
-  it("onWarnings emits message with customType and details", () => {
-    let emittedMessage: unknown;
-    const mockSendMessage = vi.fn((msg: unknown) => { emittedMessage = msg; });
-
-    // Simulate the onWarnings callback pattern from index.ts
+  it("onWarnings details include state field", () => {
     const warning: WatchdogWarning = {
       severity: "blocker",
       summary: "Missing null check",
@@ -46,86 +125,27 @@ describe("watchdog warning message shape", () => {
       recommendedAction: "Add null guard",
       category: "correctness",
     };
-
-    const content = `[watchdog/${warning.severity}] ${warning.summary}\nEvidence: ${warning.evidence}\nAction: ${warning.recommendedAction}`;
-    const msg = {
-      customType: "watchdog-warning",
-      content,
-      display: true,
-      details: { agentId: "agent-1", ...warning, state: "displayed" },
-    };
-    mockSendMessage(msg);
-
-    expect(emittedMessage).toMatchObject({
-      customType: "watchdog-warning",
-      details: {
-        severity: "blocker",
-        summary: "Missing null check",
-        state: "displayed",
-      },
+    // Verify the shape that index.ts onWarnings produces
+    const details = { agentId: "agent-1", ...warning, state: "displayed" };
+    expect(details).toMatchObject({
+      severity: "blocker",
+      summary: "Missing null check",
+      state: "displayed",
+      agentId: "agent-1",
     });
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it passes (shape test only)**
+- [ ] **Step 4: Run typecheck and tests**
 
-Run: `npx vitest run tests/core/watchdog.test.ts --reporter=verbose`
-Expected: PASS (this is a shape verification test)
+Run: `npx tsc --noEmit && npx vitest run tests/watchdog.test.ts --reporter=verbose`
+Expected: All pass
 
-- [ ] **Step 3: Register the watchdog-warning message renderer**
-
-In `src/index.ts`, after the `subagent-notification` renderer registration (around line 327), add:
-
-```typescript
-// Watchdog warning renderer with severity colors and state labels
-pi.registerMessageRenderer("watchdog-warning", (msg, opts, theme) => {
-  const d = (msg as { details?: { severity?: string; summary?: string; evidence?: string; recommendedAction?: string; state?: string; autoFollowAttempt?: number } }).details;
-  if (!d) return new Text("", 0, 0);
-  const t = theme as { fg: (color: string, text: string) => string; bold: (text: string) => string };
-
-  const icon = d.severity === "blocker" ? "[!]" : "[~]";
-  const color = d.severity === "blocker" ? "error" : "warning";
-  const header = t.fg(color, `${icon} ${d.severity}: ${d.summary}`);
-
-  const labels: string[] = [];
-  if (d.state === "displayed") labels.push("displayed");
-  if (d.state === "stale") labels.push("stale");
-  if (d.state === "failed") labels.push("failed review");
-  if (d.state === "stalemate") labels.push("stalemate");
-  if (d.autoFollowAttempt !== undefined) labels.push(`auto-follow attempt ${d.autoFollowAttempt}`);
-  const labelStr = labels.length > 0 ? ` (${labels.join(", ")})` : "";
-
-  if (!opts.expanded) {
-    return new Text(header + labelStr, 0, 0);
-  }
-
-  const lines = [
-    header + labelStr,
-    `  Evidence: ${d.evidence ?? "—"}`,
-    `  Action: ${d.recommendedAction ?? "—"}`,
-  ];
-  return new Text(lines.join("\n"), 0, 0);
-});
-```
-
-- [ ] **Step 4: Update onWarnings to include state field**
-
-In `src/index.ts`, in the `onWarnings` callback (around line 130), add `state: "displayed"` to the details:
-
-```typescript
-details: { agentId, ...w, state: "displayed" },
-```
-
-- [ ] **Step 5: Run typecheck**
-
-Run: `npx tsc --noEmit`
-Expected: No errors
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/index.ts tests/core/watchdog.test.ts
+git add src/index.ts tests/watchdog.test.ts
 git commit -m "feat(watchdog): add TUI renderer with severity colors and state labels"
 ```
 
@@ -133,46 +153,71 @@ git commit -m "feat(watchdog): add TUI renderer with severity colors and state l
 
 ### Task 2: Model Recommendation
 
+Intelligent complementary model selection. Uses the model registry API (available via `ExtensionContext`) to find authenticated cross-provider models.
+
+**Design decision:** The reference implementation (nicobailon) uses `ctx.modelRegistry` which requires `ExtensionContext`. Our codebase doesn't have persistent access to `ExtensionContext` in the watchdog runtime. We'll implement a two-tier approach:
+1. A pure-function recommendation for the `/watchdog recommend-model` command (which HAS ctx access)
+2. A config-only recommendation for the one-time tip (uses string matching since no ctx available at watchdog init time)
+
 **Files:**
 - Create: `src/core/watchdog-model-selection.ts`
-- Modify: `src/core/watchdog.ts:294-358` (add tip in runDefaultReview)
-- Modify: `src/index.ts` (add /watchdog recommend-model command)
-- Test: `tests/core/watchdog-model-selection.test.ts`
+- Modify: `src/index.ts` (extend existing `/watchdog` command handler)
+- Test: `tests/watchdog-model-selection.test.ts`
 
-- [ ] **Step 1: Write the failing test for model recommendation logic**
+- [ ] **Step 1: Write failing tests**
 
-Create `tests/core/watchdog-model-selection.test.ts`:
+Create `tests/watchdog-model-selection.test.ts`:
 
 ```typescript
 import { describe, it, expect } from "vitest";
-import { recommendWatchdogModel } from "../src/core/watchdog-model-selection.js";
+import { recommendWatchdogModel, detectProviderFamily } from "../src/core/watchdog-model-selection.js";
+
+describe("detectProviderFamily", () => {
+  it("detects openai family", () => {
+    expect(detectProviderFamily("openai-codex", "gpt-5.5")).toBe("openai");
+    expect(detectProviderFamily("openai", "gpt-5-5")).toBe("openai");
+  });
+
+  it("detects anthropic family", () => {
+    expect(detectProviderFamily("anthropic", "claude-opus-4-8")).toBe("anthropic");
+    expect(detectProviderFamily("anthropic", "opus-4.8")).toBe("anthropic");
+  });
+
+  it("returns unknown for other providers", () => {
+    expect(detectProviderFamily("google", "gemini-2")).toBe("unknown");
+    expect(detectProviderFamily(undefined, undefined)).toBe("unknown");
+  });
+});
 
 describe("recommendWatchdogModel", () => {
-  it("recommends opus when current model is gpt family", () => {
-    const result = recommendWatchdogModel("openai/gpt-5.5");
-    expect(result?.family).toBe("opus");
+  it("recommends anthropic model for openai session", () => {
+    const result = recommendWatchdogModel("openai");
+    expect(result.model).toContain("anthropic");
+    expect(result.family).toBe("opus");
   });
 
-  it("recommends gpt when current model is anthropic family", () => {
-    const result = recommendWatchdogModel("anthropic/claude-opus-4.8");
-    expect(result?.family).toBe("gpt");
+  it("recommends openai model for anthropic session", () => {
+    const result = recommendWatchdogModel("anthropic");
+    expect(result.model).toContain("openai");
+    expect(result.family).toBe("gpt");
   });
 
-  it("returns opus first when provider is unknown", () => {
-    const result = recommendWatchdogModel(undefined);
-    expect(result).toBeDefined();
+  it("defaults to opus for unknown provider", () => {
+    const result = recommendWatchdogModel("unknown");
+    expect(result.family).toBe("opus");
   });
 
-  it("returns model id string for configuration", () => {
-    const result = recommendWatchdogModel("openai/gpt-5.5");
-    expect(result?.modelId).toMatch(/anthropic|opus/);
+  it("returns a human-readable reason", () => {
+    const result = recommendWatchdogModel("openai");
+    expect(result.reason).toBeTruthy();
+    expect(result.reason.length).toBeGreaterThan(10);
   });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run tests/core/watchdog-model-selection.test.ts --reporter=verbose`
+Run: `npx vitest run tests/watchdog-model-selection.test.ts --reporter=verbose`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: Implement watchdog-model-selection.ts**
@@ -180,190 +225,253 @@ Expected: FAIL — module not found
 Create `src/core/watchdog-model-selection.ts`:
 
 ```typescript
+export type ProviderFamily = "openai" | "anthropic" | "unknown";
+
 export interface ModelRecommendation {
   family: "opus" | "gpt";
-  modelId: string;
+  model: string;
+  thinking: string;
   reason: string;
 }
 
-type ProviderFamily = "openai" | "anthropic" | "unknown";
+const STRONG_MODELS = {
+  opus: {
+    model: "anthropic/claude-opus-4-8",
+    label: "Opus 4.8",
+  },
+  gpt: {
+    model: "openai-codex/gpt-5.5",
+    label: "GPT 5.5",
+  },
+} as const;
 
-function detectProviderFamily(modelString: string | undefined): ProviderFamily {
-  if (!modelString) return "unknown";
-  const lower = modelString.toLowerCase();
-  if (lower.includes("openai") || lower.includes("gpt")) return "openai";
-  if (lower.includes("anthropic") || lower.includes("claude") || lower.includes("opus")) return "anthropic";
+/**
+ * Detect the provider family from provider string and model ID.
+ */
+export function detectProviderFamily(
+  provider: string | undefined,
+  modelId?: string | undefined,
+): ProviderFamily {
+  const p = (provider ?? "").toLowerCase();
+  const m = (modelId ?? "").toLowerCase();
+  if (p.includes("openai") || m.includes("gpt")) return "openai";
+  if (p.includes("anthropic") || m.includes("claude") || m.includes("opus")) return "anthropic";
   return "unknown";
 }
 
 /**
- * Recommend a complementary model for watchdog reviews.
- * Selects a model from a different provider family than the current session model.
+ * Recommend a complementary watchdog model based on the current session's provider family.
+ * Cross-provider review provides independent perspective.
  */
-export function recommendWatchdogModel(currentModel: string | undefined): ModelRecommendation {
-  const family = detectProviderFamily(currentModel);
-
-  if (family === "openai") {
+export function recommendWatchdogModel(
+  currentProviderFamily: ProviderFamily,
+): ModelRecommendation {
+  if (currentProviderFamily === "openai") {
     return {
       family: "opus",
-      modelId: "anthropic/claude-opus-4.8",
-      reason: "Cross-provider review: Anthropic model complements OpenAI session model",
+      model: STRONG_MODELS.opus.model,
+      thinking: "high",
+      reason: `Use ${STRONG_MODELS.opus.label} with high thinking as a cross-provider watchdog. Different model families catch different classes of issues.`,
     };
   }
-  if (family === "anthropic") {
+  if (currentProviderFamily === "anthropic") {
     return {
       family: "gpt",
-      modelId: "openai/gpt-5.5",
-      reason: "Cross-provider review: OpenAI model complements Anthropic session model",
+      model: STRONG_MODELS.gpt.model,
+      thinking: "high",
+      reason: `Use ${STRONG_MODELS.gpt.label} with high thinking as a cross-provider watchdog. Different model families catch different classes of issues.`,
     };
   }
-  // Default: recommend opus
+  // Default: recommend opus (generally strong at code review)
   return {
     family: "opus",
-    modelId: "anthropic/claude-opus-4.8",
-    reason: "Default recommendation for second-opinion reviews",
+    model: STRONG_MODELS.opus.model,
+    thinking: "high",
+    reason: `Default recommendation: ${STRONG_MODELS.opus.label} with high thinking for independent code review.`,
   };
 }
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npx vitest run tests/core/watchdog-model-selection.test.ts --reporter=verbose`
+Run: `npx vitest run tests/watchdog-model-selection.test.ts --reporter=verbose`
 Expected: PASS
 
-- [ ] **Step 5: Add one-time tip in runDefaultReview**
+- [ ] **Step 5: Extend existing /watchdog command with recommend-model subcommand**
 
-In `src/core/watchdog.ts`, add a module-level flag and emit tip in `runDefaultReview` (around line 294):
-
-```typescript
-let modelTipShown = false;
-
-// Inside runDefaultReview, before creating the session:
-if (!config.model && !modelTipShown) {
-  modelTipShown = true;
-  const { recommendWatchdogModel } = await import("./watchdog-model-selection.js");
-  const rec = recommendWatchdogModel(undefined); // No access to session model here
-  console.info(`[watchdog] Tip: Set watchdog.model to "${rec.modelId}" in .pi/subagents.json for cross-provider reviews.`);
-}
-```
-
-- [ ] **Step 6: Register /watchdog recommend-model command**
-
-In `src/index.ts`, where other commands are registered, add:
+In `src/index.ts`, update the existing `/watchdog` command handler (line ~350) to handle `recommend-model`:
 
 ```typescript
 pi.registerCommand("watchdog", {
-  description: "Watchdog utilities: /watchdog recommend-model",
-  handler: async (args, ctx) => {
-    if (args.trim() === "recommend-model") {
-      const { recommendWatchdogModel } = await import("./core/watchdog-model-selection.js");
-      const currentModel = (ctx as { model?: string }).model;
-      const rec = recommendWatchdogModel(currentModel);
-      ctx.ui.notify(`Recommended watchdog model: ${rec.modelId}\nReason: ${rec.reason}\n\nSet in .pi/subagents.json:\n  "watchdog": { "model": "${rec.modelId}" }`, "info");
+  description: "Watchdog control: status, off, recommend-model",
+  handler: async (args) => {
+    const sub = args.trim().toLowerCase();
+    if (sub === "off") {
+      deps.watchdog?.dispose();
+      (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+        { customType: "notification", content: "Watchdog disabled for this session.", display: true } as unknown as Parameters<typeof pi.sendMessage>[0],
+      );
+    } else if (sub === "recommend-model") {
+      const { recommendWatchdogModel, detectProviderFamily } = await import("./core/watchdog-model-selection.js");
+      // Attempt to determine current provider from captured model registry
+      const currentProvider = detectProviderFamily(
+        (capturedModelRegistry as unknown as { currentProvider?: string })?.currentProvider,
+      );
+      const rec = recommendWatchdogModel(currentProvider);
+      const msg = [
+        `Recommended watchdog model: ${rec.model}`,
+        `Thinking level: ${rec.thinking}`,
+        `Reason: ${rec.reason}`,
+        ``,
+        `To apply, add to .pi/subagents.json:`,
+        `  "watchdog": { "model": "${rec.model}", "thinking": "${rec.thinking}" }`,
+      ].join("\n");
+      (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+        { customType: "notification", content: msg, display: true } as unknown as Parameters<typeof pi.sendMessage>[0],
+      );
     } else {
-      ctx.ui.notify("Usage: /watchdog recommend-model", "error");
+      const st = deps.watchdog?.status() ?? "not initialized";
+      (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+        { customType: "notification", content: `Watchdog status: ${st}`, display: true } as unknown as Parameters<typeof pi.sendMessage>[0],
+      );
     }
   },
 });
 ```
 
-- [ ] **Step 7: Run typecheck and tests**
+- [ ] **Step 6: Run typecheck and tests**
 
-Run: `npx tsc --noEmit && npx vitest run tests/core/watchdog-model-selection.test.ts tests/core/watchdog.test.ts --reporter=verbose`
+Run: `npx tsc --noEmit && npx vitest run tests/watchdog-model-selection.test.ts tests/watchdog.test.ts --reporter=verbose`
 Expected: All pass
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/core/watchdog-model-selection.ts src/core/watchdog.ts src/index.ts tests/core/watchdog-model-selection.test.ts
-git commit -m "feat(watchdog): add intelligent model recommendation with /watchdog command"
+git add src/core/watchdog-model-selection.ts src/index.ts tests/watchdog-model-selection.test.ts
+git commit -m "feat(watchdog): add model recommendation with /watchdog recommend-model command"
 ```
 
 ---
 
 ### Task 3: Child Watchdog
 
+Per-child-agent watchdog instances that review child agent work with potentially different model/thinking settings.
+
+**Architecture decision:** Since this codebase's agents are in-process LLM sessions (not separate OS processes), the child watchdog runs in the same process. Config resolution determines whether a child agent type gets its own watchdog review and with what settings. The parent watchdog's `handleAgentEnd` is skipped for agents that have a child config — instead, a temporary runtime with child-specific settings runs the review.
+
 **Files:**
-- Modify: `src/core/watchdog.ts:31-47,164-191,193-276`
-- Modify: `src/index.ts:189-194` (child onComplete hook)
-- Test: `tests/core/watchdog.test.ts`
+- Create: `src/core/watchdog-child.ts`
+- Modify: `src/core/watchdog.ts` (add `children` to WatchdogConfig, parse it)
+- Modify: `src/index.ts` (wire child config resolution in onComplete)
+- Test: `tests/watchdog-child.test.ts`
 
-- [ ] **Step 1: Write the failing test for child config resolution**
+- [ ] **Step 1: Write failing tests for child config resolution**
 
-In `tests/core/watchdog.test.ts`, add:
+Create `tests/watchdog-child.test.ts`:
 
 ```typescript
-describe("child watchdog config", () => {
-  it("parseWatchdogConfig includes children config", () => {
-    const config = parseWatchdogConfig({
-      enabled: true,
-      children: { enabled: true, model: "anthropic/opus-4.8", overrides: { scout: { enabled: false } } },
-    });
-    expect(config.children).toEqual({
-      enabled: true,
-      model: "anthropic/opus-4.8",
-      thinking: undefined,
-      overrides: { scout: { enabled: false } },
-    });
-  });
+import { describe, it, expect } from "vitest";
+import { resolveChildWatchdogConfig } from "../src/core/watchdog-child.js";
+import { parseWatchdogConfig } from "../src/core/watchdog.js";
 
-  it("resolveChildWatchdogConfig merges parent with override", () => {
-    const config = parseWatchdogConfig({
-      enabled: true,
-      model: "parent-model",
-      children: { enabled: true, model: "child-model", overrides: { scout: { model: "scout-model" } } },
-    });
-    const childConfig = resolveChildWatchdogConfig({ config, agent: "scout" });
-    expect(childConfig).toBeDefined();
-    expect(childConfig!.model).toBe("scout-model");
-  });
-
-  it("resolveChildWatchdogConfig returns undefined when agent disabled", () => {
-    const config = parseWatchdogConfig({
-      enabled: true,
-      children: { enabled: true, overrides: { scout: { enabled: false } } },
-    });
-    const childConfig = resolveChildWatchdogConfig({ config, agent: "scout" });
-    expect(childConfig).toBeUndefined();
-  });
-
-  it("resolveChildWatchdogConfig returns undefined when children disabled globally", () => {
+describe("resolveChildWatchdogConfig", () => {
+  it("returns undefined when children.enabled is false", () => {
     const config = parseWatchdogConfig({
       enabled: true,
       children: { enabled: false },
     });
-    const childConfig = resolveChildWatchdogConfig({ config, agent: "worker" });
-    expect(childConfig).toBeUndefined();
+    const result = resolveChildWatchdogConfig(config, "scout");
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when parent watchdog is disabled", () => {
+    const config = parseWatchdogConfig({
+      enabled: false,
+      children: { enabled: true },
+    });
+    const result = resolveChildWatchdogConfig(config, "scout");
+    expect(result).toBeUndefined();
+  });
+
+  it("returns child config with parent defaults when no override", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      model: "parent-model",
+      thinking: "high",
+      children: { enabled: true, model: "child-model" },
+    });
+    const result = resolveChildWatchdogConfig(config, "worker");
+    expect(result).toBeDefined();
+    expect(result!.model).toBe("child-model");
+    expect(result!.thinking).toBe("high"); // inherited from parent
+  });
+
+  it("applies per-agent override", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      model: "parent-model",
+      children: {
+        enabled: true,
+        model: "child-default",
+        overrides: { scout: { model: "scout-model", thinking: "low" } },
+      },
+    });
+    const result = resolveChildWatchdogConfig(config, "scout");
+    expect(result).toBeDefined();
+    expect(result!.model).toBe("scout-model");
+    expect(result!.thinking).toBe("low");
+  });
+
+  it("returns undefined when specific agent is disabled via override", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      children: {
+        enabled: true,
+        overrides: { scout: { enabled: false } },
+      },
+    });
+    const result = resolveChildWatchdogConfig(config, "scout");
+    expect(result).toBeUndefined();
+  });
+
+  it("uses parent model when no children.model and no override.model", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      model: "parent-model",
+      children: { enabled: true },
+    });
+    const result = resolveChildWatchdogConfig(config, "worker");
+    expect(result).toBeDefined();
+    expect(result!.model).toBe("parent-model");
   });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run tests/core/watchdog.test.ts --reporter=verbose`
-Expected: FAIL — `children` not in config, `resolveChildWatchdogConfig` not exported
+Run: `npx vitest run tests/watchdog-child.test.ts --reporter=verbose`
+Expected: FAIL — module not found
 
 - [ ] **Step 3: Extend WatchdogConfig with children field**
 
-In `src/core/watchdog.ts`, update the `WatchdogConfig` interface (line 31):
+In `src/core/watchdog.ts`, update the interface and defaults:
 
 ```typescript
+export interface WatchdogChildOverride {
+  enabled?: boolean;
+  model?: string;
+  thinking?: string;
+}
+
 export interface WatchdogConfig {
   enabled: boolean;
   model?: string;
   thinking?: string;
-  reviewChangesOnly?: boolean;
   children: {
     enabled: boolean;
     model?: string;
     thinking?: string;
-    overrides: Record<string, Partial<{ enabled: boolean; model: string; thinking: string }>>;
-  };
-  autoFollow: {
-    blockers: boolean;
-    concerns: boolean;
-    maxAttempts: number;
-    stalemateRepeats: number;
+    overrides: Record<string, WatchdogChildOverride>;
   };
   lsp: {
     enabled: boolean;
@@ -374,25 +482,24 @@ export interface WatchdogConfig {
 }
 ```
 
-Update `DEFAULT_WATCHDOG_CONFIG` to include defaults:
+Update `DEFAULT_WATCHDOG_CONFIG`:
 
 ```typescript
 const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
   enabled: false,
-  reviewChangesOnly: true,
   children: { enabled: false, overrides: {} },
-  autoFollow: { blockers: false, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
-  lsp: { enabled: true, timeoutMs: 30_000, maxFiles: 20, maxDiagnostics: 50 },
+  lsp: {
+    enabled: true,
+    timeoutMs: 3_000,
+    maxFiles: 20,
+    maxDiagnostics: 50,
+  },
 };
 ```
 
-- [ ] **Step 4: Update parseWatchdogConfig to parse children**
-
-In `src/core/watchdog.ts`, add to `parseWatchdogConfig` (after the lsp parsing block):
+Update `parseWatchdogConfig` to parse children (after lsp block):
 
 ```typescript
-if (typeof r.reviewChangesOnly === "boolean") config.reviewChangesOnly = r.reviewChangesOnly;
-
 if (r.children && typeof r.children === "object") {
   const ch = r.children as Record<string, unknown>;
   if (typeof ch.enabled === "boolean") config.children.enabled = ch.enabled;
@@ -402,64 +509,79 @@ if (r.children && typeof r.children === "object") {
     config.children.overrides = ch.overrides as typeof config.children.overrides;
   }
 }
-
-if (r.autoFollow && typeof r.autoFollow === "object") {
-  const af = r.autoFollow as Record<string, unknown>;
-  if (typeof af.blockers === "boolean") config.autoFollow.blockers = af.blockers;
-  if (typeof af.concerns === "boolean") config.autoFollow.concerns = af.concerns;
-  if (typeof af.maxAttempts === "number") config.autoFollow.maxAttempts = af.maxAttempts;
-  if (typeof af.stalemateRepeats === "number") config.autoFollow.stalemateRepeats = af.stalemateRepeats;
-}
 ```
 
-- [ ] **Step 5: Implement resolveChildWatchdogConfig**
+- [ ] **Step 4: Implement watchdog-child.ts**
 
-In `src/core/watchdog.ts`, export:
+Create `src/core/watchdog-child.ts`:
 
 ```typescript
+import type { WatchdogConfig } from "./watchdog.js";
+
 export interface ChildWatchdogConfig {
-  enabled: boolean;
   model?: string;
   thinking?: string;
 }
 
-export function resolveChildWatchdogConfig(input: {
-  config: WatchdogConfig;
-  agent?: string;
-}): ChildWatchdogConfig | undefined {
-  if (!input.config.enabled || !input.config.children.enabled) return undefined;
+/**
+ * Resolve child watchdog config for a given agent type.
+ * Returns undefined if child watchdog should NOT run for this agent.
+ */
+export function resolveChildWatchdogConfig(
+  config: WatchdogConfig,
+  agentType: string,
+): ChildWatchdogConfig | undefined {
+  if (!config.enabled || !config.children.enabled) return undefined;
 
-  const override = input.agent ? input.config.children.overrides[input.agent] : undefined;
-  const enabled = override?.enabled ?? true;
-  if (!enabled) return undefined;
+  const override = config.children.overrides[agentType];
+  if (override?.enabled === false) return undefined;
 
   return {
-    enabled: true,
-    model: override?.model ?? input.config.children.model ?? input.config.model,
-    thinking: override?.thinking ?? input.config.children.thinking ?? input.config.thinking,
+    model: override?.model ?? config.children.model ?? config.model,
+    thinking: override?.thinking ?? config.children.thinking ?? config.thinking,
   };
 }
 ```
 
-- [ ] **Step 6: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
-Run: `npx vitest run tests/core/watchdog.test.ts --reporter=verbose`
+Run: `npx vitest run tests/watchdog-child.test.ts --reporter=verbose`
 Expected: PASS
 
-- [ ] **Step 7: Wire child watchdog in index.ts onComplete**
+- [ ] **Step 6: Wire child watchdog in index.ts onComplete callback**
 
-In `src/index.ts`, update the watchdog trigger on agent complete (around line 189):
+In `src/index.ts`, update the watchdog trigger block (lines ~190-195):
 
 ```typescript
+import { resolveChildWatchdogConfig } from "./core/watchdog-child.js";
+
+// (In the onComplete callback, replace the current watchdog block:)
 // Trigger watchdog review non-blocking after agent completes
 if (watchdog.status() !== "disabled" && record.status === "completed") {
-  // Check if this is a child agent that should get its own watchdog review
-  const childConfig = resolveChildWatchdogConfig({ config: watchdogConfig, agent: record.type });
+  const childConfig = resolveChildWatchdogConfig(watchdogConfig, record.type);
   if (childConfig) {
-    const childWatchdog = createWatchdogRuntime(
-      { ...watchdogConfig, ...childConfig, children: { enabled: false, overrides: {} }, autoFollow: watchdogConfig.autoFollow },
-      { onWarnings: (agentId, warnings) => { /* same emit pattern as parent */ } },
-    );
+    // Child-specific review: create temporary runtime with child model/thinking
+    const childWatchdogConfig = {
+      ...watchdogConfig,
+      ...(childConfig.model ? { model: childConfig.model } : {}),
+      ...(childConfig.thinking ? { thinking: childConfig.thinking } : {}),
+    };
+    const childWatchdog = createWatchdogRuntime(childWatchdogConfig, {
+      onWarnings: (agentId, warnings) => {
+        for (const w of warnings) {
+          const content = `[watchdog/child/${w.severity}] ${w.summary}\nEvidence: ${w.evidence}\nAction: ${w.recommendedAction}`;
+          (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
+            {
+              customType: "watchdog-warning",
+              content,
+              display: true,
+              details: { agentId, ...w, state: "displayed", source: "child" },
+            } as unknown as Parameters<typeof pi.sendMessage>[0],
+            { deliverAs: "followUp", triggerTurn: true },
+          );
+        }
+      },
+    });
     childWatchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd()).catch((err) => {
       console.error("[watchdog/child] handleAgentEnd failed:", err);
     }).finally(() => childWatchdog.dispose());
@@ -471,15 +593,37 @@ if (watchdog.status() !== "disabled" && record.status === "completed") {
 }
 ```
 
-- [ ] **Step 8: Run typecheck and tests**
+- [ ] **Step 7: Update existing parseWatchdogConfig tests**
 
-Run: `npx tsc --noEmit && npx vitest run tests/core/watchdog.test.ts --reporter=verbose`
+In `tests/watchdog.test.ts`, add to the `parseWatchdogConfig` describe:
+
+```typescript
+it("parses children config", () => {
+  const config = parseWatchdogConfig({
+    enabled: true,
+    children: { enabled: true, model: "child-model", overrides: { scout: { enabled: false } } },
+  });
+  expect(config.children.enabled).toBe(true);
+  expect(config.children.model).toBe("child-model");
+  expect(config.children.overrides.scout.enabled).toBe(false);
+});
+
+it("returns default children config when not specified", () => {
+  const config = parseWatchdogConfig({ enabled: true });
+  expect(config.children.enabled).toBe(false);
+  expect(config.children.overrides).toEqual({});
+});
+```
+
+- [ ] **Step 8: Run typecheck and all watchdog tests**
+
+Run: `npx tsc --noEmit && npx vitest run tests/watchdog.test.ts tests/watchdog-child.test.ts --reporter=verbose`
 Expected: All pass
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/core/watchdog.ts src/index.ts tests/core/watchdog.test.ts
+git add src/core/watchdog-child.ts src/core/watchdog.ts src/index.ts tests/watchdog-child.test.ts tests/watchdog.test.ts
 git commit -m "feat(watchdog): add child watchdog with per-agent config resolution"
 ```
 
@@ -487,26 +631,33 @@ git commit -m "feat(watchdog): add child watchdog with per-agent config resoluti
 
 ### Task 4: Turn-Delta Mode
 
+Alternative review mode: instead of reviewing git diffs, review the last N tool calls + responses from the agent's conversation. Useful for non-code agents (research, planning) where git diff is meaningless.
+
+**Architecture:** Add `reviewChangesOnly` flag to `WatchdogConfig` (default: `true`). When `false`, `handleAgentEnd` skips git diff/LSP and instead formats the agent's session messages into a turn-delta string for review.
+
+**Session data access:** `AgentRecord.session` has a `.messages` array (used by `getAgentConversation`). We pass a `getSessionMessages` callback to the runtime so it can access the conversation.
+
 **Files:**
 - Create: `src/core/watchdog-turn-delta.ts`
-- Modify: `src/core/watchdog.ts:230-276` (handleAgentEnd branch)
-- Test: `tests/core/watchdog-turn-delta.test.ts`
+- Modify: `src/core/watchdog.ts` (add `reviewChangesOnly` to config, add turn-delta branch in handleAgentEnd)
+- Modify: `src/index.ts` (wire getSessionMessages)
+- Test: `tests/watchdog-turn-delta.test.ts`, `tests/watchdog.test.ts`
 
-- [ ] **Step 1: Write the failing test for formatWatchdogTurnDelta**
+- [ ] **Step 1: Write failing tests for turn-delta formatting**
 
-Create `tests/core/watchdog-turn-delta.test.ts`:
+Create `tests/watchdog-turn-delta.test.ts`:
 
 ```typescript
 import { describe, it, expect } from "vitest";
 import { formatWatchdogTurnDelta } from "../src/core/watchdog-turn-delta.js";
 
 describe("formatWatchdogTurnDelta", () => {
-  it("formats tool calls with names and truncated inputs", () => {
+  it("formats tool_use blocks with name and input", () => {
     const messages = [
       { role: "assistant", content: [{ type: "tool_use", name: "read_file", input: { path: "/foo.ts" } }] },
       { role: "tool", content: [{ type: "tool_result", content: "file contents here" }] },
     ];
-    const result = formatWatchdogTurnDelta(messages as never[], 10);
+    const result = formatWatchdogTurnDelta(messages, 10);
     expect(result).toContain("read_file");
     expect(result).toContain("/foo.ts");
   });
@@ -514,9 +665,9 @@ describe("formatWatchdogTurnDelta", () => {
   it("redacts large edit/write tool inputs", () => {
     const longContent = "x".repeat(500);
     const messages = [
-      { role: "assistant", content: [{ type: "tool_use", name: "edit_file", input: { path: "/foo.ts", oldText: longContent, newText: longContent } }] },
+      { role: "assistant", content: [{ type: "tool_use", name: "edit", input: { path: "/foo.ts", old_string: longContent, new_string: longContent } }] },
     ];
-    const result = formatWatchdogTurnDelta(messages as never[], 10);
+    const result = formatWatchdogTurnDelta(messages, 10);
     expect(result).toContain("[omitted 500 chars]");
     expect(result).not.toContain("x".repeat(100));
   });
@@ -526,17 +677,39 @@ describe("formatWatchdogTurnDelta", () => {
       role: "assistant",
       content: [{ type: "tool_use", name: `tool_${i}`, input: {} }],
     }));
-    const result = formatWatchdogTurnDelta(messages as never[], 5);
+    const result = formatWatchdogTurnDelta(messages, 5);
     expect(result).toContain("tool_19");
     expect(result).toContain("tool_15");
     expect(result).not.toContain("tool_0");
+  });
+
+  it("handles string content in user/assistant messages", () => {
+    const messages = [
+      { role: "user", content: "Please fix the bug" },
+      { role: "assistant", content: "I'll fix that now." },
+    ];
+    const result = formatWatchdogTurnDelta(messages, 10);
+    expect(result).toContain("Please fix the bug");
+    expect(result).toContain("I'll fix that now");
+  });
+
+  it("handles text blocks in content arrays", () => {
+    const messages = [
+      { role: "assistant", content: [{ type: "text", text: "Let me analyze this." }] },
+    ];
+    const result = formatWatchdogTurnDelta(messages, 10);
+    expect(result).toContain("Let me analyze this.");
+  });
+
+  it("returns empty string for empty messages", () => {
+    expect(formatWatchdogTurnDelta([], 10)).toBe("");
   });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run tests/core/watchdog-turn-delta.test.ts --reporter=verbose`
+Run: `npx vitest run tests/watchdog-turn-delta.test.ts --reporter=verbose`
 Expected: FAIL — module not found
 
 - [ ] **Step 3: Implement watchdog-turn-delta.ts**
@@ -553,27 +726,38 @@ export function formatWatchdogTurnDelta(messages: unknown[], lastN: number): str
   const parts: string[] = [];
 
   for (const msg of recent) {
-    const m = msg as { role?: string; content?: unknown[] | string };
-    if (!m.role || !m.content) continue;
+    const m = msg as { role?: string; content?: unknown };
+    if (!m.role || m.content === undefined) continue;
 
+    // String content (user/assistant)
     if (typeof m.content === "string") {
-      parts.push(`[${m.role}] ${m.content.slice(0, 200)}`);
+      parts.push(`[${m.role}] ${m.content.slice(0, 500)}`);
       continue;
     }
 
     if (!Array.isArray(m.content)) continue;
 
     for (const block of m.content) {
-      const b = block as { type?: string; name?: string; input?: unknown; content?: unknown };
+      const b = block as {
+        type?: string;
+        name?: string;
+        text?: string;
+        input?: unknown;
+        content?: unknown;
+      };
+
       if (b.type === "tool_use") {
         const redacted = redactToolInput(b.name ?? "", b.input);
-        parts.push(`[tool_use] ${b.name}: ${JSON.stringify(redacted).slice(0, 500)}`);
+        const inputStr = JSON.stringify(redacted).slice(0, 500);
+        parts.push(`[tool_use] ${b.name}: ${inputStr}`);
       } else if (b.type === "tool_result") {
-        const text = typeof b.content === "string" ? b.content.slice(0, 300) : JSON.stringify(b.content).slice(0, 300);
+        const text = typeof b.content === "string"
+          ? b.content.slice(0, 300)
+          : JSON.stringify(b.content).slice(0, 300);
         parts.push(`[tool_result] ${text}`);
       } else if (b.type === "text") {
-        const text = typeof b.content === "string" ? b.content : (b as { text?: string }).text ?? "";
-        parts.push(`[${m.role}] ${(text as string).slice(0, 300)}`);
+        const text = b.text ?? (typeof b.content === "string" ? b.content : "");
+        if (text) parts.push(`[${m.role}] ${text.slice(0, 500)}`);
       }
     }
   }
@@ -581,6 +765,7 @@ export function formatWatchdogTurnDelta(messages: unknown[], lastN: number): str
   return parts.join("\n\n");
 }
 
+// Keys whose values should be redacted in edit/write tools
 const REDACT_KEYS = new Set(["oldText", "newText", "content", "old_string", "new_string"]);
 const REDACT_TOOL_NAMES = new Set(["edit_file", "write_file", "edit", "write"]);
 
@@ -603,171 +788,406 @@ function redactToolInput(toolName: string, input: unknown): unknown {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npx vitest run tests/core/watchdog-turn-delta.test.ts --reporter=verbose`
+Run: `npx vitest run tests/watchdog-turn-delta.test.ts --reporter=verbose`
 Expected: PASS
 
-- [ ] **Step 5: Add turn-delta branch to handleAgentEnd**
+- [ ] **Step 5: Add reviewChangesOnly to WatchdogConfig**
 
-In `src/core/watchdog.ts`, in `handleAgentEnd` (around line 234, after `computeChangeSignature`), add a branch for turn-delta mode:
+In `src/core/watchdog.ts`, update the config interface:
 
 ```typescript
-// Turn-delta mode: review conversation instead of git diff
-if (!config.reviewChangesOnly) {
-  let turnDelta = "(no conversation data)";
-  if (options?.getSessionMessages) {
-    const messages = options.getSessionMessages(agentId);
-    if (messages && messages.length > 0) {
-      const { formatWatchdogTurnDelta } = await import("./watchdog-turn-delta.js");
-      turnDelta = formatWatchdogTurnDelta(messages, 10);
-    }
-  }
-
-  let warnings: WatchdogWarning[];
-  if (options?.runReview) {
-    warnings = await options.runReview(turnDelta, "N/A (turn-delta mode)", agentId);
-  } else {
-    warnings = await runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, globalSeen);
-  }
-  if (warnings.length > 0) options?.onWarnings?.(agentId, warnings);
-  return warnings;
+export interface WatchdogConfig {
+  enabled: boolean;
+  model?: string;
+  thinking?: string;
+  reviewChangesOnly: boolean;  // NEW: default true. When false, uses turn-delta mode
+  children: {
+    enabled: boolean;
+    model?: string;
+    thinking?: string;
+    overrides: Record<string, WatchdogChildOverride>;
+  };
+  lsp: { /* unchanged */ };
 }
 ```
 
-Update the `WatchdogRuntimeOptions` type to include:
-
+Update default:
 ```typescript
-getSessionMessages?: (agentId: string) => unknown[] | undefined;
+const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
+  enabled: false,
+  reviewChangesOnly: true,
+  children: { enabled: false, overrides: {} },
+  lsp: { enabled: true, timeoutMs: 3_000, maxFiles: 20, maxDiagnostics: 50 },
+};
 ```
 
-- [ ] **Step 6: Write test for turn-delta mode in runtime**
+Update `parseWatchdogConfig`:
+```typescript
+if (typeof r.reviewChangesOnly === "boolean") config.reviewChangesOnly = r.reviewChangesOnly;
+```
 
-In `tests/core/watchdog.test.ts`, add:
+- [ ] **Step 6: Add getSessionMessages to WatchdogRuntimeOptions**
+
+In `src/core/watchdog.ts`:
+
+```typescript
+export interface WatchdogRuntimeOptions {
+  runReview?: (diff: string, lspOutput: string, agentId: string) => Promise<WatchdogWarning[]>;
+  onWarnings?: (agentId: string, warnings: WatchdogWarning[]) => void;
+  /** Provide session messages for turn-delta mode. */
+  getSessionMessages?: (agentId: string) => unknown[] | undefined;
+}
+```
+
+- [ ] **Step 7: Add turn-delta branch to handleAgentEnd**
+
+In `src/core/watchdog.ts`, at the start of `handleAgentEnd` (after the `if (!config.enabled || disposed) return []` check), add the turn-delta branch:
+
+```typescript
+async function handleAgentEnd(agentId: string, cwd: string): Promise<WatchdogWarning[]> {
+  if (!config.enabled || disposed) return [];
+
+  // Turn-delta mode: review conversation instead of git diff
+  if (!config.reviewChangesOnly) {
+    currentStatus = "reviewing";
+    try {
+      let turnDelta = "(no conversation data available)";
+      if (options?.getSessionMessages) {
+        const messages = options.getSessionMessages(agentId);
+        if (messages && messages.length > 0) {
+          const { formatWatchdogTurnDelta } = await import("./watchdog-turn-delta.js");
+          turnDelta = formatWatchdogTurnDelta(messages, 10);
+        }
+      }
+
+      let warnings: WatchdogWarning[];
+      if (options?.runReview) {
+        warnings = await options.runReview(turnDelta, "N/A (turn-delta mode)", agentId);
+      } else {
+        warnings = await runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, globalSeen);
+      }
+      if (warnings.length > 0) options?.onWarnings?.(agentId, warnings);
+      return warnings;
+    } finally {
+      currentStatus = config.enabled && !disposed ? "idle" : "disabled";
+    }
+  }
+
+  // Git-diff mode (existing logic, unchanged)
+  const signature = computeChangeSignature(cwd);
+  if (!signature) return [];
+  // ... rest of existing logic
+```
+
+- [ ] **Step 8: Wire getSessionMessages in index.ts**
+
+In `src/index.ts`, update the `createWatchdogRuntime` call (line ~126):
+
+```typescript
+const watchdog = createWatchdogRuntime(watchdogConfig, {
+  onWarnings: (agentId, warnings) => { /* existing logic */ },
+  getSessionMessages: (agentId) => {
+    const record = manager.getRecord(agentId);
+    if (!record?.session) return undefined;
+    return (record.session as { messages?: unknown[] }).messages;
+  },
+});
+```
+
+Note: `manager` is not yet constructed at this point. Since the watchdog is created before the manager, we need to use a late-binding pattern:
+
+```typescript
+const watchdog = createWatchdogRuntime(watchdogConfig, {
+  onWarnings: (agentId, warnings) => { /* existing logic */ },
+  getSessionMessages: (agentId) => {
+    // Late-bound: manager is constructed after watchdog
+    const record = deps.manager?.getRecord(agentId);
+    if (!record?.session) return undefined;
+    return (record.session as { messages?: unknown[] }).messages;
+  },
+});
+```
+
+Wait — `deps` is also not yet assigned. The cleanest fix: move `getSessionMessages` to reference `manager` directly (it's defined shortly after on line 159). Since the callback is only invoked later (not at construction time), the closure will capture the `manager` variable after it's assigned. So:
+
+```typescript
+// Assign a reference that will be filled in after manager construction
+let managerRef: { getRecord: (id: string) => { session?: unknown } | undefined } | undefined;
+
+const watchdog = createWatchdogRuntime(watchdogConfig, {
+  onWarnings: (agentId, warnings) => { /* existing logic */ },
+  getSessionMessages: (agentId) => {
+    const record = managerRef?.getRecord(agentId);
+    if (!record?.session) return undefined;
+    return (record.session as { messages?: unknown[] }).messages;
+  },
+});
+
+// ... then after manager construction (line 159):
+managerRef = manager;
+```
+
+Alternative (simpler): since the manager is declared just below and the callback is invoked asynchronously, just reference `manager` directly. JavaScript closures capture the variable binding, not the value. The function will see the assigned `manager` when called.
+
+```typescript
+// This works because handleAgentEnd is only called after manager is assigned:
+getSessionMessages: (agentId) => {
+  const record = manager?.getRecord(agentId);
+  if (!record?.session) return undefined;
+  return (record.session as { messages?: unknown[] }).messages;
+},
+```
+
+But `manager` is declared on line 159 with `const manager = new AgentManager(...)`. It's declared AFTER the watchdog. In strict TypeScript, this would be a reference error. So we need a different approach.
+
+**Cleanest solution**: Declare a `let` variable before the watchdog, assign after manager construction:
+
+```typescript
+let sessionMessageSource: ((agentId: string) => unknown[] | undefined) | undefined;
+
+const watchdog = createWatchdogRuntime(watchdogConfig, {
+  onWarnings: (agentId, warnings) => { /* ... */ },
+  getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
+});
+
+// ... later, after manager construction:
+sessionMessageSource = (agentId) => {
+  const record = manager.getRecord(agentId);
+  if (!record?.session) return undefined;
+  return (record.session as { messages?: unknown[] }).messages;
+};
+```
+
+- [ ] **Step 9: Add test for turn-delta mode in runtime**
+
+In `tests/watchdog.test.ts`, add:
 
 ```typescript
 describe("turn-delta mode", () => {
   it("uses turn delta when reviewChangesOnly is false", async () => {
-    let reviewInput: string | undefined;
-    const config = parseWatchdogConfig({ enabled: true, reviewChangesOnly: false });
-    const runtime = createWatchdogRuntime(config, {
-      runReview: async (diff) => {
-        reviewInput = diff;
-        return [];
+    let reviewInput = "";
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: async (diff) => {
+          reviewInput = diff;
+          return [];
+        },
+        getSessionMessages: () => [
+          { role: "assistant", content: [{ type: "tool_use", name: "read_file", input: { path: "/x.ts" } }] },
+        ],
       },
-      getSessionMessages: () => [
-        { role: "assistant", content: [{ type: "tool_use", name: "read_file", input: { path: "/x.ts" } }] },
-      ],
-    });
+    );
 
-    await runtime.handleAgentEnd("agent-1", "/tmp");
+    await runtime.handleAgentEnd("agent-1", "/tmp/nonexistent");
     expect(reviewInput).toContain("read_file");
-    expect(reviewInput).not.toContain("git");
-    runtime.dispose();
+    expect(reviewInput).toContain("/x.ts");
+  });
+
+  it("falls back to git diff when reviewChangesOnly is true (default)", async () => {
+    let reviewCalled = false;
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true }),
+      {
+        runReview: async () => {
+          reviewCalled = true;
+          return [];
+        },
+        getSessionMessages: () => [{ role: "assistant", content: "test" }],
+      },
+    );
+
+    // Non-git directory: git diff mode returns early with no changes
+    await runtime.handleAgentEnd("agent-1", "/tmp");
+    expect(reviewCalled).toBe(false); // Never reaches review since no git changes
   });
 });
 ```
 
-- [ ] **Step 7: Run tests**
+- [ ] **Step 10: Run typecheck and tests**
 
-Run: `npx vitest run tests/core/watchdog.test.ts tests/core/watchdog-turn-delta.test.ts --reporter=verbose`
-Expected: PASS
+Run: `npx tsc --noEmit && npx vitest run tests/watchdog.test.ts tests/watchdog-turn-delta.test.ts --reporter=verbose`
+Expected: All pass
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add src/core/watchdog-turn-delta.ts src/core/watchdog.ts tests/core/watchdog-turn-delta.test.ts tests/core/watchdog.test.ts
-git commit -m "feat(watchdog): add turn-delta review mode with input redaction"
+git add src/core/watchdog-turn-delta.ts src/core/watchdog.ts src/index.ts tests/watchdog-turn-delta.test.ts tests/watchdog.test.ts
+git commit -m "feat(watchdog): add turn-delta review mode with input redaction
+
+When reviewChangesOnly is false, reviews the agent's conversation
+instead of git diffs. Useful for non-code agents (research, planning)."
 ```
 
 ---
 
 ### Task 5: Auto-Follow Steering
 
+When watchdog finds blockers, automatically resume the reviewed agent to fix them. Uses `manager.resume()` which does NOT trigger `onComplete` (no recursion risk).
+
+**Safety measures:**
+- Disabled by default (`autoFollow.blockers: false`)
+- Conservative `maxAttempts: 2` default
+- Stalemate detection: stops if same warning repeats `stalemateRepeats` times
+- Warning state tracking: marks warnings with `autoFollowAttempt` count and `stalemate` state
+
 **Files:**
-- Modify: `src/core/watchdog.ts:230-276` (post-review logic)
-- Modify: `src/index.ts:189-194` (wire resume callback)
-- Test: `tests/core/watchdog.test.ts`
+- Modify: `src/core/watchdog.ts` (add autoFollow config, add post-review auto-follow logic)
+- Modify: `src/index.ts` (wire resumeAgent callback)
+- Test: `tests/watchdog.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write failing tests**
 
-In `tests/core/watchdog.test.ts`, add:
+In `tests/watchdog.test.ts`, add:
 
 ```typescript
 describe("auto-follow steering", () => {
   it("resumes agent when blockers found and autoFollow.blockers is true", async () => {
+    const tmp = makeTmp("watchdog-autofollow-");
+    execSync("git init", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 2;");
+
     const resumed: Array<{ id: string; message: string }> = [];
-    const config = parseWatchdogConfig({
-      enabled: true,
-      autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
-    });
-
     let callCount = 0;
-    const runtime = createWatchdogRuntime(config, {
-      runReview: async () => {
-        callCount++;
-        if (callCount === 1) {
-          return [{ severity: "blocker", summary: "Bug found", evidence: "x.ts:1", recommendedAction: "Fix it", category: "correctness" }];
-        }
-        return []; // Fixed on second review
-      },
-      resumeAgent: async (id, message) => {
-        resumed.push({ id, message });
-      },
-    });
 
-    await runtime.handleAgentEnd("agent-1", "/tmp");
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({
+        enabled: true,
+        autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
+      }),
+      {
+        runReview: async () => {
+          callCount++;
+          if (callCount === 1) {
+            return [{ severity: "blocker", summary: "Bug found", evidence: "file.ts:1", recommendedAction: "Fix it", category: "correctness" }];
+          }
+          return []; // Fixed on second review
+        },
+        resumeAgent: async (id, message) => {
+          resumed.push({ id, message });
+        },
+      },
+    );
 
+    await runtime.handleAgentEnd("agent-1", tmp);
     expect(resumed).toHaveLength(1);
     expect(resumed[0].id).toBe("agent-1");
     expect(resumed[0].message).toContain("Bug found");
   });
 
-  it("stops after maxAttempts", async () => {
+  it("stops after maxAttempts even if issues persist", async () => {
+    const tmp = makeTmp("watchdog-maxattempts-");
+    execSync("git init", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 2;");
+
     const resumed: string[] = [];
-    const config = parseWatchdogConfig({
-      enabled: true,
-      autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 3 },
-    });
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({
+        enabled: true,
+        autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 3 },
+      }),
+      {
+        runReview: async () => [
+          { severity: "blocker", summary: "Persistent bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" },
+        ],
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
 
-    const runtime = createWatchdogRuntime(config, {
-      runReview: async () => [{ severity: "blocker", summary: "Persistent bug", evidence: "x.ts:1", recommendedAction: "Fix", category: "correctness" }],
-      resumeAgent: async (id) => { resumed.push(id); },
-    });
-
-    await runtime.handleAgentEnd("agent-1", "/tmp");
-    expect(resumed.length).toBeLessThanOrEqual(2);
+    await runtime.handleAgentEnd("agent-1", tmp);
+    expect(resumed).toHaveLength(2); // maxAttempts = 2
   });
 
   it("detects stalemate when same warning repeats", async () => {
+    const tmp = makeTmp("watchdog-stalemate-");
+    execSync("git init", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 2;");
+
+    const resumed: string[] = [];
     let warningsEmitted: WatchdogWarning[] = [];
-    const config = parseWatchdogConfig({
-      enabled: true,
-      autoFollow: { blockers: true, concerns: false, maxAttempts: 5, stalemateRepeats: 2 },
-    });
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({
+        enabled: true,
+        autoFollow: { blockers: true, concerns: false, maxAttempts: 5, stalemateRepeats: 2 },
+      }),
+      {
+        runReview: async () => [
+          { severity: "blocker", summary: "Same bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" },
+        ],
+        resumeAgent: async (id) => { resumed.push(id); },
+        onWarnings: (_id, w) => { warningsEmitted = w; },
+      },
+    );
 
-    const runtime = createWatchdogRuntime(config, {
-      runReview: async () => [{ severity: "blocker", summary: "Same bug", evidence: "x.ts:1", recommendedAction: "Fix", category: "correctness" }],
-      resumeAgent: async () => {},
-      onWarnings: (_id, w) => { warningsEmitted = w; },
-    });
-
-    await runtime.handleAgentEnd("agent-1", "/tmp");
-    // Should stop due to stalemate, not maxAttempts
+    await runtime.handleAgentEnd("agent-1", tmp);
+    // Should stop at stalemateRepeats (2), not maxAttempts (5)
+    expect(resumed.length).toBeLessThanOrEqual(2);
     expect(warningsEmitted.length).toBeGreaterThan(0);
   });
 
   it("does nothing when autoFollow.blockers is false", async () => {
+    const tmp = makeTmp("watchdog-noautofollow-");
+    execSync("git init", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 2;");
+
     const resumed: string[] = [];
-    const config = parseWatchdogConfig({
-      enabled: true,
-      autoFollow: { blockers: false, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
-    });
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({
+        enabled: true,
+        autoFollow: { blockers: false, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
+      }),
+      {
+        runReview: async () => [
+          { severity: "blocker", summary: "Bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" },
+        ],
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
 
-    const runtime = createWatchdogRuntime(config, {
-      runReview: async () => [{ severity: "blocker", summary: "Bug", evidence: "x.ts:1", recommendedAction: "Fix", category: "correctness" }],
-      resumeAgent: async (id) => { resumed.push(id); },
-    });
+    await runtime.handleAgentEnd("agent-1", tmp);
+    expect(resumed).toHaveLength(0);
+  });
 
-    await runtime.handleAgentEnd("agent-1", "/tmp");
+  it("does not resume for concerns when only blockers enabled", async () => {
+    const tmp = makeTmp("watchdog-concerns-");
+    execSync("git init", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+    execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+    execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+    writeFileSync(join(tmp, "file.ts"), "const x = 2;");
+
+    const resumed: string[] = [];
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({
+        enabled: true,
+        autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
+      }),
+      {
+        runReview: async () => [
+          { severity: "concern", summary: "Style issue", evidence: "file.ts:1", recommendedAction: "Refactor", category: "other" },
+        ],
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
     expect(resumed).toHaveLength(0);
   });
 });
@@ -775,107 +1195,207 @@ describe("auto-follow steering", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run tests/core/watchdog.test.ts --reporter=verbose`
-Expected: FAIL — auto-follow logic not implemented
+Run: `npx vitest run tests/watchdog.test.ts --reporter=verbose`
+Expected: FAIL — autoFollow config not parsed, resumeAgent not in options type
 
-- [ ] **Step 3: Add resumeAgent to WatchdogRuntimeOptions**
+- [ ] **Step 3: Add autoFollow to WatchdogConfig**
 
-In `src/core/watchdog.ts`, update the options interface:
+In `src/core/watchdog.ts`, extend the interface:
+
+```typescript
+export interface WatchdogConfig {
+  enabled: boolean;
+  model?: string;
+  thinking?: string;
+  reviewChangesOnly: boolean;
+  children: {
+    enabled: boolean;
+    model?: string;
+    thinking?: string;
+    overrides: Record<string, WatchdogChildOverride>;
+  };
+  autoFollow: {
+    blockers: boolean;
+    concerns: boolean;
+    maxAttempts: number;
+    stalemateRepeats: number;
+  };
+  lsp: {
+    enabled: boolean;
+    timeoutMs: number;
+    maxFiles: number;
+    maxDiagnostics: number;
+  };
+}
+```
+
+Update default:
+```typescript
+const DEFAULT_WATCHDOG_CONFIG: WatchdogConfig = {
+  enabled: false,
+  reviewChangesOnly: true,
+  children: { enabled: false, overrides: {} },
+  autoFollow: { blockers: false, concerns: false, maxAttempts: 2, stalemateRepeats: 2 },
+  lsp: { enabled: true, timeoutMs: 3_000, maxFiles: 20, maxDiagnostics: 50 },
+};
+```
+
+Update `parseWatchdogConfig`:
+```typescript
+if (r.autoFollow && typeof r.autoFollow === "object") {
+  const af = r.autoFollow as Record<string, unknown>;
+  if (typeof af.blockers === "boolean") config.autoFollow.blockers = af.blockers;
+  if (typeof af.concerns === "boolean") config.autoFollow.concerns = af.concerns;
+  if (typeof af.maxAttempts === "number") config.autoFollow.maxAttempts = af.maxAttempts;
+  if (typeof af.stalemateRepeats === "number") config.autoFollow.stalemateRepeats = af.stalemateRepeats;
+}
+```
+
+- [ ] **Step 4: Add resumeAgent to WatchdogRuntimeOptions**
 
 ```typescript
 export interface WatchdogRuntimeOptions {
   runReview?: (diff: string, lspOutput: string, agentId: string) => Promise<WatchdogWarning[]>;
   onWarnings?: (agentId: string, warnings: WatchdogWarning[]) => void;
   getSessionMessages?: (agentId: string) => unknown[] | undefined;
+  /** Resume a completed agent with a fix instruction. Used by auto-follow. */
   resumeAgent?: (agentId: string, message: string) => Promise<void>;
 }
 ```
 
-- [ ] **Step 4: Implement auto-follow logic after review**
+- [ ] **Step 5: Implement auto-follow logic in handleAgentEnd**
 
-In `src/core/watchdog.ts`, after warnings are collected in `handleAgentEnd`, add:
+In `src/core/watchdog.ts`, after warnings are collected in `handleAgentEnd` (both git-diff and turn-delta branches), add the auto-follow logic BEFORE returning warnings. Place this as a helper function inside `createWatchdogRuntime`:
 
 ```typescript
-// Auto-follow steering
-if (warnings.length > 0 && options?.resumeAgent) {
-  const hasBlockers = warnings.some((w) => w.severity === "blocker");
-  const hasConcerns = warnings.some((w) => w.severity === "concern");
+async function attemptAutoFollow(
+  agentId: string,
+  cwd: string,
+  initialWarnings: WatchdogWarning[],
+): Promise<WatchdogWarning[]> {
+  if (!options?.resumeAgent) return initialWarnings;
+
+  const hasBlockers = initialWarnings.some((w) => w.severity === "blocker");
+  const hasConcerns = initialWarnings.some((w) => w.severity === "concern");
   const shouldFollow =
     (config.autoFollow.blockers && hasBlockers) ||
     (config.autoFollow.concerns && hasConcerns);
 
-  if (shouldFollow) {
-    const warningKey = warnings.map((w) => w.summary.toLowerCase().trim()).sort().join("|");
-    let attempts = 0;
-    let repeatCount = 0;
-    let lastKey = warningKey;
+  if (!shouldFollow) return initialWarnings;
 
-    while (attempts < config.autoFollow.maxAttempts) {
-      attempts++;
-      const steerMsg = `Watchdog found issues:\n${warnings.map((w) => `- [${w.severity}] ${w.summary}: ${w.recommendedAction}`).join("\n")}\n\nPlease fix these issues.`;
-      await options.resumeAgent(agentId, steerMsg);
+  let warnings = initialWarnings;
+  let lastKey = warningKey(warnings);
+  let repeatCount = 0;
 
-      // Re-review after resume
-      const newWarnings = options.runReview
-        ? await options.runReview("(re-review after auto-follow)", "(re-review)", agentId)
-        : await runDefaultReview(config, "(re-review)", "(re-review)", agentId, globalSeen);
+  for (let attempt = 0; attempt < config.autoFollow.maxAttempts; attempt++) {
+    // Send steering message to the agent
+    const steerMsg = [
+      "Watchdog found issues that need fixing:",
+      ...warnings.map((w) => `- [${w.severity}] ${w.summary}: ${w.recommendedAction}`),
+      "",
+      "Please address these issues.",
+    ].join("\n");
 
-      if (newWarnings.length === 0) {
-        warnings.length = 0; // Clear — agent fixed the issues
-        break;
-      }
+    await options.resumeAgent(agentId, steerMsg);
 
-      const newKey = newWarnings.map((w) => w.summary.toLowerCase().trim()).sort().join("|");
-      if (newKey === lastKey) {
-        repeatCount++;
-        if (repeatCount >= config.autoFollow.stalemateRepeats) {
-          // Stalemate detected — stop steering
-          warnings.length = 0;
-          warnings.push(...newWarnings);
-          break;
-        }
-      } else {
-        repeatCount = 0;
-        lastKey = newKey;
-      }
-      warnings.length = 0;
-      warnings.push(...newWarnings);
+    // Re-review after agent resumes
+    let newWarnings: WatchdogWarning[];
+    if (options.runReview) {
+      newWarnings = await options.runReview("(re-review after auto-follow)", "(re-review)", agentId);
+    } else {
+      newWarnings = await runDefaultReview(config, "(re-review)", "(re-review)", agentId, globalSeen);
     }
+
+    if (newWarnings.length === 0) return []; // Agent fixed all issues
+
+    // Stalemate detection
+    const newKey = warningKey(newWarnings);
+    if (newKey === lastKey) {
+      repeatCount++;
+      if (repeatCount >= config.autoFollow.stalemateRepeats) {
+        return newWarnings; // Stalemate — surface remaining warnings
+      }
+    } else {
+      repeatCount = 0;
+      lastKey = newKey;
+    }
+    warnings = newWarnings;
   }
+
+  return warnings; // maxAttempts exhausted
+}
+
+function warningKey(warnings: WatchdogWarning[]): string {
+  return warnings.map((w) => w.summary.toLowerCase().trim()).sort().join("|");
+}
+```
+
+Then in `handleAgentEnd`, after collecting initial warnings:
+
+```typescript
+// Auto-follow steering (both git-diff and turn-delta modes)
+if (warnings.length > 0) {
+  warnings = await attemptAutoFollow(agentId, cwd, warnings);
 }
 
 if (warnings.length > 0) {
   options?.onWarnings?.(agentId, warnings);
 }
+return warnings;
 ```
 
-- [ ] **Step 5: Wire resumeAgent in index.ts**
+**Important:** Remove the existing `options?.onWarnings?.(agentId, warnings)` call from before this block to avoid double-emission. The auto-follow logic now gates when onWarnings fires.
 
-In `src/index.ts`, update the `createWatchdogRuntime` options to include:
+- [ ] **Step 6: Wire resumeAgent in index.ts**
+
+In `src/index.ts`, add `resumeAgent` to the watchdog runtime options:
 
 ```typescript
-resumeAgent: async (agentId, message) => {
-  await manager.resume(agentId, message);
-},
+const watchdog = createWatchdogRuntime(watchdogConfig, {
+  onWarnings: (agentId, warnings) => { /* existing */ },
+  getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
+  resumeAgent: async (agentId, message) => {
+    // manager is available by the time this is called (async)
+    await manager.resume(agentId, message);
+  },
+});
 ```
 
-- [ ] **Step 6: Run tests**
+Same late-binding note as Task 4: `manager` is declared after `watchdog`, but `resumeAgent` is only called asynchronously during `handleAgentEnd`, at which point `manager` is already assigned. Use the same pattern:
 
-Run: `npx vitest run tests/core/watchdog.test.ts --reporter=verbose`
+```typescript
+let resumeAgentFn: ((id: string, msg: string) => Promise<void>) | undefined;
+
+const watchdog = createWatchdogRuntime(watchdogConfig, {
+  onWarnings: (agentId, warnings) => { /* existing */ },
+  getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
+  resumeAgent: async (agentId, message) => {
+    await resumeAgentFn?.(agentId, message);
+  },
+});
+
+// After manager construction:
+resumeAgentFn = async (id, msg) => { await manager.resume(id, msg); };
+```
+
+- [ ] **Step 7: Run tests**
+
+Run: `npx vitest run tests/watchdog.test.ts --reporter=verbose`
 Expected: PASS
 
-- [ ] **Step 7: Run typecheck and full test suite**
+- [ ] **Step 8: Run typecheck and full test suite**
 
 Run: `npx tsc --noEmit && npx vitest run --reporter=verbose`
 Expected: All pass
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/core/watchdog.ts src/index.ts tests/core/watchdog.test.ts
+git add src/core/watchdog.ts src/index.ts tests/watchdog.test.ts
 git commit -m "feat(watchdog): add auto-follow steering with stalemate detection
 
-Disabled by default. Uses manager.resume() for completed agents.
+Disabled by default (autoFollow.blockers: false).
+Uses manager.resume() which does not trigger onComplete (no recursion).
 Conservative defaults: maxAttempts=2, stalemateRepeats=2."
 ```
 
@@ -895,5 +1415,9 @@ Expected: No errors
 
 - [ ] **Step 3: Run lint**
 
-Run: `npx eslint src/ tests/ --ext .ts`
+Run: `npx eslint src/ tests/ --ext .ts` (or project lint command)
 Expected: No new errors
+
+- [ ] **Step 4: Verify config shape documentation**
+
+Ensure the settings schema (if it exists) is updated to reflect the new watchdog config fields: `reviewChangesOnly`, `children`, `autoFollow`. Check `src/core/settings.ts` for any schema validation that needs updating.

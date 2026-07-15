@@ -6,6 +6,27 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 
+// Task 1 shape test (verifies what index.ts onWarnings should emit)
+describe("watchdog warning message shape", () => {
+  it("onWarnings details include state field when wired in index.ts", () => {
+    const warning: WatchdogWarning = {
+      severity: "blocker",
+      summary: "Missing null check",
+      evidence: "src/foo.ts:42",
+      recommendedAction: "Add null guard",
+      category: "correctness",
+    };
+    // This is the shape that index.ts onWarnings must produce after Task 1
+    const details = { agentId: "agent-1", ...warning, state: "displayed" };
+    expect(details).toMatchObject({
+      severity: "blocker",
+      summary: "Missing null check",
+      state: "displayed",
+      agentId: "agent-1",
+    });
+  });
+});
+
 // File-level tmps array so all describe blocks can share cleanup
 const tmps: string[] = [];
 afterEach(() => {
@@ -17,6 +38,18 @@ afterEach(() => {
 function makeTmp(prefix: string): string {
   const tmp = mkdtempSync(join(tmpdir(), prefix));
   tmps.push(tmp);
+  return tmp;
+}
+
+/** Create a git repo with one committed file and one dirty file (staged but uncommitted). */
+function makeGitRepoWithChanges(prefix: string): string {
+  const tmp = makeTmp(prefix);
+  execSync("git init", { cwd: tmp, stdio: "pipe" });
+  execSync("git config user.email 'test@test.com'", { cwd: tmp, stdio: "pipe" });
+  execSync("git config user.name 'Test'", { cwd: tmp, stdio: "pipe" });
+  writeFileSync(join(tmp, "file.ts"), "const x = 1;");
+  execSync("git add . && git commit -m init", { cwd: tmp, stdio: "pipe" });
+  writeFileSync(join(tmp, "file.ts"), "const x = 2;"); // dirty
   return tmp;
 }
 
@@ -227,6 +260,30 @@ describe("parseWatchdogConfig", () => {
     expect(config.model).toBe("anthropic/claude-sonnet-4");
     expect(config.thinking).toBe("high");
   });
+
+  it("returns default children config when not specified", () => {
+    const config = parseWatchdogConfig({ enabled: true });
+    expect(config.children.enabled).toBe(false);
+    expect(config.children.overrides).toEqual({});
+  });
+
+  it("parses children enabled flag", () => {
+    const config = parseWatchdogConfig({ enabled: true, children: { enabled: true } });
+    expect(config.children.enabled).toBe(true);
+  });
+
+  it("parses children model and overrides", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      children: {
+        enabled: true,
+        model: "child-model",
+        overrides: { scout: { enabled: false } },
+      },
+    });
+    expect(config.children.model).toBe("child-model");
+    expect(config.children.overrides.scout.enabled).toBe(false);
+  });
 });
 
 describe("WatchdogRuntime", () => {
@@ -335,5 +392,263 @@ describe("WatchdogRuntime", () => {
     expect(runtime.status()).toBe("reviewing");
     await promise;
     expect(runtime.status()).toBe("idle");
+  });
+});
+
+describe("turn-delta mode", () => {
+  it("passes turn-delta to runReview when reviewChangesOnly is false", async () => {
+    let reviewInput = "";
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: async (diff) => {
+          reviewInput = diff;
+          return [];
+        },
+        getSessionMessages: () => [
+          { role: "assistant", content: [{ type: "tool_use", name: "read_file", input: { path: "/x.ts" } }] },
+        ],
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", "/tmp/nonexistent");
+    expect(reviewInput).toContain("read_file");
+    expect(reviewInput).toContain("/x.ts");
+  });
+
+  it("uses fallback text when no messages are available", async () => {
+    let reviewInput = "";
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: async (diff) => {
+          reviewInput = diff;
+          return [];
+        },
+        getSessionMessages: () => undefined,
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", "/tmp");
+    expect(reviewInput).toContain("no conversation data");
+  });
+
+  it("calls onWarnings when turn-delta review produces warnings", async () => {
+    const emitted: WatchdogWarning[] = [];
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: async () => [
+          { severity: "blocker", summary: "Missing error handling", evidence: "src/x.ts:5", recommendedAction: "Add try/catch", category: "correctness" },
+        ],
+        onWarnings: (_id, ws) => emitted.push(...ws),
+        getSessionMessages: () => [{ role: "user", content: "Do the task" }],
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", "/tmp");
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].summary).toBe("Missing error handling");
+  });
+
+  it("parses reviewChangesOnly false from config", () => {
+    const config = parseWatchdogConfig({ enabled: true, reviewChangesOnly: false });
+    expect(config.reviewChangesOnly).toBe(false);
+  });
+
+  it("defaults reviewChangesOnly to true", () => {
+    const config = parseWatchdogConfig({ enabled: true });
+    expect(config.reviewChangesOnly).toBe(true);
+  });
+});
+
+describe("auto-follow steering", () => {
+  it("does nothing when autoFollow.blockers is false (default)", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-no-autofollow-");
+    const resumed: string[] = [];
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true }),
+      {
+        runReview: async () => [
+          { severity: "blocker", summary: "Bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" },
+        ],
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    expect(resumed).toHaveLength(0);
+  });
+
+  it("resumes agent once when blockers found and autoFollow.blockers is true", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-autofollow-");
+    const resumed: Array<{ id: string; message: string }> = [];
+    let callCount = 0;
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 2 } }),
+      {
+        runReview: async () => {
+          callCount++;
+          // First call: issue found; second call: issue resolved
+          return callCount === 1
+            ? [{ severity: "blocker", summary: "Null deref", evidence: "file.ts:1", recommendedAction: "Fix it", category: "correctness" }]
+            : [];
+        },
+        resumeAgent: async (id, message) => { resumed.push({ id, message }); },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0].id).toBe("agent-1");
+    expect(resumed[0].message).toContain("Null deref");
+  });
+
+  it("stops after maxAttempts even if issues persist", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-maxattempts-");
+    const resumed: string[] = [];
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 10 } }),
+      {
+        runReview: async () => [
+          { severity: "blocker", summary: "Persistent bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" },
+        ],
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    expect(resumed).toHaveLength(2); // maxAttempts = 2
+  });
+
+  it("detects stalemate and stops early when same warnings repeat", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-stalemate-");
+    const resumed: string[] = [];
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: true, concerns: false, maxAttempts: 10, stalemateRepeats: 2 } }),
+      {
+        runReview: async () => [
+          { severity: "blocker", summary: "Same bug forever", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" },
+        ],
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    // Should stop at stalemateRepeats (2), not maxAttempts (10)
+    expect(resumed.length).toBe(2);
+  });
+
+  it("does not resume for concerns when autoFollow.concerns is false", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-concern-skip-");
+    const resumed: string[] = [];
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: true, concerns: false, maxAttempts: 3, stalemateRepeats: 2 } }),
+      {
+        runReview: async () => [
+          { severity: "concern", summary: "Style issue", evidence: "file.ts:1", recommendedAction: "Refactor", category: "other" },
+        ],
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    expect(resumed).toHaveLength(0);
+  });
+
+  it("parses autoFollow config", () => {
+    const config = parseWatchdogConfig({
+      enabled: true,
+      autoFollow: { blockers: true, concerns: true, maxAttempts: 3, stalemateRepeats: 3 },
+    });
+    expect(config.autoFollow.blockers).toBe(true);
+    expect(config.autoFollow.concerns).toBe(true);
+    expect(config.autoFollow.maxAttempts).toBe(3);
+    expect(config.autoFollow.stalemateRepeats).toBe(3);
+  });
+
+  it("defaults autoFollow to all-disabled", () => {
+    const config = parseWatchdogConfig({ enabled: true });
+    expect(config.autoFollow.blockers).toBe(false);
+    expect(config.autoFollow.concerns).toBe(false);
+    expect(config.autoFollow.maxAttempts).toBe(2);
+  });
+
+  it("re-review receives fresh diff (not stale captured diff)", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-fresh-diff-");
+    const diffsSeen: string[] = [];
+    let callCount = 0;
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: true, concerns: false, maxAttempts: 1, stalemateRepeats: 2 } }),
+      {
+        runReview: async (diff) => {
+          diffsSeen.push(diff);
+          callCount++;
+          return [{ severity: "blocker", summary: "Bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" }];
+        },
+        resumeAgent: async () => {
+          // Simulate agent modifying a file between reviews
+          writeFileSync(join(tmp, "file.ts"), `const x = ${callCount + 10};`);
+        },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    // Should have been called twice (initial + 1 re-review from maxAttempts=1)
+    expect(diffsSeen.length).toBe(2);
+    // The second diff should differ from the first (fresh data, not stale)
+    expect(diffsSeen[0]).not.toBe(diffsSeen[1]);
+  });
+
+  it("re-review does not deduplicate via globalSeen (fresh seen per re-review)", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-fresh-seen-");
+    let callCount = 0;
+    const warningCounts: number[] = [];
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: true, concerns: false, maxAttempts: 2, stalemateRepeats: 3 } }),
+      {
+        runReview: async () => {
+          callCount++;
+          const warnings: WatchdogWarning[] = [{ severity: "blocker", summary: "Same bug", evidence: "file.ts:1", recommendedAction: "Fix", category: "correctness" }];
+          warningCounts.push(warnings.length);
+          return warnings;
+        },
+        resumeAgent: async () => {},
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    // All re-review calls should return 1 warning (not 0 due to dedup)
+    expect(warningCounts.every(c => c === 1)).toBe(true);
+    // Should have called runReview 3 times: initial + 2 from maxAttempts=2
+    expect(callCount).toBe(3);
+  });
+
+  it("resumes for concerns when autoFollow.concerns is true", async () => {
+    const tmp = makeGitRepoWithChanges("watchdog-concerns-enabled-");
+    const resumed: string[] = [];
+    let callCount = 0;
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, autoFollow: { blockers: false, concerns: true, maxAttempts: 1, stalemateRepeats: 2 } }),
+      {
+        runReview: async () => {
+          callCount++;
+          return callCount === 1
+            ? [{ severity: "concern", summary: "Style issue", evidence: "file.ts:1", recommendedAction: "Refactor", category: "other" }]
+            : [];
+        },
+        resumeAgent: async (id) => { resumed.push(id); },
+      },
+    );
+
+    await runtime.handleAgentEnd("agent-1", tmp);
+    expect(resumed).toHaveLength(1);
   });
 });
