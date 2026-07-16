@@ -1,6 +1,14 @@
 import { describe, expect, test, vi } from "vitest";
-import { SETTINGS_MENU_ITEMS, renderRow } from "../src/tui/agents-menu.js";
-import type { SubagentsConfig } from "../src/shared/types.js";
+import {
+  SETTINGS_MENU_ITEMS,
+  renderRow,
+  showAgentsMenu,
+} from "../src/tui/agents-menu.js";
+import type {
+  AgentDefinition,
+  ResolvedPaths,
+  SubagentsConfig,
+} from "../src/shared/types.js";
 import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
 
 function createTheme() {
@@ -24,6 +32,105 @@ function createTheme() {
   };
 }
 
+async function driveOverrideEdit(updateError?: Error) {
+  const paths = {
+    userAgentsDir: "/path/that/does/not/exist/user-agents",
+    bundledAgentsDir: "/path/that/does/not/exist/bundled-agents",
+  } as ResolvedPaths;
+  const sourcePath = `${paths.userAgentsDir}/planner.md`;
+  const original = "original Markdown\n";
+  const edited = "edited Markdown\n";
+  const override: AgentDefinition = {
+    name: "planner",
+    description: "Plans work",
+    tools: ["read"],
+    subagentAgents: [],
+    systemPrompt: "Plan",
+    sourcePath,
+  };
+  const catalog = {
+    entries: [
+      {
+        name: "planner",
+        state: "override" as const,
+        override,
+      },
+    ],
+    userDiagnostics: [
+      { path: `${paths.userAgentsDir}/bad.md`, reason: "invalid" },
+    ],
+    bundledDiagnostics: [],
+  };
+  const discoverAgentCatalog = vi.fn(() => catalog);
+  const readUserAgentOverride = vi.fn(() => original);
+  const updateUserAgentOverride = vi.fn(() => {
+    if (updateError) {
+      throw updateError;
+    }
+    return override;
+  });
+  const deps = {
+    resolvePaths: () => paths,
+    discoverAgentCatalog,
+    readUserAgentOverride,
+    updateUserAgentOverride,
+  } as unknown as RuntimeDeps;
+  const inputs = ["\r", "\r", "\r", "\x1b", "\x1b"];
+  const renders: string[] = [];
+  const notifications: Array<{ message: string; level: string }> = [];
+
+  type MenuFactory = (
+    tui: { requestRender(): void },
+    theme: {
+      fg(color: string, text: string): string;
+      bold(text: string): string;
+    },
+    keyboard: unknown,
+    done: (value: undefined) => void,
+  ) => {
+    render(width: number): string[];
+    handleInput(data: string): void;
+  };
+
+  await showAgentsMenu(
+    {
+      ui: {
+        custom: async (factory: unknown) => {
+          await new Promise<void>((resolveDone) => {
+            const component = (factory as MenuFactory)(
+              { requestRender() {} },
+              {
+                fg: (_color, text) => text,
+                bold: (text) => text,
+              },
+              undefined,
+              () => resolveDone(),
+            );
+            renders.push(component.render(120).join("\n"));
+            component.handleInput(inputs.shift() ?? "\x1b");
+          });
+        },
+        editor: async () => edited,
+        notify: (message: string, level: string) => {
+          notifications.push({ message, level });
+        },
+      },
+    } as never,
+    deps,
+  );
+
+  return {
+    discoverAgentCatalog,
+    edited,
+    notifications,
+    paths,
+    readUserAgentOverride,
+    renders,
+    sourcePath,
+    updateUserAgentOverride,
+  };
+}
+
 describe("agents menu row rendering", () => {
   test("selected rows use accent arrow + accent label without background fill", () => {
     const { calls, theme } = createTheme();
@@ -41,6 +148,41 @@ describe("agents menu row rendering", () => {
 
     expect(line.startsWith("  ")).toBe(true);
     expect(calls.some((entry) => entry.method === "fg" && entry.color === "dim" && entry.text.includes("Create new agent"))).toBe(true);
+  });
+});
+
+test("catalog display and override editing delegate through RuntimeDeps", async () => {
+  const result = await driveOverrideEdit();
+
+  expect(result.discoverAgentCatalog).toHaveBeenCalledWith(result.paths);
+  expect(result.readUserAgentOverride).toHaveBeenCalledWith(
+    result.paths,
+    result.sourcePath,
+  );
+  expect(result.updateUserAgentOverride).toHaveBeenCalledWith(
+    result.paths,
+    result.sourcePath,
+    result.edited,
+  );
+  expect(result.renders.join("\n")).toContain("Agents (1)");
+  expect(result.renders.join("\n")).toContain(
+    "planner  [global override]",
+  );
+  expect(result.renders.join("\n")).toContain(
+    "1 invalid user agent file(s) skipped",
+  );
+  expect(result.notifications).toContainEqual({
+    message: `Updated "planner" at ${result.sourcePath}`,
+    level: "info",
+  });
+});
+
+test("override update errors use the existing save notification", async () => {
+  const result = await driveOverrideEdit(new Error("invalid edit"));
+
+  expect(result.notifications).toContainEqual({
+    message: "Could not save agent: invalid edit",
+    level: "error",
   });
 });
 

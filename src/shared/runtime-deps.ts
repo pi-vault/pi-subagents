@@ -1,4 +1,5 @@
 import type { AgentManager } from "../core/agent-manager.js";
+import type { AgentCatalog } from "../core/agents.js";
 import type { WatchdogRuntime } from "../core/watchdog.js";
 import type { IntercomManager } from "../core/intercom.js";
 import type { GroupJoinManager } from "../core/group-join-manager.js";
@@ -21,6 +22,13 @@ export interface RuntimeDeps {
   resolvePaths: () => ResolvedPaths;
   loadConfig: (paths: ResolvedPaths) => LoadedConfig;
   discoverAgents: (paths: ResolvedPaths) => AgentDiscoveryResult;
+  discoverAgentCatalog: (paths: ResolvedPaths) => AgentCatalog;
+  readUserAgentOverride: (paths: ResolvedPaths, sourcePath: string) => string;
+  updateUserAgentOverride: (
+    paths: ResolvedPaths,
+    sourcePath: string,
+    markdown: string,
+  ) => AgentDefinition;
   discoverToolNames: () => string[];
   createAgentFile: (
     paths: ResolvedPaths,

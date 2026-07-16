@@ -7,9 +7,12 @@ import {
   createAgentFile,
   deleteUserAgentOverride,
   disableAgentInUserScope,
+  discoverAgentCatalog,
   discoverAgents,
   discoverToolNames,
   exportAgentToUserScope,
+  readUserAgentOverride,
+  updateUserAgentOverride,
 } from "./core/agents.js";
 import { loadConfig, saveConfig } from "./core/config.js";
 import { evaluateToolCall, validateToolBudget } from "./core/tool-budget.js";
@@ -290,6 +293,9 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     resolvePaths,
     loadConfig,
     discoverAgents,
+    discoverAgentCatalog,
+    readUserAgentOverride,
+    updateUserAgentOverride,
     discoverToolNames: () => discoverToolNames(pi.getAllTools().map((tool) => tool.name)),
     createAgentFile,
     exportAgentToUserScope,
