@@ -5,7 +5,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { isUnsafeName, safeReadFile } from "./safe-fs.js";
 import {
   normalizeOptionalString,
@@ -72,9 +72,19 @@ function discoverAgentsFromDirectory(directory: string): AgentDiscoveryResult {
 
   const agents: AgentDefinition[] = [];
   const diagnostics: AgentDiscoveryDiagnostic[] = [];
-  const fileNames = readdirSync(directory)
-    .filter((fileName) => fileName.endsWith(".md"))
-    .sort((left, right) => left.localeCompare(right));
+  let fileNames: string[];
+  try {
+    fileNames = readdirSync(directory)
+      .filter((fileName) => fileName.endsWith(".md"))
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return {
+      agents,
+      diagnostics: [
+        { path: resolve(directory), reason: "unreadable directory" },
+      ],
+    };
+  }
 
   for (const fileName of fileNames) {
     const baseName = fileName.slice(0, -3);
@@ -144,6 +154,120 @@ export function discoverAgents(paths: ResolvedPaths): AgentDiscoveryResult {
     agents: [...agentsByName.values()],
     diagnostics,
   };
+}
+
+export interface AgentCatalogEntry {
+  name: string;
+  state: "bundled" | "override" | "disabled";
+  bundled?: AgentDefinition;
+  override?: AgentDefinition;
+}
+
+export interface AgentCatalog {
+  entries: AgentCatalogEntry[];
+  userDiagnostics: AgentDiscoveryDiagnostic[];
+  bundledDiagnostics: AgentDiscoveryDiagnostic[];
+}
+
+function indexCatalogAgents(
+  discovery: AgentDiscoveryResult,
+): Map<string, AgentDefinition> {
+  const indexed = new Map<string, AgentDefinition>();
+  for (const agent of discovery.agents) {
+    const name = normalizeNameForComparison(agent.name);
+    if (indexed.has(name)) {
+      discovery.diagnostics.push({
+        path: agent.sourcePath,
+        reason: `duplicate agent name "${agent.name}" skipped; first definition wins`,
+      });
+      continue;
+    }
+    indexed.set(name, agent);
+  }
+  return indexed;
+}
+
+export function discoverAgentCatalog(paths: ResolvedPaths): AgentCatalog {
+  const user = discoverAgentsFromDirectory(paths.userAgentsDir);
+  const bundled = discoverAgentsFromDirectory(paths.bundledAgentsDir);
+  const userByName = indexCatalogAgents(user);
+  const bundledByName = indexCatalogAgents(bundled);
+  const names = [...new Set([...userByName.keys(), ...bundledByName.keys()])]
+    .sort((left, right) => left.localeCompare(right));
+
+  const entries = names.map((name): AgentCatalogEntry => {
+    const override = userByName.get(name);
+    const bundledAgent = bundledByName.get(name);
+    if (override?.enabled === false) {
+      return {
+        name: override.name,
+        state: "disabled",
+        bundled: bundledAgent,
+        override,
+      };
+    }
+    if (override) {
+      return {
+        name: override.name,
+        state: "override",
+        bundled: bundledAgent,
+        override,
+      };
+    }
+    return {
+      name: bundledAgent?.name ?? name,
+      state: "bundled",
+      bundled: bundledAgent,
+    };
+  });
+
+  return {
+    entries,
+    userDiagnostics: user.diagnostics,
+    bundledDiagnostics: bundled.diagnostics,
+  };
+}
+
+function requireUserAgentOverride(
+  paths: ResolvedPaths,
+  sourcePath: string,
+): { filePath: string; markdown: string } {
+  const filePath = resolve(sourcePath);
+  const fileName = basename(filePath);
+  if (
+    dirname(filePath) !== resolve(paths.userAgentsDir) ||
+    !fileName.endsWith(".md") ||
+    isUnsafeName(fileName.slice(0, -3))
+  ) {
+    throw new Error("invalid user agent override path");
+  }
+
+  const markdown = safeReadFile(filePath);
+  if (markdown === undefined) {
+    throw new Error("user agent override is missing, unreadable, or symlinked");
+  }
+  return { filePath, markdown };
+}
+
+export function readUserAgentOverride(
+  paths: ResolvedPaths,
+  sourcePath: string,
+): string {
+  return requireUserAgentOverride(paths, sourcePath).markdown;
+}
+
+export function updateUserAgentOverride(
+  paths: ResolvedPaths,
+  sourcePath: string,
+  markdown: string,
+): AgentDefinition {
+  const { filePath } = requireUserAgentOverride(paths, sourcePath);
+  const parsed = parseAgentContent(filePath, markdown);
+  if (!parsed.ok) {
+    throw new Error(parsed.diagnostic.reason);
+  }
+  writeFileSync(filePath, markdown, "utf8");
+  return parsed.agent;
 }
 
 export function exportAgentToUserScope(

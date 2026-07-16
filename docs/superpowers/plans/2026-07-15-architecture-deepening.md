@@ -147,63 +147,11 @@ git commit -m "refactor: deepen watchdog runtime policy"
 
 ## Task 2: Put Agent persistence behind the Agent module
 
-**Files:**
-
-- Modify: `src/core/agents.ts`
-- Modify: `src/tui/agents-menu.ts`
-- Modify: `src/shared/runtime-deps.ts`
-- Modify: `tests/agents-menu.test.ts`
-- Modify: `tests/agents.test.ts`
-
-- [ ] **Step 1: Add persistence seam tests**
-
-Test that the Agent module returns bundled/override/disabled catalog entries with the existing precedence, rejects unsafe or unreadable files, validates edited Markdown before writing, and does not write invalid content. Add a menu test that supplies mocked Agent-module operations and asserts the menu does not read or write files directly.
-
-- [ ] **Step 2: Run focused tests and verify failure**
-
-```bash
-pnpm vitest run tests/agents.test.ts tests/agents-menu.test.ts
-```
-
-Expected: the new catalog/edit operations are missing and the menu still imports `node:fs` and parses files itself.
-
-- [ ] **Step 3: Implement the Agent catalog and edit operations**
-
-Add a core catalog shape and operations that use `safeReadFile`, `parseAgentContent`, and existing precedence rules:
-
-```ts
-export interface AgentCatalogEntry {
-  name: string;
-  state: "bundled" | "override" | "disabled";
-  bundled?: AgentDefinition;
-  override?: AgentDefinition;
-}
-
-export function discoverAgentCatalog(paths: ResolvedPaths): {
-  entries: AgentCatalogEntry[];
-  diagnostics: AgentDiscoveryDiagnostic[];
-};
-
-export function updateUserAgentOverride(
-  paths: ResolvedPaths,
-  sourcePath: string,
-  markdown: string,
-): AgentDefinition;
-```
-
-Require `sourcePath` to be an existing user override path under `paths.userAgentsDir`; validate content before `writeFileSync`. Replace `readAgentFiles`, `buildAgentMenuEntries`, direct editor reads, and direct writes in `agents-menu.ts` with the core operations. Keep the menu's labels and notifications unchanged.
-
-- [ ] **Step 4: Verify and commit**
-
-```bash
-pnpm vitest run tests/agents.test.ts tests/agents-menu.test.ts
-pnpm tsc --noEmit
-pnpm biome lint src/core/agents.ts src/tui/agents-menu.ts tests/agents.test.ts tests/agents-menu.test.ts
-git add src/core/agents.ts src/tui/agents-menu.ts src/shared/runtime-deps.ts tests/agents.test.ts tests/agents-menu.test.ts
-git commit -m "refactor: centralize agent persistence"
-```
-
-Expected: all commands pass and the TUI module no longer imports filesystem or Agent-format parsing functions.
+Execute the focused Phase 2 plan in
+`docs/superpowers/plans/2026-07-15-architecture-deepening-phase-2-agent-persistence.md`.
+It is authoritative for the catalog API, exact override reads, path validation,
+RuntimeDeps and `src/index.ts` wiring, adapter tests, two-commit sequence, and
+verification commands.
 
 ## Task 3: Consolidate configuration and make recursion effective
 

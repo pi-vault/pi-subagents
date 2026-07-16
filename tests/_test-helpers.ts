@@ -64,6 +64,15 @@ export function createDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
       config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultMaxTurns: 0, graceTurns: 5, defaultJoinMode: "smart" as const, maxSpawnsPerSession: 40 },
     }),
     discoverAgents: () => createDiscovery([createAgent()]),
+    discoverAgentCatalog: () => ({
+      entries: [],
+      userDiagnostics: [],
+      bundledDiagnostics: [],
+    }),
+    readUserAgentOverride: () => "",
+    updateUserAgentOverride: () => {
+      throw new Error("not used");
+    },
     discoverToolNames: () => ["bash", "read"],
     createAgentFile: () => { throw new Error("not used"); },
     exportAgentToUserScope: () => { throw new Error("not used"); },

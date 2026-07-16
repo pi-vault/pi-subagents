@@ -1,14 +1,9 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, Text, matchesKey } from "@earendil-works/pi-tui";
-import { parseAgentContent as parseAgentFile } from "../core/agent-format.js";
+import type { AgentCatalogEntry } from "../core/agents.js";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentCreationInput,
-  AgentDefinition,
-  AgentDiscoveryDiagnostic,
-  ResolvedPaths,
   SubagentsConfig,
   WidgetMode,
 } from "../shared/types.js";
@@ -148,14 +143,6 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
   },
 ];
 
-type AgentMenuEntry = {
-  name: string;
-  state: "bundled" | "override" | "disabled";
-  bundled?: AgentDefinition;
-  override?: AgentDefinition;
-  diagnostic?: AgentDiscoveryDiagnostic;
-};
-
 export function renderRow(theme: Theme, label: string, selected: boolean): string {
   if (selected) {
     const arrow = theme.fg("accent", "▸");
@@ -250,84 +237,9 @@ async function showRowsMenu<T>(
   return selectedValue;
 }
 
-function readAgentFiles(directory: string): {
-  agents: AgentDefinition[];
-  diagnostics: AgentDiscoveryDiagnostic[];
-} {
-  if (!existsSync(directory)) {
-    return { agents: [], diagnostics: [] };
-  }
-
-  const agents: AgentDefinition[] = [];
-  const diagnostics: AgentDiscoveryDiagnostic[] = [];
-  const fileNames = readdirSync(directory)
-    .filter((fileName) => fileName.endsWith(".md"))
-    .sort((left, right) => left.localeCompare(right));
-
-  for (const fileName of fileNames) {
-    const filePath = join(directory, fileName);
-    const parsed = parseAgentFile(filePath, readFileSync(filePath, "utf8"));
-    if (parsed.ok) {
-      agents.push(parsed.agent);
-    } else {
-      diagnostics.push(parsed.diagnostic);
-    }
-  }
-
-  return { agents, diagnostics };
-}
-
-function normalizeName(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function buildAgentMenuEntries(paths: ResolvedPaths): AgentMenuEntry[] {
-  const bundled = readAgentFiles(paths.bundledAgentsDir);
-  const user = readAgentFiles(paths.userAgentsDir);
-  const bundledByName = new Map(
-    bundled.agents.map((agent) => [normalizeName(agent.name), agent]),
-  );
-  const userByName = new Map(
-    user.agents.map((agent) => [normalizeName(agent.name), agent]),
-  );
-
-  const names = new Set<string>([
-    ...bundledByName.keys(),
-    ...userByName.keys(),
-  ]);
-
-  return [...names]
-    .sort((left, right) => left.localeCompare(right))
-    .map((normalizedName) => {
-      const bundledAgent = bundledByName.get(normalizedName);
-      const overrideAgent = userByName.get(normalizedName);
-      if (overrideAgent?.enabled === false) {
-        return {
-          name: overrideAgent.name,
-          state: "disabled",
-          bundled: bundledAgent,
-          override: overrideAgent,
-        };
-      }
-      if (overrideAgent) {
-        return {
-          name: overrideAgent.name,
-          state: "override",
-          bundled: bundledAgent,
-          override: overrideAgent,
-        };
-      }
-      return {
-        name: bundledAgent?.name ?? normalizedName,
-        state: "bundled",
-        bundled: bundledAgent,
-      };
-    });
-}
-
 export function describeAgentEntry(
-  entry: AgentMenuEntry,
-): Pick<MenuRow<AgentMenuEntry>, "label" | "detail"> {
+  entry: AgentCatalogEntry,
+): Pick<MenuRow<AgentCatalogEntry>, "label" | "detail"> {
   return {
     label: entry.name,
     detail: entry.state === "bundled" ? "[bundled]" : entry.state === "override" ? "[global override]" : "[disabled override]",
@@ -450,7 +362,8 @@ async function runCreateAgentFlow(
 
 async function editOverrideAgent(
   ctx: ExtensionCommandContext,
-  entry: AgentMenuEntry,
+  deps: RuntimeDeps,
+  entry: AgentCatalogEntry,
 ): Promise<void> {
   const sourcePath = entry.override?.sourcePath;
   if (!sourcePath) {
@@ -458,20 +371,20 @@ async function editOverrideAgent(
     return;
   }
 
-  const current = readFileSync(sourcePath, "utf8");
-  const edited = await ctx.ui.editor(`Edit ${entry.name}`, current);
-  if (edited === undefined || edited === current) {
-    return;
-  }
+  try {
+    const paths = deps.resolvePaths();
+    const current = deps.readUserAgentOverride(paths, sourcePath);
+    const edited = await ctx.ui.editor(`Edit ${entry.name}`, current);
+    if (edited === undefined || edited === current) {
+      return;
+    }
 
-  const parsed = parseAgentFile(sourcePath, edited);
-  if (!parsed.ok) {
-    ctx.ui.notify(`Could not save agent: ${parsed.diagnostic.reason}`, "error");
-    return;
+    deps.updateUserAgentOverride(paths, sourcePath, edited);
+    ctx.ui.notify(`Updated "${entry.name}" at ${sourcePath}`, "info");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.ui.notify(`Could not save agent: ${message}`, "error");
   }
-
-  writeFileSync(sourcePath, edited, "utf8");
-  ctx.ui.notify(`Updated "${entry.name}" at ${sourcePath}`, "info");
 }
 
 export async function runAgentsMenuSettingsFlow(
@@ -596,7 +509,7 @@ export async function runAgentsMenuAction(
 async function showAgentActions(
   ctx: ExtensionCommandContext,
   deps: RuntimeDeps,
-  entry: AgentMenuEntry,
+  entry: AgentCatalogEntry,
 ): Promise<void> {
   const items: Array<MenuChoice<string>> =
     entry.state === "bundled"
@@ -629,7 +542,7 @@ async function showAgentActions(
   }
 
   if (choice === "edit") {
-    await editOverrideAgent(ctx, entry);
+    await editOverrideAgent(ctx, deps, entry);
     return;
   }
   if (choice === "export") {
@@ -662,20 +575,20 @@ async function showAgentsBrowser(
   deps: RuntimeDeps,
 ): Promise<void> {
   while (true) {
-    const entries = buildAgentMenuEntries(deps.resolvePaths());
-    const diagnostics = readAgentFiles(deps.resolvePaths().userAgentsDir).diagnostics;
+    const paths = deps.resolvePaths();
+    const catalog = deps.discoverAgentCatalog(paths);
     const choice = await showRowsMenu(
       ctx,
       "Agents",
       [
-        ...entries.map((entry) => ({
+        ...catalog.entries.map((entry) => ({
           ...describeAgentEntry(entry),
           value: entry,
         })),
         { label: "Back", value: undefined, kind: "back" },
       ],
-      diagnostics.length > 0
-        ? `${diagnostics.length} invalid user agent file(s) skipped`
+      catalog.userDiagnostics.length > 0
+        ? `${catalog.userDiagnostics.length} invalid user agent file(s) skipped`
         : "↑/↓ move • Enter select • Esc close",
     );
 
@@ -692,16 +605,17 @@ export async function showAgentsMenu(
   deps: RuntimeDeps,
 ): Promise<void> {
   while (true) {
-    const entries = buildAgentMenuEntries(deps.resolvePaths());
+    const paths = deps.resolvePaths();
+    const catalog = deps.discoverAgentCatalog(paths);
     const choice = await showRowsMenu(
       ctx,
       "pi-subagents agents",
       [
-        { label: `Agents (${entries.length})`, value: "agents" },
+        { label: `Agents (${catalog.entries.length})`, value: "agents" },
         { label: "Create new agent", value: "create" },
         { label: "Settings", value: "settings" },
       ],
-      `${entries.length} visible agent(s) • ${deps.resolvePaths().userAgentsDir}`,
+      `${catalog.entries.length} visible agent(s) • ${paths.userAgentsDir}`,
     );
 
     if (!choice) {

@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,9 +14,12 @@ import {
   createAgentFile,
   deleteUserAgentOverride,
   disableAgentInUserScope,
+  discoverAgentCatalog,
   discoverAgents,
   discoverToolNames,
   exportAgentToUserScope,
+  readUserAgentOverride,
+  updateUserAgentOverride,
 } from "../src/core/agents.js";
 import { parseAgentContent, serializeAgent } from "../src/core/agent-format.js";
 import type { AgentCreationInput, ResolvedPaths } from "../src/shared/types.js";
@@ -47,6 +51,23 @@ function createValidInput(
     systemPrompt: "# System prompt\nInspect the repo.",
     ...overrides,
   };
+}
+
+function agentMarkdown(
+  name: string,
+  description: string,
+  enabled?: boolean,
+): string {
+  return [
+    "---",
+    `name: ${name}`,
+    `description: ${description}`,
+    "tools: read",
+    ...(enabled === undefined ? [] : [`enabled: ${enabled}`]),
+    "---",
+    `${name} prompt`,
+    "",
+  ].join("\n");
 }
 
 describe("agent discovery", () => {
@@ -333,6 +354,209 @@ describe("agent discovery", () => {
         reason: "malformed frontmatter line: name bad",
       },
     ]);
+  });
+});
+
+describe("agent catalog and override persistence", () => {
+  test("reports an unreadable agent directory instead of throwing", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-catalog-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(dirname(paths.userAgentsDir), { recursive: true });
+    writeFileSync(paths.userAgentsDir, "not a directory");
+
+    const catalog = discoverAgentCatalog(paths);
+
+    expect(catalog.entries).toEqual([]);
+    expect(catalog.userDiagnostics).toEqual([
+      { path: paths.userAgentsDir, reason: "unreadable directory" },
+    ]);
+  });
+
+  test("returns sorted catalog entries using first-definition precedence", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-catalog-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.userAgentsDir, { recursive: true });
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+
+    writeFileSync(
+      join(paths.bundledAgentsDir, "planner.md"),
+      agentMarkdown("planner", "Bundled planner"),
+    );
+    writeFileSync(
+      join(paths.bundledAgentsDir, "scout.md"),
+      agentMarkdown("scout", "Bundled scout"),
+    );
+    writeFileSync(
+      join(paths.userAgentsDir, "a-scout.md"),
+      agentMarkdown("Scout", "User scout"),
+    );
+    writeFileSync(
+      join(paths.userAgentsDir, "b-planner.md"),
+      agentMarkdown("planner", "Disabled planner", false),
+    );
+    writeFileSync(
+      join(paths.userAgentsDir, "c-custom.md"),
+      agentMarkdown("custom", "User only"),
+    );
+    writeFileSync(
+      join(paths.userAgentsDir, "z-scout.md"),
+      agentMarkdown("scout", "Later duplicate"),
+    );
+
+    const catalog = discoverAgentCatalog(paths);
+
+    expect(catalog.entries).toMatchObject([
+      {
+        name: "custom",
+        state: "override",
+        override: { description: "User only" },
+      },
+      {
+        name: "planner",
+        state: "disabled",
+        bundled: { description: "Bundled planner" },
+        override: { description: "Disabled planner", enabled: false },
+      },
+      {
+        name: "Scout",
+        state: "override",
+        bundled: { description: "Bundled scout" },
+        override: { description: "User scout" },
+      },
+    ]);
+    expect(catalog.userDiagnostics).toEqual([
+      {
+        path: join(paths.userAgentsDir, "z-scout.md"),
+        reason: 'duplicate agent name "scout" skipped; first definition wins',
+      },
+    ]);
+  });
+
+  test("separates user and bundled discovery diagnostics", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-catalog-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.userAgentsDir, { recursive: true });
+    mkdirSync(paths.bundledAgentsDir, { recursive: true });
+
+    writeFileSync(
+      join(paths.userAgentsDir, "bad name.md"),
+      agentMarkdown("bad", "Unsafe filename"),
+    );
+    mkdirSync(join(paths.userAgentsDir, "broken.md"));
+    const outside = join(rootDir, "outside.md");
+    writeFileSync(outside, agentMarkdown("outside", "Outside"));
+    symlinkSync(outside, join(paths.userAgentsDir, "linked.md"));
+    writeFileSync(
+      join(paths.bundledAgentsDir, "malformed.md"),
+      "---\nname: malformed\ntools: read\n---\nBody\n",
+    );
+
+    const catalog = discoverAgentCatalog(paths);
+
+    expect(catalog.entries).toEqual([]);
+    expect(catalog.userDiagnostics).toEqual([
+      {
+        path: join(paths.userAgentsDir, "bad name.md"),
+        reason: "unsafe filename",
+      },
+      {
+        path: join(paths.userAgentsDir, "broken.md"),
+        reason: "unreadable or symlink",
+      },
+      {
+        path: join(paths.userAgentsDir, "linked.md"),
+        reason: "unreadable or symlink",
+      },
+    ]);
+    expect(catalog.bundledDiagnostics).toEqual([
+      {
+        path: join(paths.bundledAgentsDir, "malformed.md"),
+        reason: "missing required non-empty description",
+      },
+    ]);
+  });
+
+  test("reads override Markdown byte-for-byte", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-override-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.userAgentsDir, { recursive: true });
+    const sourcePath = join(paths.userAgentsDir, "scout.md");
+    const original = `${agentMarkdown("scout", "Original scout")}\n`;
+    writeFileSync(sourcePath, original);
+
+    expect(readUserAgentOverride(paths, sourcePath)).toBe(original);
+  });
+
+  test("rejects paths that are not safe direct user overrides", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-override-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.userAgentsDir, { recursive: true });
+    const original = agentMarkdown("scout", "Original scout");
+    const nestedDir = join(paths.userAgentsDir, "nested");
+    mkdirSync(nestedDir);
+    const nestedPath = join(nestedDir, "scout.md");
+    writeFileSync(nestedPath, original);
+    const outsidePath = join(rootDir, "outside.md");
+    writeFileSync(outsidePath, original);
+    const linkedPath = join(paths.userAgentsDir, "linked.md");
+    symlinkSync(outsidePath, linkedPath);
+
+    expect(() => readUserAgentOverride(paths, nestedPath)).toThrow(
+      "invalid user agent override path",
+    );
+    expect(() => readUserAgentOverride(paths, outsidePath)).toThrow(
+      "invalid user agent override path",
+    );
+    expect(() =>
+      updateUserAgentOverride(
+        paths,
+        outsidePath,
+        agentMarkdown("scout", "Changed scout"),
+      ),
+    ).toThrow("invalid user agent override path");
+    expect(readFileSync(outsidePath, "utf8")).toBe(original);
+    expect(() => readUserAgentOverride(paths, linkedPath)).toThrow(
+      "user agent override is missing, unreadable, or symlinked",
+    );
+    expect(() =>
+      readUserAgentOverride(paths, join(paths.userAgentsDir, "missing.md")),
+    ).toThrow("user agent override is missing, unreadable, or symlinked");
+  });
+
+  test("leaves an override unchanged when edited Markdown is invalid", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-override-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.userAgentsDir, { recursive: true });
+    const sourcePath = join(paths.userAgentsDir, "scout.md");
+    const original = agentMarkdown("scout", "Original scout");
+    writeFileSync(sourcePath, original);
+
+    expect(() =>
+      updateUserAgentOverride(
+        paths,
+        sourcePath,
+        "---\nname: scout\ntools: read\n---\nInvalid\n",
+      ),
+    ).toThrow("missing required non-empty description");
+    expect(readFileSync(sourcePath, "utf8")).toBe(original);
+  });
+
+  test("writes valid edited Markdown and returns the saved agent", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-override-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(paths.userAgentsDir, { recursive: true });
+    const sourcePath = join(paths.userAgentsDir, "scout.md");
+    writeFileSync(sourcePath, agentMarkdown("scout", "Original scout"));
+    const edited = agentMarkdown("RenamedScout", "Edited scout");
+
+    const saved = updateUserAgentOverride(paths, sourcePath, edited);
+
+    expect(saved).toMatchObject({
+      name: "RenamedScout",
+      description: "Edited scout",
+      sourcePath,
+    });
+    expect(readFileSync(sourcePath, "utf8")).toBe(edited);
   });
 });
 

@@ -117,6 +117,19 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     resolvePaths: () => paths,
     loadConfig: () => ({ exists: false, config }),
     discoverAgents: () => discovery,
+    discoverAgentCatalog: () => ({
+      entries: [
+        {
+          name: primaryAgent.name,
+          state: "bundled",
+          bundled: primaryAgent,
+        },
+      ],
+      userDiagnostics: [],
+      bundledDiagnostics: [],
+    }),
+    readUserAgentOverride: () => "",
+    updateUserAgentOverride: () => primaryAgent,
     discoverToolNames: () => ["bash", "read", "write"],
     createAgentFile: () => primaryAgent,
     exportAgentToUserScope: () => primaryAgent,
