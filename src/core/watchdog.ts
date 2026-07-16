@@ -309,7 +309,7 @@ export function createWatchdogRuntime(
   config: WatchdogConfig,
   options?: WatchdogRuntimeOptions,
 ): WatchdogRuntime {
-  let currentStatus: "idle" | "reviewing" | "disabled" = config.enabled ? "idle" : "disabled";
+  let activeReviews = 0;
   let disposed = false;
   const globalSeen = new Set<string>();
 
@@ -376,7 +376,7 @@ export function createWatchdogRuntime(
 
     // Turn-delta mode: review conversation instead of git diff
     if (!config.reviewChangesOnly) {
-      currentStatus = "reviewing";
+      activeReviews++;
       try {
         // Re-fetches messages on each call (agent may have new conversation after resume)
         const runReview = async () => {
@@ -415,14 +415,14 @@ export function createWatchdogRuntime(
         if (warnings.length > 0) options?.onWarnings?.(agentId, warnings, source);
         return warnings;
       } finally {
-        currentStatus = config.enabled && !disposed ? "idle" : "disabled";
+        activeReviews--;
       }
     }
 
     const signature = computeChangeSignature(cwd);
     if (!signature) return [];
 
-    currentStatus = "reviewing";
+    activeReviews++;
     try {
       // Recomputes diff + LSP on each call (required for auto-follow re-reviews)
       const getFreshDiffAndLsp = async (): Promise<{ diff: string; lspOutput: string }> => {
@@ -477,16 +477,18 @@ export function createWatchdogRuntime(
 
       return warnings;
     } finally {
-      currentStatus = config.enabled && !disposed ? "idle" : "disabled";
+      activeReviews--;
     }
   }
 
   return {
     handleAgentEnd,
-    status: () => currentStatus,
+    status: () => {
+      if (!config.enabled || disposed) return "disabled";
+      return activeReviews > 0 ? "reviewing" : "idle";
+    },
     dispose: () => {
       disposed = true;
-      currentStatus = "disabled";
     },
   };
 }

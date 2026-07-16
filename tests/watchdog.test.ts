@@ -499,6 +499,33 @@ describe("WatchdogRuntime", () => {
     await promise;
     expect(runtime.status()).toBe("idle");
   });
+
+  it("stays reviewing until all overlapping reviews finish", async () => {
+    const deferredReviews: Array<{ resolve: () => void }> = [];
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: () => new Promise((resolve) => {
+          deferredReviews.push({ resolve: () => resolve([]) });
+        }),
+      },
+    );
+
+    const first = runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: "/tmp" });
+    const second = runtime.handleAgentEnd({ id: "agent-2", type: "worker", cwd: "/tmp" });
+    expect(runtime.status()).toBe("reviewing");
+
+    const [firstReview, secondReview] = deferredReviews;
+    if (!firstReview || !secondReview) throw new Error("reviews did not start");
+
+    firstReview.resolve();
+    await first;
+    expect(runtime.status()).toBe("reviewing");
+
+    secondReview.resolve();
+    await second;
+    expect(runtime.status()).toBe("idle");
+  });
 });
 
 describe("turn-delta mode", () => {
