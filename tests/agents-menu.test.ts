@@ -76,6 +76,7 @@ async function driveOverrideEdit(updateError?: Error) {
     updateUserAgentOverride,
   } as unknown as RuntimeDeps;
   const inputs = ["\r", "\r", "\r", "\x1b", "\x1b"];
+  const editor = vi.fn(async () => edited);
   const renders: string[] = [];
   const notifications: Array<{ message: string; level: string }> = [];
 
@@ -110,7 +111,7 @@ async function driveOverrideEdit(updateError?: Error) {
             component.handleInput(inputs.shift() ?? "\x1b");
           });
         },
-        editor: async () => edited,
+        editor,
         notify: (message: string, level: string) => {
           notifications.push({ message, level });
         },
@@ -122,6 +123,7 @@ async function driveOverrideEdit(updateError?: Error) {
   return {
     discoverAgentCatalog,
     edited,
+    editor,
     notifications,
     paths,
     readUserAgentOverride,
@@ -163,6 +165,10 @@ test("catalog display and override editing delegate through RuntimeDeps", async 
     result.paths,
     result.sourcePath,
     result.edited,
+  );
+  expect(result.editor).toHaveBeenCalledWith(
+    "Edit planner",
+    "original Markdown\n",
   );
   expect(result.renders.join("\n")).toContain("Agents (1)");
   expect(result.renders.join("\n")).toContain(

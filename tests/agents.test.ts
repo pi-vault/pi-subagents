@@ -358,6 +358,20 @@ describe("agent discovery", () => {
 });
 
 describe("agent catalog and override persistence", () => {
+  test("reports an unreadable agent directory instead of throwing", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-catalog-"));
+    const paths = createPaths(rootDir);
+    mkdirSync(dirname(paths.userAgentsDir), { recursive: true });
+    writeFileSync(paths.userAgentsDir, "not a directory");
+
+    const catalog = discoverAgentCatalog(paths);
+
+    expect(catalog.entries).toEqual([]);
+    expect(catalog.userDiagnostics).toEqual([
+      { path: paths.userAgentsDir, reason: "unreadable directory" },
+    ]);
+  });
+
   test("returns sorted catalog entries using first-definition precedence", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-catalog-"));
     const paths = createPaths(rootDir);
@@ -493,6 +507,14 @@ describe("agent catalog and override persistence", () => {
     expect(() => readUserAgentOverride(paths, outsidePath)).toThrow(
       "invalid user agent override path",
     );
+    expect(() =>
+      updateUserAgentOverride(
+        paths,
+        outsidePath,
+        agentMarkdown("scout", "Changed scout"),
+      ),
+    ).toThrow("invalid user agent override path");
+    expect(readFileSync(outsidePath, "utf8")).toBe(original);
     expect(() => readUserAgentOverride(paths, linkedPath)).toThrow(
       "user agent override is missing, unreadable, or symlinked",
     );

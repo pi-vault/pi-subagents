@@ -72,9 +72,19 @@ function discoverAgentsFromDirectory(directory: string): AgentDiscoveryResult {
 
   const agents: AgentDefinition[] = [];
   const diagnostics: AgentDiscoveryDiagnostic[] = [];
-  const fileNames = readdirSync(directory)
-    .filter((fileName) => fileName.endsWith(".md"))
-    .sort((left, right) => left.localeCompare(right));
+  let fileNames: string[];
+  try {
+    fileNames = readdirSync(directory)
+      .filter((fileName) => fileName.endsWith(".md"))
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return {
+      agents,
+      diagnostics: [
+        { path: resolve(directory), reason: "unreadable directory" },
+      ],
+    };
+  }
 
   for (const fileName of fileNames) {
     const baseName = fileName.slice(0, -3);
