@@ -64,8 +64,14 @@ export interface WatchdogConfig {
   };
 }
 
+export interface WatchdogSubject {
+  id: string;
+  type: string;
+  cwd: string;
+}
+
 export interface WatchdogRuntime {
-  handleAgentEnd(agentId: string, cwd: string): Promise<WatchdogWarning[]>;
+  handleAgentEnd(subject: WatchdogSubject): Promise<WatchdogWarning[]>;
   status(): "idle" | "reviewing" | "disabled";
   dispose(): void;
 }
@@ -236,6 +242,27 @@ export function parseWatchdogConfig(raw: unknown): WatchdogConfig {
   return config;
 }
 
+function selectReviewPolicy(
+  config: WatchdogConfig,
+  agentType: string,
+): { reviewConfig: WatchdogConfig; source: "parent" | "child" } {
+  const override = config.children.overrides[agentType];
+  if (!config.children.enabled || override?.enabled === false) {
+    return { reviewConfig: config, source: "parent" };
+  }
+
+  const model = override?.model ?? config.children.model ?? config.model;
+  const thinking = override?.thinking ?? config.children.thinking ?? config.thinking;
+  return {
+    reviewConfig: {
+      ...config,
+      ...(model ? { model } : {}),
+      ...(thinking ? { thinking } : {}),
+    },
+    source: "child",
+  };
+}
+
 // ─── Reviewer Prompt ──────────────────────────────────────────────────────────
 
 const REVIEWER_SYSTEM_PROMPT = `You are a code watchdog. Review the following changes for defects.
@@ -254,9 +281,18 @@ Rules:
 
 export interface WatchdogRuntimeOptions {
   /** Override reviewer execution for testing or custom implementations. */
-  runReview?: (diff: string, lspOutput: string, agentId: string) => Promise<WatchdogWarning[]>;
+  runReview?: (
+    diff: string,
+    lspOutput: string,
+    agentId: string,
+    reviewConfig: WatchdogConfig,
+  ) => Promise<WatchdogWarning[]>;
   /** Called when warnings are produced. */
-  onWarnings?: (agentId: string, warnings: WatchdogWarning[]) => void;
+  onWarnings?: (
+    agentId: string,
+    warnings: WatchdogWarning[],
+    source: "parent" | "child",
+  ) => void;
   /** Return session messages for turn-delta mode (reviewChangesOnly: false). */
   getSessionMessages?: (agentId: string) => unknown[] | undefined;
   /** Resume a completed agent with a steering message. Used by auto-follow. */
@@ -283,8 +319,11 @@ export function createWatchdogRuntime(
   }
 
   /** Should auto-follow run given these warnings? */
-  function shouldAutoFollow(warnings: WatchdogWarning[]): boolean {
-    if (!options?.resumeAgent) return false;
+  function shouldAutoFollow(
+    warnings: WatchdogWarning[],
+    source: "parent" | "child",
+  ): boolean {
+    if (source === "child" || !options?.resumeAgent) return false;
     const hasBlockers = warnings.some((w) => w.severity === "blocker");
     const hasConcerns = warnings.some((w) => w.severity === "concern");
     return (config.autoFollow.blockers && hasBlockers) || (config.autoFollow.concerns && hasConcerns);
@@ -295,8 +334,9 @@ export function createWatchdogRuntime(
     agentId: string,
     initialWarnings: WatchdogWarning[],
     reReview: () => Promise<WatchdogWarning[]>,
+    source: "parent" | "child",
   ): Promise<WatchdogWarning[]> {
-    if (!shouldAutoFollow(initialWarnings)) return initialWarnings;
+    if (!shouldAutoFollow(initialWarnings, source)) return initialWarnings;
 
     let warnings = initialWarnings;
     let lastKey = warningKey(warnings);
@@ -329,8 +369,10 @@ export function createWatchdogRuntime(
     return warnings;
   }
 
-  async function handleAgentEnd(agentId: string, cwd: string): Promise<WatchdogWarning[]> {
+  async function handleAgentEnd(subject: WatchdogSubject): Promise<WatchdogWarning[]> {
     if (!config.enabled || disposed) return [];
+    const { id: agentId, cwd } = subject;
+    const { reviewConfig, source } = selectReviewPolicy(config, subject.type);
 
     // Turn-delta mode: review conversation instead of git diff
     if (!config.reviewChangesOnly) {
@@ -347,19 +389,30 @@ export function createWatchdogRuntime(
             }
           }
           if (options?.runReview) {
-            return options.runReview(turnDelta, "N/A (turn-delta mode)", agentId);
+            return options.runReview(
+              turnDelta,
+              "N/A (turn-delta mode)",
+              agentId,
+              reviewConfig,
+            );
           }
           const localSeen = new Set<string>();
-          return runDefaultReview(config, turnDelta, "N/A (turn-delta mode)", agentId, localSeen);
+          return runDefaultReview(
+            reviewConfig,
+            turnDelta,
+            "N/A (turn-delta mode)",
+            agentId,
+            localSeen,
+          );
         };
 
         let warnings = await runReview();
-        warnings = await attemptAutoFollow(agentId, warnings, runReview);
+        warnings = await attemptAutoFollow(agentId, warnings, runReview, source);
 
         // Add final warnings to globalSeen for cross-agent dedup
         for (const w of warnings) globalSeen.add(w.summary.toLowerCase().trim());
 
-        if (warnings.length > 0) options?.onWarnings?.(agentId, warnings);
+        if (warnings.length > 0) options?.onWarnings?.(agentId, warnings, source);
         return warnings;
       } finally {
         currentStatus = config.enabled && !disposed ? "idle" : "disabled";
@@ -382,10 +435,14 @@ export function createWatchdogRuntime(
         }
 
         let lspOutput = "No LSP issues found";
-        if (config.lsp.enabled) {
+        if (reviewConfig.lsp.enabled) {
           try {
             const { collectDiagnostics } = await import("./watchdog-lsp.js");
-            const lspResult = await collectDiagnostics(cwd, signature.changedPaths, config.lsp);
+            const lspResult = await collectDiagnostics(
+              cwd,
+              signature.changedPaths,
+              reviewConfig.lsp,
+            );
             if (lspResult.diagnostics.length > 0) {
               lspOutput = lspResult.diagnostics
                 .map((d) => `${d.file}:${d.line} ${d.severity} ${d.code ?? ""}: ${d.message}`)
@@ -401,21 +458,21 @@ export function createWatchdogRuntime(
       const runReview = async () => {
         const { diff, lspOutput } = await getFreshDiffAndLsp();
         if (options?.runReview) {
-          return options.runReview(diff, lspOutput, agentId);
+          return options.runReview(diff, lspOutput, agentId, reviewConfig);
         }
         // Use a local seen set so re-reviews don't deduplicate against previous rounds
         const localSeen = new Set<string>();
-        return runDefaultReview(config, diff, lspOutput, agentId, localSeen);
+        return runDefaultReview(reviewConfig, diff, lspOutput, agentId, localSeen);
       };
 
       let warnings = await runReview();
-      warnings = await attemptAutoFollow(agentId, warnings, runReview);
+      warnings = await attemptAutoFollow(agentId, warnings, runReview, source);
 
       // After auto-follow completes, add final warnings to globalSeen for cross-agent dedup
       for (const w of warnings) globalSeen.add(w.summary.toLowerCase().trim());
 
       if (warnings.length > 0) {
-        options?.onWarnings?.(agentId, warnings);
+        options?.onWarnings?.(agentId, warnings, source);
       }
 
       return warnings;

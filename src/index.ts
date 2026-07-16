@@ -29,8 +29,6 @@ import { checkLocalMemoryGitignore } from "./core/memory.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
 import { createWatchdogRuntime, parseWatchdogConfig } from "./core/watchdog.js";
-import type { WatchdogWarning } from "./core/watchdog.js";
-import { resolveChildWatchdogConfig } from "./core/watchdog-child.js";
 import { formatWatchdogWarningText } from "./core/watchdog-render.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import type { JoinMode, NotificationDetails, WidgetMode } from "./shared/types.js";
@@ -131,15 +129,21 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   let sessionMessageSource: ((agentId: string) => unknown[] | undefined) | undefined;
   let resumeAgentFn: ((id: string, msg: string) => Promise<void>) | undefined;
   const watchdog = createWatchdogRuntime(watchdogConfig, {
-    onWarnings: (agentId, warnings) => {
+    onWarnings: (agentId, warnings, source) => {
       for (const w of warnings) {
-        const content = `[watchdog/${w.severity}] ${w.summary}\nEvidence: ${w.evidence}\nAction: ${w.recommendedAction}`;
+        const childLabel = source === "child" ? "/child" : "";
+        const content = `[watchdog${childLabel}/${w.severity}] ${w.summary}\nEvidence: ${w.evidence}\nAction: ${w.recommendedAction}`;
         (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
           {
             customType: "watchdog-warning",
             content,
             display: true,
-            details: { agentId, ...w, state: "displayed" },
+            details: {
+              agentId,
+              ...w,
+              state: "displayed",
+              ...(source === "child" ? { source } : {}),
+            },
           } as unknown as Parameters<typeof pi.sendMessage>[0],
           { deliverAs: "followUp", triggerTurn: true },
         );
@@ -198,40 +202,13 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
     // Trigger watchdog review non-blocking after agent completes
     if (watchdog.status() !== "disabled" && record.status === "completed") {
-      const childConfig = resolveChildWatchdogConfig(watchdogConfig, record.type);
-      if (childConfig) {
-        // Child-specific review: run with potentially different model/thinking
-        const childOverrideConfig = {
-          ...watchdogConfig,
-          ...(childConfig.model ? { model: childConfig.model } : {}),
-          ...(childConfig.thinking ? { thinking: childConfig.thinking } : {}),
-        };
-        const sendWarning = (agentId: string, w: WatchdogWarning) => {
-          const content = `[watchdog/child/${w.severity}] ${w.summary}\nEvidence: ${w.evidence}\nAction: ${w.recommendedAction}`;
-          (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
-            {
-              customType: "watchdog-warning",
-              content,
-              display: true,
-              details: { agentId, ...w, state: "displayed", source: "child" },
-            } as unknown as Parameters<typeof pi.sendMessage>[0],
-            { deliverAs: "followUp", triggerTurn: true },
-          );
-        };
-        const childWatchdog = createWatchdogRuntime(childOverrideConfig, {
-          onWarnings: (agentId, ws) => {
-            for (const w of ws) sendWarning(agentId, w);
-          },
-          getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
-        });
-        childWatchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd())
-          .catch((err) => { console.error("[watchdog/child] handleAgentEnd failed:", err); })
-          .finally(() => { childWatchdog.dispose(); });
-      } else {
-        watchdog.handleAgentEnd(record.id, record.cwd ?? process.cwd()).catch((err) => {
-          console.error("[watchdog] handleAgentEnd failed:", err);
-        });
-      }
+      watchdog.handleAgentEnd({
+        id: record.id,
+        type: record.type,
+        cwd: record.cwd ?? process.cwd(),
+      }).catch((err) => {
+        console.error("[watchdog] handleAgentEnd failed:", err);
+      });
     }
 
     // TUI: mark agent finished immediately regardless of notification path
