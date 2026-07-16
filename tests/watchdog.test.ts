@@ -287,6 +287,108 @@ describe("parseWatchdogConfig", () => {
 });
 
 describe("WatchdogRuntime", () => {
+  const policyCases = [
+    {
+      name: "uses parent defaults when child policy is disabled",
+      raw: {
+        enabled: true,
+        model: "parent-model",
+        thinking: "high",
+        children: { enabled: false },
+      },
+      type: "worker",
+      expectedModel: "parent-model",
+      expectedThinking: "high",
+      expectedSource: "parent",
+    },
+    {
+      name: "uses child defaults with parent fallback",
+      raw: {
+        enabled: true,
+        model: "parent-model",
+        thinking: "high",
+        children: { enabled: true, model: "child-model" },
+      },
+      type: "worker",
+      expectedModel: "child-model",
+      expectedThinking: "high",
+      expectedSource: "child",
+    },
+    {
+      name: "uses per-Agent overrides",
+      raw: {
+        enabled: true,
+        model: "parent-model",
+        thinking: "high",
+        children: {
+          enabled: true,
+          model: "child-model",
+          overrides: { scout: { model: "scout-model", thinking: "low" } },
+        },
+      },
+      type: "scout",
+      expectedModel: "scout-model",
+      expectedThinking: "low",
+      expectedSource: "child",
+    },
+    {
+      name: "falls back to parent when the Agent override disables child policy",
+      raw: {
+        enabled: true,
+        model: "parent-model",
+        thinking: "high",
+        children: {
+          enabled: true,
+          model: "child-model",
+          overrides: { scout: { enabled: false } },
+        },
+      },
+      type: "scout",
+      expectedModel: "parent-model",
+      expectedThinking: "high",
+      expectedSource: "parent",
+    },
+  ] as const;
+
+  it.each(policyCases)("$name", async ({
+    raw,
+    type,
+    expectedModel,
+    expectedThinking,
+    expectedSource,
+  }) => {
+    let selected: { model?: string; thinking?: string } | undefined;
+    let deliveredSource: "parent" | "child" | undefined;
+    let callbackCount = 0;
+
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ ...raw, reviewChangesOnly: false }),
+      {
+        runReview: async (_diff, _lsp, _agentId, reviewConfig) => {
+          selected = reviewConfig;
+          return [{
+            severity: "concern",
+            summary: "Policy test",
+            evidence: "file.ts:1",
+            recommendedAction: "Inspect",
+            category: "other",
+          }];
+        },
+        onWarnings: (_agentId, _warnings, source) => {
+          callbackCount++;
+          deliveredSource = source;
+        },
+      },
+    );
+
+    await runtime.handleAgentEnd({ id: "agent-1", type, cwd: "/tmp" });
+
+    expect(selected?.model).toBe(expectedModel);
+    expect(selected?.thinking).toBe(expectedThinking);
+    expect(deliveredSource).toBe(expectedSource);
+    expect(callbackCount).toBe(1);
+  });
+
   it("status returns disabled when not enabled", () => {
     const runtime = createWatchdogRuntime(
       parseWatchdogConfig({ enabled: false }),
@@ -312,7 +414,11 @@ describe("WatchdogRuntime", () => {
 
   it("handleAgentEnd returns empty when disabled", async () => {
     const runtime = createWatchdogRuntime(parseWatchdogConfig({ enabled: false }));
-    const warnings = await runtime.handleAgentEnd("test-agent", "/tmp");
+    const warnings = await runtime.handleAgentEnd({
+      id: "test-agent",
+      type: "worker",
+      cwd: "/tmp",
+    });
     expect(warnings).toEqual([]);
   });
 
@@ -320,7 +426,7 @@ describe("WatchdogRuntime", () => {
     const runtime = createWatchdogRuntime(parseWatchdogConfig({ enabled: true }));
     const tmp = mkdtempSync(join(tmpdir(), "watchdog-nongit-"));
     tmps.push(tmp);
-    const warnings = await runtime.handleAgentEnd("test-agent", tmp);
+    const warnings = await runtime.handleAgentEnd({ id: "test-agent", type: "worker", cwd: tmp });
     expect(warnings).toEqual([]);
   });
 
@@ -342,7 +448,7 @@ describe("WatchdogRuntime", () => {
       },
     });
 
-    const warnings = await runtime.handleAgentEnd("test-agent", tmp);
+    const warnings = await runtime.handleAgentEnd({ id: "test-agent", type: "worker", cwd: tmp });
     expect(reviewCalled).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0].summary).toBe("Test issue");
@@ -368,7 +474,7 @@ describe("WatchdogRuntime", () => {
       },
     });
 
-    await runtime.handleAgentEnd("agent-xyz", tmp);
+    await runtime.handleAgentEnd({ id: "agent-xyz", type: "worker", cwd: tmp });
     expect(callbackAgentId).toBe("agent-xyz");
     expect(callbackWarnings).toHaveLength(1);
   });
@@ -387,10 +493,37 @@ describe("WatchdogRuntime", () => {
     });
 
     expect(runtime.status()).toBe("idle");
-    const promise = runtime.handleAgentEnd("test-agent", tmp);
+    const promise = runtime.handleAgentEnd({ id: "test-agent", type: "worker", cwd: tmp });
     // Status transitions to "reviewing" synchronously before first await
     expect(runtime.status()).toBe("reviewing");
     await promise;
+    expect(runtime.status()).toBe("idle");
+  });
+
+  it("stays reviewing until all overlapping reviews finish", async () => {
+    const deferredReviews: Array<{ resolve: () => void }> = [];
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({ enabled: true, reviewChangesOnly: false }),
+      {
+        runReview: () => new Promise((resolve) => {
+          deferredReviews.push({ resolve: () => resolve([]) });
+        }),
+      },
+    );
+
+    const first = runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: "/tmp" });
+    const second = runtime.handleAgentEnd({ id: "agent-2", type: "worker", cwd: "/tmp" });
+    expect(runtime.status()).toBe("reviewing");
+
+    const [firstReview, secondReview] = deferredReviews;
+    if (!firstReview || !secondReview) throw new Error("reviews did not start");
+
+    firstReview.resolve();
+    await first;
+    expect(runtime.status()).toBe("reviewing");
+
+    secondReview.resolve();
+    await second;
     expect(runtime.status()).toBe("idle");
   });
 });
@@ -411,7 +544,7 @@ describe("turn-delta mode", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", "/tmp/nonexistent");
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: "/tmp/nonexistent" });
     expect(reviewInput).toContain("read_file");
     expect(reviewInput).toContain("/x.ts");
   });
@@ -429,7 +562,7 @@ describe("turn-delta mode", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", "/tmp");
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: "/tmp" });
     expect(reviewInput).toContain("no conversation data");
   });
 
@@ -446,7 +579,7 @@ describe("turn-delta mode", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", "/tmp");
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: "/tmp" });
     expect(emitted).toHaveLength(1);
     expect(emitted[0].summary).toBe("Missing error handling");
   });
@@ -463,6 +596,37 @@ describe("turn-delta mode", () => {
 });
 
 describe("auto-follow steering", () => {
+  it("does not auto-follow child-policy reviews", async () => {
+    let reviewCount = 0;
+    let resumeCount = 0;
+    const runtime = createWatchdogRuntime(
+      parseWatchdogConfig({
+        enabled: true,
+        reviewChangesOnly: false,
+        children: { enabled: true },
+        autoFollow: { blockers: true, maxAttempts: 2 },
+      }),
+      {
+        runReview: async () => {
+          reviewCount++;
+          return [{
+            severity: "blocker",
+            summary: "Child issue",
+            evidence: "file.ts:1",
+            recommendedAction: "Fix",
+            category: "correctness",
+          }];
+        },
+        resumeAgent: async () => { resumeCount++; },
+      },
+    );
+
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: "/tmp" });
+
+    expect(reviewCount).toBe(1);
+    expect(resumeCount).toBe(0);
+  });
+
   it("does nothing when autoFollow.blockers is false (default)", async () => {
     const tmp = makeGitRepoWithChanges("watchdog-no-autofollow-");
     const resumed: string[] = [];
@@ -476,7 +640,7 @@ describe("auto-follow steering", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", tmp);
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: tmp });
     expect(resumed).toHaveLength(0);
   });
 
@@ -499,7 +663,7 @@ describe("auto-follow steering", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", tmp);
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: tmp });
     expect(resumed).toHaveLength(1);
     expect(resumed[0].id).toBe("agent-1");
     expect(resumed[0].message).toContain("Null deref");
@@ -519,7 +683,7 @@ describe("auto-follow steering", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", tmp);
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: tmp });
     expect(resumed).toHaveLength(2); // maxAttempts = 2
   });
 
@@ -537,7 +701,7 @@ describe("auto-follow steering", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", tmp);
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: tmp });
     // Should stop at stalemateRepeats (2), not maxAttempts (10)
     expect(resumed.length).toBe(2);
   });
@@ -556,7 +720,7 @@ describe("auto-follow steering", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", tmp);
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: tmp });
     expect(resumed).toHaveLength(0);
   });
 
@@ -598,7 +762,7 @@ describe("auto-follow steering", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", tmp);
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: tmp });
     // Should have been called twice (initial + 1 re-review from maxAttempts=1)
     expect(diffsSeen.length).toBe(2);
     // The second diff should differ from the first (fresh data, not stale)
@@ -623,7 +787,7 @@ describe("auto-follow steering", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", tmp);
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: tmp });
     // All re-review calls should return 1 warning (not 0 due to dedup)
     expect(warningCounts.every(c => c === 1)).toBe(true);
     // Should have called runReview 3 times: initial + 2 from maxAttempts=2
@@ -648,7 +812,7 @@ describe("auto-follow steering", () => {
       },
     );
 
-    await runtime.handleAgentEnd("agent-1", tmp);
+    await runtime.handleAgentEnd({ id: "agent-1", type: "worker", cwd: tmp });
     expect(resumed).toHaveLength(1);
   });
 });
