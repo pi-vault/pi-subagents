@@ -9,10 +9,11 @@ const tmpDir = "/tmp";
 vi.mock("../src/core/agent-runner.js", () => ({
   runAgent: vi.fn().mockResolvedValue({
     responseText: "done",
-    session: {},
+    session: { isIdle: true },
     aborted: false,
     steered: false,
   }),
+  resumeAgent: vi.fn().mockResolvedValue("resumed"),
 }));
 
 function makeAgentDef(
@@ -90,6 +91,148 @@ describe("AgentManager", () => {
     });
     expect(manager.listAgents()).toHaveLength(1);
     expect(manager.listAgents()[0].status).toBe("completed");
+  });
+
+  it("initializes live state with maxTurns", async () => {
+    const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+      maxTurns: 7,
+    });
+
+    expect(record.live).toEqual({
+      activeTools: [],
+      responseText: "",
+      maxTurns: 7,
+    });
+  });
+
+  it("tracks overlapping tools and unmatched ends", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    vi.mocked(runAgent).mockImplementationOnce(async (_agent, options) => {
+      options.onToolActivity?.({ type: "start", toolName: "bash" });
+      options.onToolActivity?.({ type: "start", toolName: "bash" });
+      options.onToolActivity?.({ type: "end", toolName: "bash" });
+      expect(manager.listAgents()[0]?.live.activeTools).toEqual(["bash"]);
+      options.onToolActivity?.({ type: "end", toolName: "missing" });
+      return {
+        responseText: "done",
+        session: { isIdle: true },
+        aborted: false,
+        steered: false,
+      };
+    });
+
+    const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+
+    expect(record.live.activeTools).toEqual(["bash"]);
+    expect(record.toolUses).toBe(2);
+  });
+
+  it("updates live state before notifying activity observers", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const snapshots: Array<{ tools: string[]; text: string; turns: number; input: number }> = [];
+    vi.mocked(runAgent).mockImplementationOnce(async (_agent, options) => {
+      options.onToolActivity?.({ type: "start", toolName: "read" });
+      options.onTextDelta?.("hi", "hi");
+      options.onTurnEnd?.(1);
+      options.onUsage?.({ input: 2, output: 3, cacheWrite: 4 });
+      return {
+        responseText: "hi",
+        session: { isIdle: true },
+        aborted: false,
+        steered: false,
+      };
+    });
+
+    const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+      onActivity: (record) => snapshots.push({
+        tools: [...record.live.activeTools],
+        text: record.live.responseText,
+        turns: record.turnCount,
+        input: record.lifetimeUsage.inputTokens,
+      }),
+    });
+
+    expect(snapshots).toEqual([
+      { tools: ["read"], text: "", turns: 0, input: 0 },
+      { tools: ["read"], text: "hi", turns: 0, input: 0 },
+      { tools: ["read"], text: "hi", turns: 1, input: 0 },
+      { tools: ["read"], text: "hi", turns: 1, input: 2 },
+    ]);
+    expect(record.lifetimeUsage).toEqual({
+      inputTokens: 2,
+      outputTokens: 3,
+      cacheWriteTokens: 4,
+    });
+  });
+
+  it("clears active tools only when settled", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    let release = () => {};
+    vi.mocked(runAgent).mockImplementationOnce((_agent, options) => {
+      options.onToolActivity?.({ type: "start", toolName: "bash" });
+      return new Promise((resolve) => {
+        release = () => resolve({
+          responseText: "done",
+          session: { isIdle: true },
+          aborted: false,
+          steered: false,
+        });
+      });
+    });
+    const id = manager.spawn({}, makeAgentDef(), { prompt: "test", cwd: "/tmp" });
+    const options = vi.mocked(runAgent).mock.calls[0]?.[1];
+
+    expect(manager.getRecord(id)?.live.activeTools).toEqual(["bash"]);
+    options?.onSettled?.();
+    expect(manager.getRecord(id)?.live.activeTools).toEqual([]);
+    release();
+    await manager.getRecord(id)?.promise;
+  });
+
+  it("clears active tools when execution rejects before settlement", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    vi.mocked(runAgent).mockImplementationOnce(async (_agent, options) => {
+      options.onToolActivity?.({ type: "start", toolName: "bash" });
+      throw new Error("failed");
+    });
+
+    const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+
+    expect(record.live.activeTools).toEqual([]);
+  });
+
+  it("swallows activity observer errors", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    vi.mocked(runAgent).mockImplementationOnce(async (_agent, options) => {
+      options.onTextDelta?.("ok", "ok");
+      return {
+        responseText: "ok",
+        session: { isIdle: true },
+        aborted: false,
+        steered: false,
+      };
+    });
+
+    const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+      onActivity: () => {
+        throw new Error("renderer failed");
+      },
+    });
+
+    expect(record.status).toBe("completed");
+    expect(record.live.responseText).toBe("ok");
   });
 
   it("can abort a running agent (returns false for nonexistent)", () => {
@@ -251,7 +394,7 @@ describe("thinking passthrough", () => {
       .spyOn(await import("../src/core/agent-runner.js"), "runAgent")
       .mockResolvedValue({
         responseText: "done",
-        session: {},
+        session: { isIdle: true },
         aborted: false,
         steered: false,
       });
@@ -279,7 +422,7 @@ describe("maxTurns and graceTurns passthrough", () => {
       .spyOn(await import("../src/core/agent-runner.js"), "runAgent")
       .mockResolvedValue({
         responseText: "done",
-        session: {},
+        session: { isIdle: true },
         aborted: false,
         steered: false,
       });
@@ -304,7 +447,7 @@ describe("maxTurns and graceTurns passthrough", () => {
       .spyOn(await import("../src/core/agent-runner.js"), "runAgent")
       .mockResolvedValue({
         responseText: "done",
-        session: {},
+        session: { isIdle: true },
         aborted: false,
         steered: false,
       });
@@ -334,7 +477,7 @@ describe("steered status", () => {
       "runAgent",
     ).mockResolvedValue({
       responseText: "wrapped up",
-      session: {},
+      session: { isIdle: true },
       aborted: false,
       steered: true,
     });
@@ -421,7 +564,7 @@ describe("AgentManager onComplete callback", () => {
     const { runAgent } = await import("../src/core/agent-runner.js");
     vi.mocked(runAgent).mockResolvedValue({
       responseText: "done",
-      session: {},
+      session: { isIdle: true },
       aborted: false,
       steered: false,
     });
@@ -518,6 +661,58 @@ describe("resume", () => {
     if (record) record.session = undefined;
     const result = await manager.resume(id, "continue");
     expect(result).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("refuses a non-idle session without calling the runner", async () => {
+    const { resumeAgent } = await import("../src/core/agent-runner.js");
+    const manager = new AgentManager();
+    const { id, record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    record.session = { isIdle: false };
+    vi.mocked(resumeAgent).mockClear();
+
+    expect(await manager.resume(id, "continue")).toBeUndefined();
+    expect(resumeAgent).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it("resets per-run state and repopulates live and cumulative state", async () => {
+    const { resumeAgent } = await import("../src/core/agent-runner.js");
+    const manager = new AgentManager();
+    const { id, record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+      maxTurns: 5,
+    });
+    record.toolUses = 2;
+    record.turnCount = 4;
+    record.live = { activeTools: ["old"], responseText: "old", maxTurns: 5 };
+    record.lifetimeUsage = { inputTokens: 10, outputTokens: 20, cacheWriteTokens: 30 };
+    vi.mocked(resumeAgent).mockImplementationOnce(async (_session, _prompt, options) => {
+      expect(record.live).toEqual({ activeTools: [], responseText: "" });
+      expect(record.turnCount).toBe(0);
+      options?.onToolActivity?.({ type: "start", toolName: "read" });
+      options?.onTextDelta?.("new", "new");
+      options?.onTurnEnd?.();
+      options?.onAssistantUsage?.({ input: 1, output: 2, cacheWrite: 3 });
+      options?.onToolActivity?.({ type: "end", toolName: "read" });
+      options?.onSettled?.();
+      return "new";
+    });
+
+    await manager.resume(id, "continue");
+
+    expect(record.live).toEqual({ activeTools: [], responseText: "new" });
+    expect(record.turnCount).toBe(1);
+    expect(record.toolUses).toBe(3);
+    expect(record.lifetimeUsage).toEqual({
+      inputTokens: 11,
+      outputTokens: 22,
+      cacheWriteTokens: 33,
+    });
     manager.dispose();
   });
 });
@@ -628,6 +823,19 @@ describe("spawn limits", () => {
 });
 
 describe("registerExternalRecord / notifyComplete", () => {
+  it("initializes external chain records with empty live state", () => {
+    const manager = new AgentManager();
+    const record = manager.fireAndForgetChain(
+      "chain-live",
+      "test",
+      new Promise(() => {}),
+      "/tmp",
+    );
+
+    expect(record.live).toEqual({ activeTools: [], responseText: "" });
+    manager.dispose();
+  });
+
   it("registerExternalRecord makes record visible via getRecord", () => {
     const manager = new AgentManager();
     const record = {
@@ -638,6 +846,7 @@ describe("registerExternalRecord / notifyComplete", () => {
       startedAt: Date.now(),
       toolUses: 0,
       turnCount: 0,
+      live: { activeTools: [], responseText: "" },
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       isBackground: true,
     };
@@ -658,6 +867,7 @@ describe("registerExternalRecord / notifyComplete", () => {
       completedAt: Date.now(),
       toolUses: 0,
       turnCount: 0,
+      live: { activeTools: [], responseText: "" },
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       isBackground: true,
     };

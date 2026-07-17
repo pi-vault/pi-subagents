@@ -43,6 +43,7 @@ export function completedRecord(result = "done"): AgentRecord {
     error: undefined,
     toolUses: 0,
     turnCount: 0,
+    live: { activeTools: [], responseText: "" },
     lifetimeUsage: emptyUsage(),
   };
 }

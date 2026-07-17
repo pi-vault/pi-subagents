@@ -17,6 +17,7 @@ const makeRecord = (overrides: Partial<AgentRecord> = {}): AgentRecord => ({
   status: "running",
   toolUses: 0,
   turnCount: 1,
+  live: { activeTools: [], responseText: "" },
   startedAt: Date.now() - 5000,
   lifetimeUsage: { inputTokens: 100, outputTokens: 50, cacheWriteTokens: 0 },
   session: {},

@@ -18,6 +18,17 @@ function generateId(): string {
   return `agent-${Date.now().toString(36)}-${(idCounter++).toString(36)}`;
 }
 
+function notifyActivity(
+  record: AgentRecord,
+  observer?: (record: AgentRecord) => void,
+): void {
+  try {
+    observer?.(record);
+  } catch {
+    // Rendering must not fail an agent run.
+  }
+}
+
 export type OnAgentComplete = (record: AgentRecord) => void;
 export type OnAgentStart = (record: AgentRecord) => void;
 
@@ -106,6 +117,7 @@ export class AgentManager {
       status: isBackground && this.runningBackground >= this.maxConcurrent ? "queued" : "running",
       toolUses: 0,
       turnCount: 0,
+      live: { activeTools: [], responseText: "", maxTurns: options.maxTurns },
       startedAt: Date.now(),
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       invocation: {
@@ -171,6 +183,7 @@ export class AgentManager {
       startedAt: Date.now(),
       toolUses: 0,
       turnCount: 0,
+      live: { activeTools: [], responseText: "" },
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       isBackground: true,
       cwd,
@@ -305,18 +318,27 @@ export class AgentManager {
         allowRecursion,
         signal: abortController.signal,
         onToolActivity: (activity: ToolActivity) => {
-          if (activity.type === "end") record.toolUses++;
+          if (activity.type === "start") {
+            record.live.activeTools.push(activity.toolName);
+          } else {
+            const index = record.live.activeTools.indexOf(activity.toolName);
+            if (index !== -1) record.live.activeTools.splice(index, 1);
+            record.toolUses++;
+          }
           options.onToolActivity?.(activity);
+          notifyActivity(record, options.onActivity);
         },
         onTurnEnd: (count: number) => {
           record.turnCount = count;
           options.onTurnEnd?.(count);
+          notifyActivity(record, options.onActivity);
         },
         onUsage: (usage) => {
           record.lifetimeUsage.inputTokens += usage.input;
           record.lifetimeUsage.outputTokens += usage.output;
           record.lifetimeUsage.cacheWriteTokens += usage.cacheWrite;
           options.onUsage?.(usage);
+          notifyActivity(record, options.onActivity);
         },
         onSessionCreated: (session) => {
           record.session = session;
@@ -329,7 +351,15 @@ export class AgentManager {
             record.pendingSteers = [];
           }
         },
-        onTextDelta: options.onTextDelta,
+        onTextDelta: (delta, fullText) => {
+          record.live.responseText = fullText;
+          options.onTextDelta?.(delta, fullText);
+          notifyActivity(record, options.onActivity);
+        },
+        onSettled: () => {
+          record.live.activeTools = [];
+          notifyActivity(record, options.onActivity);
+        },
         toolBudget: options.toolBudget,
         customTools,
       },
@@ -341,6 +371,10 @@ export class AgentManager {
         record.session = result.session;
         record.completedAt = Date.now();
         record.durationMs = record.completedAt - record.startedAt;
+        if (result.aborted) {
+          record.live.activeTools = [];
+          notifyActivity(record, options.onActivity);
+        }
         // Cleanup worktree
         if (record.worktree) {
           try {
@@ -365,6 +399,8 @@ export class AgentManager {
         record.error = error instanceof Error ? error.message : String(error);
         record.completedAt = Date.now();
         record.durationMs = record.completedAt - record.startedAt;
+        record.live.activeTools = [];
+        notifyActivity(record, options.onActivity);
         if (record.worktree) {
           try {
             cleanupWorktree(options.cwd, record.worktree, "error");
@@ -409,17 +445,35 @@ export class AgentManager {
     const record = this.agents.get(id);
     if (!record?.session) return undefined;
     if (record.status === "running" || record.status === "queued") return undefined;
+    if (!(record.session as AgentSession).isIdle) return undefined;
 
     record.status = "running";
     record.startedAt = Date.now();
     record.completedAt = undefined;
     record.result = undefined;
     record.error = undefined;
+    record.turnCount = 0;
+    record.live = { activeTools: [], responseText: "" };
 
     try {
       const responseText = await resumeAgent(record.session as AgentSession, prompt, {
         onToolActivity: (activity) => {
-          if (activity.type === "end") record.toolUses++;
+          if (activity.type === "start") {
+            record.live.activeTools.push(activity.toolName);
+          } else {
+            const index = record.live.activeTools.indexOf(activity.toolName);
+            if (index !== -1) record.live.activeTools.splice(index, 1);
+            record.toolUses++;
+          }
+        },
+        onTextDelta: (_delta, fullText) => {
+          record.live.responseText = fullText;
+        },
+        onTurnEnd: () => {
+          record.turnCount++;
+        },
+        onSettled: () => {
+          record.live.activeTools = [];
         },
         onAssistantUsage: (usage) => {
           record.lifetimeUsage.inputTokens += usage.input;
@@ -435,6 +489,7 @@ export class AgentManager {
       record.status = "error";
       record.error = err instanceof Error ? err.message : String(err);
       record.completedAt = Date.now();
+      record.live.activeTools = [];
     }
 
     return record;
@@ -478,10 +533,12 @@ export class AgentManager {
       this.queue = this.queue.filter((q) => q.id !== id);
       record.status = "stopped";
       record.completedAt = Date.now();
+      record.live.activeTools = [];
       return true;
     }
     if (record.status !== "running") return false;
     record.abortController?.abort();
+    record.live.activeTools = [];
     return true;
   }
 
@@ -495,6 +552,7 @@ export class AgentManager {
       if (record) {
         record.status = "stopped";
         record.completedAt = Date.now();
+        record.live.activeTools = [];
       }
     }
     this.queue = [];
@@ -502,6 +560,7 @@ export class AgentManager {
     for (const record of this.agents.values()) {
       if (record.status === "running") {
         record.abortController?.abort();
+        record.live.activeTools = [];
       }
     }
   }
@@ -583,6 +642,7 @@ export class AgentManager {
     for (const record of this.agents.values()) {
       if (record.status === "running") {
         record.abortController?.abort();
+        record.live.activeTools = [];
       }
     }
     this.queue = [];
