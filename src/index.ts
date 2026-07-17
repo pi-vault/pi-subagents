@@ -14,11 +14,15 @@ import {
   readUserAgentOverride,
   updateUserAgentOverride,
 } from "./core/agents.js";
-import { loadConfig, saveConfig } from "./core/config.js";
 import { evaluateToolCall, validateToolBudget } from "./core/tool-budget.js";
 import { GroupJoinManager } from "./core/group-join-manager.js";
 import { resolvePaths } from "./core/paths.js";
-import { applySettings, loadSettings } from "./core/settings.js";
+import {
+  applySettings,
+  loadSettings,
+  saveSetting,
+  type SubagentsSettings,
+} from "./core/settings.js";
 import { SmartBatchTracker } from "./core/smart-batch-tracker.js";
 import { registerAgentCommand, registerSubagentTool } from "./core/subagent.js";
 import { registerRpcHandlers } from "./core/rpc.js";
@@ -31,10 +35,14 @@ import {
 import { checkLocalMemoryGitignore } from "./core/memory.js";
 import { registerChainCommands } from "./core/slash-chain.js";
 import { registerPromptWorkflowCommands } from "./core/prompt-workflows.js";
-import { createWatchdogRuntime, parseWatchdogConfig } from "./core/watchdog.js";
+import {
+  createWatchdogRuntime,
+  parseWatchdogConfig,
+  type WatchdogWarning,
+} from "./core/watchdog.js";
 import { formatWatchdogWarningText } from "./core/watchdog-render.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
-import type { JoinMode, NotificationDetails, WidgetMode } from "./shared/types.js";
+import type { NotificationDetails, WidgetMode } from "./shared/types.js";
 import type { AgentActivity } from "./tui/activity.js";
 import { AgentWidget, type UICtx } from "./tui/agent-widget.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
@@ -124,18 +132,17 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   });
 
   // Load settings early (needed for watchdog config before manager construction)
-  const settings = loadSettings(process.cwd());
+  const settings = loadSettings();
 
   // Watchdog: adversarial reviewer at agent-end boundaries
-  const watchdogConfig = parseWatchdogConfig(settings.watchdog);
   // Late-bound: manager is constructed below; callbacks are only invoked async after that
   let sessionMessageSource: ((agentId: string) => unknown[] | undefined) | undefined;
   let resumeAgentFn: ((id: string, msg: string) => Promise<void>) | undefined;
-  const watchdog = createWatchdogRuntime(watchdogConfig, {
-    onWarnings: (agentId, warnings, source) => {
-      for (const w of warnings) {
+  const watchdogOptions = {
+    onWarnings: (agentId: string, warnings: WatchdogWarning[], source: "parent" | "child") => {
+      for (const warning of warnings) {
         const childLabel = source === "child" ? "/child" : "";
-        const content = `[watchdog${childLabel}/${w.severity}] ${w.summary}\nEvidence: ${w.evidence}\nAction: ${w.recommendedAction}`;
+        const content = `[watchdog${childLabel}/${warning.severity}] ${warning.summary}\nEvidence: ${warning.evidence}\nAction: ${warning.recommendedAction}`;
         (pi as unknown as { sendMessage: (msg: unknown, opts?: unknown) => void }).sendMessage(
           {
             customType: "watchdog-warning",
@@ -143,7 +150,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
             display: true,
             details: {
               agentId,
-              ...w,
+              ...warning,
               state: "displayed",
               ...(source === "child" ? { source } : {}),
             },
@@ -152,9 +159,12 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
         );
       }
     },
-    getSessionMessages: (agentId) => sessionMessageSource?.(agentId),
-    resumeAgent: async (agentId, message) => { await resumeAgentFn?.(agentId, message); },
-  });
+    getSessionMessages: (agentId: string) => sessionMessageSource?.(agentId),
+    resumeAgent: async (agentId: string, message: string) => { await resumeAgentFn?.(agentId, message); },
+  };
+  let watchdogConfig = parseWatchdogConfig(settings.watchdog);
+  let watchdogConfigKey = JSON.stringify(watchdogConfig);
+  const watchdog = createWatchdogRuntime(watchdogConfig, watchdogOptions);
 
   // Intercom: child↔parent communication channel
   const intercom = createIntercomManager({
@@ -204,13 +214,18 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     intercom.cancelForAgent(record.id);
 
     // Trigger watchdog review non-blocking after agent completes
-    if (watchdog.status() !== "disabled" && record.status === "completed") {
-      watchdog.handleAgentEnd({
+    const currentWatchdog = deps.watchdog;
+    if (
+      currentWatchdog &&
+      currentWatchdog.status() !== "disabled" &&
+      record.status === "completed"
+    ) {
+      currentWatchdog.handleAgentEnd({
         id: record.id,
         type: record.type,
         cwd: record.cwd ?? process.cwd(),
-      }).catch((err) => {
-        console.error("[watchdog] handleAgentEnd failed:", err);
+      }).catch((error) => {
+        console.error("[watchdog] handleAgentEnd failed:", error);
       });
     }
 
@@ -242,9 +257,6 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     }
     widget.update();
   });
-
-  // Apply spawn limit from config
-  manager.setMaxSpawnsPerSession(loadConfig(resolvePaths()).config.maxSpawnsPerSession);
 
   // Wire session message source for watchdog turn-delta mode (late-bound, manager now exists)
   sessionMessageSource = (agentId) => {
@@ -291,7 +303,14 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
 
   const deps: RuntimeDeps = {
     resolvePaths,
-    loadConfig,
+    settings,
+    loadSettings,
+    saveSetting,
+    refreshSettings(cwd, projectTrusted) {
+      applyResolvedSettings(
+        deps.loadSettings(cwd, projectTrusted ? "project" : "global"),
+      );
+    },
     discoverAgents,
     discoverAgentCatalog,
     readUserAgentOverride,
@@ -301,11 +320,12 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     exportAgentToUserScope,
     disableAgentInUserScope,
     deleteUserAgentOverride,
-    saveConfig,
     manager,
     groupJoin,
     pendingNudges,
-    defaultJoinMode: "smart" as JoinMode,
+    defaultJoinMode: settings.defaultJoinMode,
+    widgetMode: settings.widgetMode,
+    fleetView: settings.fleetView,
     registerBatchAgent: (id) => tracker.register(id),
     disposeBatchTracker: () => tracker.dispose(),
     widget,
@@ -322,16 +342,42 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     setFleetView: applyFleetView,
   };
 
-  // Apply persisted settings to live state
-  applySettings(settings, {
-    setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
-    setDefaultJoinMode: (mode) => {
-      deps.defaultJoinMode = mode;
-    },
-    setWidgetMode: applyWidgetMode,
-    setFleetView: applyFleetView,
-    setMaxSpawnsPerSession: (n) => manager.setMaxSpawnsPerSession(n),
-  });
+  function applyResolvedSettings(next: SubagentsSettings): void {
+    deps.settings = next;
+    applySettings(next, {
+      setMaxConcurrent: (value) => deps.manager.setMaxConcurrent(value),
+      setMaxDepth: (value) => deps.manager.setMaxDepth(value),
+      setDefaultJoinMode: (value) => {
+        deps.defaultJoinMode = value;
+      },
+      setWidgetMode: (value) => {
+        deps.widgetMode = value;
+        deps.setWidgetMode?.(value);
+      },
+      setFleetView: (value) => {
+        deps.fleetView = value;
+        deps.setFleetView?.(value);
+      },
+      setMaxSpawnsPerSession: (value) => {
+        deps.manager.setMaxSpawnsPerSession(value);
+      },
+    });
+
+    const nextWatchdogConfig = parseWatchdogConfig(next.watchdog);
+    const nextWatchdogKey = JSON.stringify(nextWatchdogConfig);
+    if (nextWatchdogKey !== watchdogConfigKey) {
+      const previous = deps.watchdog;
+      deps.watchdog = createWatchdogRuntime(
+        nextWatchdogConfig,
+        watchdogOptions,
+      );
+      watchdogConfig = nextWatchdogConfig;
+      watchdogConfigKey = nextWatchdogKey;
+      previous?.dispose();
+    }
+  }
+
+  applyResolvedSettings(settings);
 
   // One-time gitignore check for local memory
   const gitignoreWarning = checkLocalMemoryGitignore(process.cwd());
@@ -353,6 +399,10 @@ export function registerSubagentsExtension(
   pi: ExtensionAPI,
   deps: RuntimeDeps = createRuntimeDeps(pi),
 ): void {
+  pi.on("session_start", (_event, ctx) => {
+    deps.refreshSettings(ctx.cwd, ctx.isProjectTrusted());
+  });
+
   pi.registerMessageRenderer("pi-subagent-result", (msg, opts, theme) =>
     renderSubagentMessage(msg as Parameters<typeof renderSubagentMessage>[0], opts, theme),
   );
@@ -605,38 +655,34 @@ export function registerSubagentsExtension(
     capturedCurrentModel = (ctx as { model?: typeof capturedCurrentModel }).model;
   });
 
-  // Parent-session tool interception: block tools when a session-level budget is configured.
-  // Complements subagent budget enforcement in agent-runner.ts — covers the parent agent.
-  const parentBudgetRaw = deps.loadConfig(deps.resolvePaths()).config.toolBudget;
-  const { budget: parentBudget } = validateToolBudget(parentBudgetRaw);
-
   let parentToolCount = 0;
   let parentSoftNudged = false;
 
-  if (parentBudget) {
-    pi.on("tool_call", (event: ToolCallEvent): ToolCallEventResult | undefined => {
-      const toolName = event.toolName;
-      parentToolCount++;
+  pi.on("tool_call", (event: ToolCallEvent): ToolCallEventResult | undefined => {
+    const { budget } = validateToolBudget(deps.settings.toolBudget);
+    if (!budget) return undefined;
 
-      const result = evaluateToolCall(parentBudget, parentToolCount, toolName);
-
-      if (result.outcome === "hard-blocked") {
-        return { block: true, reason: result.message ?? "Tool budget hard limit reached." };
+    parentToolCount++;
+    const result = evaluateToolCall(budget, parentToolCount, event.toolName);
+    if (result.outcome === "hard-blocked") {
+      return {
+        block: true,
+        reason: result.message ?? "Tool budget hard limit reached.",
+      };
+    }
+    if (result.outcome === "soft-reached" && !parentSoftNudged) {
+      parentSoftNudged = true;
+      try {
+        pi.sendUserMessage?.(
+          result.message ?? "Tool budget soft limit reached.",
+          { deliverAs: "steer" },
+        );
+      } catch {
+        // Advisory; a failed nudge must not fail the tool call.
       }
-
-      if (result.outcome === "soft-reached" && !parentSoftNudged) {
-        parentSoftNudged = true;
-        try {
-          (pi as { sendUserMessage?: (content: string, options: { deliverAs: "steer" }) => unknown })
-            .sendUserMessage?.(result.message ?? "Tool budget soft limit reached.", { deliverAs: "steer" });
-        } catch {
-          // Advisory — don't fail the tool call
-        }
-      }
-
-      return undefined;
-    });
-  }
+    }
+    return undefined;
+  });
 
   // Cleanup on session shutdown
   pi.on("session_shutdown", () => {
@@ -657,10 +703,8 @@ export function registerSubagentsExtension(
   pi.on("session_before_switch", () => {
     deps.manager.resetSpawnCounter();
     deps.manager.clearCompleted();
-    if (parentBudget) {
-      parentToolCount = 0;
-      parentSoftNudged = false;
-    }
+    parentToolCount = 0;
+    parentSoftNudged = false;
   });
 
   pi.registerCommand("agents", {

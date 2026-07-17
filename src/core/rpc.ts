@@ -114,9 +114,9 @@ export function registerRpcHandlers(
         }
       }
 
-      const loadedConfig = deps.loadConfig(paths);
-      const maxTurns = agentDef.maxTurns ?? loadedConfig.config.defaultMaxTurns ?? 0;
-      const rawBudget = agentDef.toolBudget ?? loadedConfig.config.toolBudget;
+      const settings = deps.settings;
+      const maxTurns = agentDef.maxTurns ?? settings.defaultMaxTurns;
+      const rawBudget = agentDef.toolBudget ?? settings.toolBudget;
 
       // Validate merged tool budget (mirrors subagent.ts behavior)
       let resolvedBudget: ResolvedToolBudget | undefined;
@@ -138,7 +138,7 @@ export function registerRpcHandlers(
           prompt: task,
           cwd: process.cwd(),
           maxTurns,
-          graceTurns: loadedConfig.config.graceTurns,
+          graceTurns: settings.graceTurns,
           isBackground: true,
           model,
           toolBudget: resolvedBudget,

@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  DEFAULT_SETTINGS,
+  type SubagentsSettings,
+} from "../src/core/settings.js";
+import {
   SETTINGS_MENU_ITEMS,
   renderRow,
   showAgentsMenu,
@@ -7,7 +11,6 @@ import {
 import type {
   AgentDefinition,
   ResolvedPaths,
-  SubagentsConfig,
 } from "../src/shared/types.js";
 import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
 
@@ -193,7 +196,7 @@ test("override update errors use the existing save notification", async () => {
 });
 
 describe("SETTINGS_MENU_ITEMS", () => {
-  const config = {} as SubagentsConfig;
+  const settings = DEFAULT_SETTINGS;
 
   test("contains widgetMode item with correct key and label", () => {
     const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "widgetMode");
@@ -247,26 +250,30 @@ describe("SETTINGS_MENU_ITEMS", () => {
   });
 
   describe("widgetMode item formatValue", () => {
-    test('formatValue with deps { widgetMode: "all" } returns "all"', () => {
+    test('formatValue with widgetMode "all" returns "all"', () => {
       const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "widgetMode");
-      expect(item?.formatValue(config, { widgetMode: "all" })).toBe("all");
+      expect(
+        item?.formatValue({ ...DEFAULT_SETTINGS, widgetMode: "all" }),
+      ).toBe("all");
     });
 
-    test('formatValue with empty deps returns "background" (default)', () => {
+    test('formatValue uses the default "background"', () => {
       const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "widgetMode");
-      expect(item?.formatValue(config, {})).toBe("background");
+      expect(item?.formatValue(DEFAULT_SETTINGS)).toBe("background");
     });
   });
 
   describe("fleetView item formatValue", () => {
-    test('formatValue with deps { fleetView: false } returns "false"', () => {
+    test('formatValue with fleetView false returns "false"', () => {
       const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "fleetView");
-      expect(item?.formatValue(config, { fleetView: false })).toBe("false");
+      expect(
+        item?.formatValue({ ...DEFAULT_SETTINGS, fleetView: false }),
+      ).toBe("false");
     });
 
-    test('formatValue with empty deps returns "true" (default)', () => {
+    test('formatValue uses the default true', () => {
       const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "fleetView");
-      expect(item?.formatValue(config, {})).toBe("true");
+      expect(item?.formatValue(DEFAULT_SETTINGS)).toBe("true");
     });
   });
 
@@ -279,8 +286,11 @@ describe("SETTINGS_MENU_ITEMS", () => {
 
     test("formatValue returns string of config.maxSpawnsPerSession", () => {
       const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "maxSpawnsPerSession");
-      const cfg = { maxSpawnsPerSession: 25 } as SubagentsConfig;
-      expect(item?.formatValue(cfg)).toBe("25");
+      const value = {
+        ...settings,
+        maxSpawnsPerSession: 25,
+      } satisfies SubagentsSettings;
+      expect(item?.formatValue(value)).toBe("25");
     });
 
     test("parse accepts non-negative integers", () => {
@@ -297,11 +307,5 @@ describe("SETTINGS_MENU_ITEMS", () => {
       expect(item?.parse("abc")).toBeUndefined();
     });
 
-    test("apply calls setMaxSpawnsPerSession on manager", () => {
-      const item = SETTINGS_MENU_ITEMS.find((i) => i.key === "maxSpawnsPerSession");
-      const setMaxSpawnsPerSession = vi.fn();
-      item?.apply?.(15, { manager: { setMaxSpawnsPerSession } } as unknown as RuntimeDeps);
-      expect(setMaxSpawnsPerSession).toHaveBeenCalledWith(15);
-    });
   });
 });

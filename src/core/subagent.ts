@@ -22,7 +22,6 @@ import { resolveInvocationConfig } from "./invocation-config.js";
 import { resolveModel } from "./model-resolver.js";
 import { checkModelScope, type ModelSource } from "./model-scope.js";
 import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./output-file.js";
-import { loadSettings } from "./settings.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 import { validateToolBudget } from "./tool-budget.js";
 
@@ -189,7 +188,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       const effectiveCwd = resolve(params.cwd ?? ctx.cwd);
 
       const paths = deps.resolvePaths();
-      const loadedConfig = deps.loadConfig(paths);
+      const settings = deps.settings;
       const discovery = deps.discoverAgents(paths);
 
       const stubDetails = (o: Partial<SubagentExecutionDetails>): SubagentExecutionDetails => ({
@@ -271,8 +270,6 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
 
           const { executeChain } = await import("./chain-execution.js");
           const chainRunId = `chain-${Date.now().toString(36)}`;
-          const chainSettings = loadSettings(effectiveCwd);
-
           const spawnAndWait = async (
             agentDef: AgentDefinition,
             prompt: string,
@@ -288,9 +285,9 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             // Note: uses raw model string; chain steps don't canonicalize through
             // ctx.modelRegistry (registry resolution happens inside spawnAndWait).
             const stepModel = options?.model ?? agentDef.model;
-            if (stepModel && chainSettings.modelScope) {
+            if (stepModel && settings.modelScope) {
               const source: ModelSource = options?.model ? "explicit" : "inherited";
-              const violation = checkModelScope(stepModel, chainSettings.modelScope, source);
+              const violation = checkModelScope(stepModel, settings.modelScope, source);
               if (violation && violation.severity === "error") {
                 throw new Error(violation.message);
               }
@@ -306,7 +303,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
               prompt,
               cwd: stepCwd || effectiveCwd,
-              maxTurns: loadedConfig.config.defaultMaxTurns,
+              maxTurns: settings.defaultMaxTurns,
               toolBudget: options?.toolBudget,
               isolation: options?.isolation,
             });
@@ -450,8 +447,8 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           },
           {
             model: undefined,
-            defaultMaxTurns: loadedConfig.config.defaultMaxTurns,
-            toolBudget: loadedConfig.config.toolBudget,
+            defaultMaxTurns: settings.defaultMaxTurns,
+            toolBudget: settings.toolBudget,
           },
         );
 
@@ -517,7 +514,6 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
 
         // Model scope enforcement
         if (resolvedModelId) {
-          const settings = loadSettings(effectiveCwd);
           if (settings.modelScope) {
             const source: ModelSource = agentDef.model
               ? "inherited"
@@ -603,7 +599,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           prompt: params.task.trim(),
           cwd: effectiveCwd,
           maxTurns: resolved.maxTurns,
-          graceTurns: loadedConfig.config.graceTurns,
+          graceTurns: settings.graceTurns,
           inheritContext: resolved.inheritContext,
           parentSystemPrompt,
           parentSignal: signal,
@@ -825,12 +821,12 @@ export function registerAgentCommand(pi: ExtensionAPI, deps: RuntimeDeps): void 
     handler: async (args, ctx: ExtensionCommandContext) => {
       const input = parseAgentCommandArgs(args);
       const paths = deps.resolvePaths();
-      const loadedConfig = deps.loadConfig(paths);
+      const settings = deps.settings;
       const discovery = deps.discoverAgents(paths);
 
       try {
         const agentDef = parseAndResolveAgent(discovery, input);
-        const maxTurns = agentDef.maxTurns ?? loadedConfig.config.defaultMaxTurns;
+        const maxTurns = agentDef.maxTurns ?? settings.defaultMaxTurns;
 
         const { record } = await deps.manager.spawnAndWait(ctx, agentDef, {
           prompt: input.task.trim(),

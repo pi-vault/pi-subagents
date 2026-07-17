@@ -29,16 +29,6 @@ export interface NotificationDetails {
   others?: NotificationDetails[];
 }
 
-export interface SubagentsConfig {
-  maxConcurrency: number;
-  maxRecursiveLevel: number;
-  defaultMaxTurns: number;
-  graceTurns: number;
-  defaultJoinMode: JoinMode;
-  maxSpawnsPerSession: number;
-  toolBudget?: ToolBudgetConfig;
-}
-
 export interface ResolvedPaths {
   agentDir: string;
   configPath: string;
@@ -57,11 +47,6 @@ export interface ArtifactPaths {
   input: string;
   output: string;
   meta: string;
-}
-
-export interface LoadedConfig {
-  config: SubagentsConfig;
-  exists: boolean;
 }
 
 export type MemoryScope = "user" | "project" | "local";

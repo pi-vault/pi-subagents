@@ -75,8 +75,7 @@ export function createChildSubagentTool(opts: {
       if (!agentDef)
         return err(`Agent "${params.agent}" not found in discovery.`);
 
-      const paths = deps.resolvePaths();
-      const loadedConfig = deps.loadConfig(paths);
+      const settings = deps.settings;
       const resolved = resolveInvocationConfig(
         agentDef,
         {
@@ -84,7 +83,7 @@ export function createChildSubagentTool(opts: {
           inheritContext: params.inherit_context,
           isolated: params.isolated,
         },
-        loadedConfig.config,
+        settings,
       );
 
       try {
@@ -92,7 +91,7 @@ export function createChildSubagentTool(opts: {
           prompt: params.task.trim(),
           cwd: parentCwd,
           maxTurns: resolved.maxTurns,
-          graceTurns: loadedConfig.config.graceTurns,
+          graceTurns: settings.graceTurns,
           inheritContext: resolved.inheritContext,
           parentSignal: signal ?? undefined,
           currentDepth,

@@ -10,6 +10,8 @@ import type {
 import { describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
 import { runAgent } from "../src/core/agent-runner.js";
+import { DEFAULT_SETTINGS } from "../src/core/settings.js";
+import { parseWatchdogConfig } from "../src/core/watchdog.js";
 import * as subagentsIndex from "../src/index.js";
 import extension, { createRuntimeDeps, registerSubagentsExtension } from "../src/index.js";
 import type { UICtx } from "../src/tui/agent-widget.js";
@@ -33,7 +35,7 @@ vi.mock("../src/core/worktree.js", () => ({
 }));
 
 import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
-import type { AgentDiscoveryResult, ResolvedPaths, SubagentsConfig } from "../src/shared/types.js";
+import type { AgentDiscoveryResult, ResolvedPaths } from "../src/shared/types.js";
 import {
   buildAlignedRows,
   describeAgentEntry,
@@ -86,14 +88,6 @@ function createPi(
 
 function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
   const paths = createPaths();
-  const config: SubagentsConfig = {
-    maxConcurrency: 3,
-    maxRecursiveLevel: 3,
-    defaultMaxTurns: 0,
-    graceTurns: 5,
-    defaultJoinMode: "smart",
-    maxSpawnsPerSession: 40,
-  };
   const discovery: AgentDiscoveryResult = {
     agents: [
       {
@@ -115,7 +109,10 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
 
   return {
     resolvePaths: () => paths,
-    loadConfig: () => ({ exists: false, config }),
+    settings: { ...DEFAULT_SETTINGS },
+    loadSettings: () => ({ ...DEFAULT_SETTINGS }),
+    saveSetting: async () => true,
+    refreshSettings: () => {},
     discoverAgents: () => discovery,
     discoverAgentCatalog: () => ({
       entries: [
@@ -135,7 +132,6 @@ function createMenuDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     exportAgentToUserScope: () => primaryAgent,
     disableAgentInUserScope: () => ({ ...primaryAgent, enabled: false }),
     deleteUserAgentOverride: () => {},
-    saveConfig: () => {},
     manager: new AgentManager(),
     ...overrides,
   };
@@ -348,51 +344,161 @@ describe("subagents extension", () => {
     ]);
   });
 
-  test("settings flow edits one selected setting and writes only that change", async () => {
-    const writes: SubagentsConfig[] = [];
-    const selections = ["Max Concurrency         3", "Back"];
-    const inputs = ["7"];
+  test("trusted settings visit selects Project once for multiple edits", async () => {
+    const selections = [
+      "Project",
+      "Max Concurrency",
+      "Max Recursive Level",
+      "Back",
+    ];
+    const inputs = ["7", "5"];
+    const saveSetting = vi.fn(async () => true);
+    const refreshSettings = vi.fn();
 
     await runAgentsMenuSettingsFlow(
       {
+        cwd: "/active-project",
+        isProjectTrusted: () => true,
         ui: {
           select(_title: string, options: string[]) {
-            const next = selections.shift();
-            return Promise.resolve(options.find((option) => option === next));
+            const prefix = selections.shift();
+            return Promise.resolve(
+              options.find((option) => option.startsWith(prefix ?? "")),
+            );
           },
-          input() {
-            return Promise.resolve(inputs.shift());
-          },
+          input: () => Promise.resolve(inputs.shift()),
           notify() {},
         },
       } as unknown as ExtensionCommandContext,
-      createMenuDeps({
-        saveConfig(_paths, nextConfig) {
-          writes.push(nextConfig);
+      createMenuDeps({ saveSetting, refreshSettings }),
+    );
+
+    expect(saveSetting.mock.calls).toEqual([
+      ["/active-project", "project", "maxConcurrent", 7],
+      ["/active-project", "project", "maxRecursiveLevel", 5],
+    ]);
+    expect(refreshSettings).toHaveBeenCalledTimes(2);
+  });
+
+  test("Global edit refreshes and retains the trusted Project override", async () => {
+    const { pi } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+    const selections = ["Global", "Max Concurrency", "Back"];
+    deps.loadSettings = vi.fn((_cwd, scope) => ({
+      ...DEFAULT_SETTINGS,
+      maxConcurrent: scope === "project" ? 9 : 7,
+    }));
+    deps.saveSetting = vi.fn(async () => true);
+
+    await runAgentsMenuSettingsFlow(
+      {
+        cwd: "/active-project",
+        isProjectTrusted: () => true,
+        ui: {
+          select(_title: string, options: string[]) {
+            const prefix = selections.shift();
+            return Promise.resolve(
+              options.find((option) => option.startsWith(prefix ?? "")),
+            );
+          },
+          input: () => Promise.resolve("7"),
+          notify() {},
         },
+      } as unknown as ExtensionCommandContext,
+      deps,
+    );
+
+    expect(deps.saveSetting).toHaveBeenCalledWith(
+      "/active-project",
+      "global",
+      "maxConcurrent",
+      7,
+    );
+    expect(deps.settings.maxConcurrent).toBe(9);
+    expect(deps.loadSettings).toHaveBeenCalledWith(
+      "/active-project",
+      "project",
+    );
+    deps.manager.dispose();
+  });
+
+  test("untrusted settings visit omits Project and writes Global", async () => {
+    const seenOptions: string[][] = [];
+    const selections = ["Global", "Max Concurrency", "Back"];
+    const saveSetting = vi.fn(async () => true);
+
+    await runAgentsMenuSettingsFlow(
+      {
+        cwd: "/active-project",
+        isProjectTrusted: () => false,
+        ui: {
+          select(_title: string, options: string[]) {
+            seenOptions.push(options);
+            const prefix = selections.shift();
+            return Promise.resolve(
+              options.find((option) => option.startsWith(prefix ?? "")),
+            );
+          },
+          input: () => Promise.resolve("7"),
+          notify() {},
+        },
+      } as unknown as ExtensionCommandContext,
+      createMenuDeps({ saveSetting }),
+    );
+
+    expect(seenOptions[0]).toEqual(["Global", "Back"]);
+    expect(saveSetting).toHaveBeenCalledWith(
+      "/active-project",
+      "global",
+      "maxConcurrent",
+      7,
+    );
+  });
+
+  test("failed settings write reports once and does not refresh", async () => {
+    const selections = ["Global", "Max Concurrency", "Back"];
+    const refreshSettings = vi.fn();
+    const notifications: Array<[string, string]> = [];
+
+    await runAgentsMenuSettingsFlow(
+      {
+        cwd: "/active-project",
+        isProjectTrusted: () => true,
+        ui: {
+          select(_title: string, options: string[]) {
+            const prefix = selections.shift();
+            return Promise.resolve(
+              options.find((option) => option.startsWith(prefix ?? "")),
+            );
+          },
+          input: () => Promise.resolve("7"),
+          notify(message: string, level: string) {
+            notifications.push([message, level]);
+          },
+        },
+      } as unknown as ExtensionCommandContext,
+      createMenuDeps({
+        saveSetting: async () => false,
+        refreshSettings,
       }),
     );
 
-    expect(writes).toEqual([
-      {
-        maxConcurrency: 7,
-        maxRecursiveLevel: 3,
-        defaultMaxTurns: 0,
-        graceTurns: 5,
-        defaultJoinMode: "smart",
-        maxSpawnsPerSession: 40,
-      },
+    expect(refreshSettings).not.toHaveBeenCalled();
+    expect(notifications).toEqual([
+      ["Settings not saved: could not write subagents settings.", "error"],
     ]);
   });
 
   test("menu settings rejects invalid numeric input and does not save", async () => {
-    const writes: SubagentsConfig[] = [];
     const notifications: Array<{ message: string; level: string }> = [];
-    const selections = ["Max Concurrency         3", "Back"];
+    const selections = ["Global", "Max Concurrency         3", "Back"];
     const inputs = ["abc"];
+    const saveSetting = vi.fn(async () => true);
 
     await runAgentsMenuSettingsFlow(
       {
+        cwd: "/active-project",
+        isProjectTrusted: () => false,
         ui: {
           select(_title: string, options: string[]) {
             const next = selections.shift();
@@ -406,14 +512,10 @@ describe("subagents extension", () => {
           },
         },
       } as unknown as ExtensionCommandContext,
-      createMenuDeps({
-        saveConfig(_paths, nextConfig) {
-          writes.push(nextConfig);
-        },
-      }),
+      createMenuDeps({ saveSetting }),
     );
 
-    expect(writes).toEqual([]);
+    expect(saveSetting).not.toHaveBeenCalled();
     expect(notifications).toContainEqual({
       message: "Settings not saved: all values must be positive numbers.",
       level: "error",
@@ -448,10 +550,12 @@ describe("subagents extension", () => {
 
   test("settings fallback without ui.custom still shows current values in select labels", async () => {
     const seenOptions: string[][] = [];
-    const selections = ["Max Concurrency         3", "Back"];
+    const selections = ["Global", "Max Concurrency         3", "Back"];
 
     await runAgentsMenuSettingsFlow(
       {
+        cwd: "/active-project",
+        isProjectTrusted: () => false,
         ui: {
           select(_title: string, options: string[]) {
             seenOptions.push(options);
@@ -540,32 +644,119 @@ describe("TUI wiring", () => {
     expect(registeredEvents).toContain("tool_execution_start");
   });
 
-  test("registerSubagentsExtension registers a tool_call handler when toolBudget is configured", () => {
-    const { pi, registeredEvents } = createPiWithEventCapture();
-    registerSubagentsExtension(
-      pi,
-      createMenuDeps({
-        loadConfig: () => ({
-          exists: true,
-          config: {
-            maxConcurrency: 3,
-            maxRecursiveLevel: 3,
-            defaultMaxTurns: 0,
-            graceTurns: 5,
-            defaultJoinMode: "smart",
-            maxSpawnsPerSession: 40,
-            toolBudget: { hard: 10, soft: 8 },
-          },
-        }),
-      }),
+  test.each([
+    [true, "project"],
+    [false, "global"],
+  ] as const)(
+    "session_start refreshes %s trust with %s scope",
+    (trusted, expectedScope) => {
+      const { pi, handlers } = createPiWithEventCapture();
+      const refreshSettings = vi.fn();
+      registerSubagentsExtension(pi, createMenuDeps({ refreshSettings }));
+
+      handlers.get("session_start")?.(
+        {},
+        { cwd: "/active-project", isProjectTrusted: () => trusted },
+      );
+
+      expect(refreshSettings).toHaveBeenCalledWith(
+        "/active-project",
+        expectedScope === "project",
+      );
+    },
+  );
+
+  test("refresh applies recursion, concurrency, spawn, widget, and fleet settings", () => {
+    const { pi } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+    const setMaxDepth = vi.spyOn(deps.manager, "setMaxDepth");
+    const setMaxConcurrent = vi.spyOn(deps.manager, "setMaxConcurrent");
+    const setMaxSpawns = vi.spyOn(deps.manager, "setMaxSpawnsPerSession");
+    const setWidgetMode = vi.fn();
+    const setFleetView = vi.fn();
+    deps.setWidgetMode = setWidgetMode;
+    deps.setFleetView = setFleetView;
+    deps.loadSettings = vi.fn(() => ({
+      ...DEFAULT_SETTINGS,
+      maxRecursiveLevel: 6,
+      maxConcurrent: 7,
+      maxSpawnsPerSession: 0,
+      widgetMode: "off" as const,
+      fleetView: false,
+    }));
+
+    deps.refreshSettings("/active-project", true);
+
+    expect(deps.loadSettings).toHaveBeenCalledWith(
+      "/active-project",
+      "project",
     );
-    expect(registeredEvents).toContain("tool_call");
+    expect(setMaxDepth).toHaveBeenCalledWith(6);
+    expect(setMaxConcurrent).toHaveBeenCalledWith(7);
+    expect(setMaxSpawns).toHaveBeenCalledWith(0);
+    expect(setWidgetMode).toHaveBeenCalledWith("off");
+    expect(setFleetView).toHaveBeenCalledWith(false);
+    expect(deps.settings.maxRecursiveLevel).toBe(6);
+    deps.manager.dispose();
   });
 
-  test("registerSubagentsExtension does not register tool_call when no toolBudget", () => {
-    const { pi, registeredEvents } = createPiWithEventCapture();
-    registerSubagentsExtension(pi, createMenuDeps());
-    expect(registeredEvents).not.toContain("tool_call");
+  test("refresh requests only global settings for an untrusted project", () => {
+    const { pi } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+    deps.loadSettings = vi.fn(() => ({ ...DEFAULT_SETTINGS }));
+
+    deps.refreshSettings("/untrusted-project", false);
+
+    expect(deps.loadSettings).toHaveBeenCalledWith(
+      "/untrusted-project",
+      "global",
+    );
+    deps.manager.dispose();
+  });
+
+  test("refresh replaces Watchdog only when its resolved config changes", () => {
+    const { pi } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+    const initial = deps.watchdog;
+    deps.loadSettings = vi.fn(() => ({
+      ...DEFAULT_SETTINGS,
+      watchdog: parseWatchdogConfig({ enabled: true }),
+    }));
+
+    deps.refreshSettings("/active-project", true);
+
+    expect(initial?.status()).toBe("disabled");
+    expect(deps.watchdog).not.toBe(initial);
+    expect(deps.watchdog?.status()).toBe("idle");
+    deps.manager.dispose();
+  });
+
+  test("always registers tool_call and reads the current settings budget", () => {
+    const { pi, registeredEvents, handlers } = createPiWithEventCapture();
+    const deps = createRuntimeDeps(pi);
+    deps.settings = { ...DEFAULT_SETTINGS };
+    deps.loadSettings = vi.fn((_cwd, scope) => ({
+      ...DEFAULT_SETTINGS,
+      ...(scope === "project"
+        ? { toolBudget: { hard: 1, block: "*" as const } }
+        : {}),
+    }));
+    registerSubagentsExtension(pi, deps);
+    expect(registeredEvents).toContain("tool_call");
+
+    const handler = handlers.get("tool_call");
+    expect(handler?.({ toolName: "read" })).toBeUndefined();
+    handlers.get("session_start")?.(
+      {},
+      { cwd: "/active-project", isProjectTrusted: () => true },
+    );
+    expect(handler?.({ toolName: "read" })).toBeUndefined();
+    expect(handler?.({ toolName: "read" })).toMatchObject({ block: true });
+    expect(deps.loadSettings).toHaveBeenCalledWith(
+      "/active-project",
+      "project",
+    );
+    deps.manager.dispose();
   });
 
   test("fleet registers onTerminalInput when tool_execution_start fires", async () => {

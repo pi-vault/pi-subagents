@@ -1,5 +1,10 @@
 import type { AgentManager } from "../core/agent-manager.js";
 import type { AgentCatalog } from "../core/agents.js";
+import type {
+  EditableSettingKey,
+  SettingsScope,
+  SubagentsSettings,
+} from "../core/settings.js";
 import type { WatchdogRuntime } from "../core/watchdog.js";
 import type { IntercomManager } from "../core/intercom.js";
 import type { GroupJoinManager } from "../core/group-join-manager.js";
@@ -12,15 +17,24 @@ import type {
   AgentDefinition,
   AgentDiscoveryResult,
   JoinMode,
-  LoadedConfig,
   ResolvedPaths,
-  SubagentsConfig,
   WidgetMode,
 } from "./types.js";
 
 export interface RuntimeDeps {
   resolvePaths: () => ResolvedPaths;
-  loadConfig: (paths: ResolvedPaths) => LoadedConfig;
+  settings: SubagentsSettings;
+  loadSettings: (
+    cwd?: string,
+    scope?: SettingsScope,
+  ) => SubagentsSettings;
+  saveSetting: (
+    cwd: string,
+    scope: SettingsScope,
+    key: EditableSettingKey,
+    value: unknown,
+  ) => Promise<boolean>;
+  refreshSettings: (cwd: string, projectTrusted: boolean) => void;
   discoverAgents: (paths: ResolvedPaths) => AgentDiscoveryResult;
   discoverAgentCatalog: (paths: ResolvedPaths) => AgentCatalog;
   readUserAgentOverride: (paths: ResolvedPaths, sourcePath: string) => string;
@@ -47,7 +61,6 @@ export interface RuntimeDeps {
     agentName: string,
   ) => AgentDefinition;
   deleteUserAgentOverride: (paths: ResolvedPaths, agentName: string) => void;
-  saveConfig: (paths: ResolvedPaths, config: SubagentsConfig) => void;
   manager: AgentManager;
   groupJoin?: GroupJoinManager;
   pendingNudges?: Map<string, ReturnType<typeof setTimeout>>;
