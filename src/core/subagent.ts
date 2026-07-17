@@ -609,7 +609,9 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
 
         // Resume path
         if (params.resume) {
-          const resumed = await deps.manager.resume(params.resume, params.task.trim(), signal);
+          const resume = deps.manager.resume(params.resume, params.task.trim(), signal);
+          deps.ensureTimers?.();
+          const resumed = await resume;
           if (!resumed) {
             return {
               content: [{ type: "text", text: `Agent not found: "${params.resume}".` }],

@@ -128,7 +128,7 @@ describe("AgentManager", () => {
       cwd: "/tmp",
     });
 
-    expect(record.live.activeTools).toEqual(["bash"]);
+    expect(record.live.activeTools).toEqual([]);
     expect(record.toolUses).toBe(2);
   });
 
@@ -164,6 +164,7 @@ describe("AgentManager", () => {
       { tools: ["read"], text: "hi", turns: 0, input: 0 },
       { tools: ["read"], text: "hi", turns: 1, input: 0 },
       { tools: ["read"], text: "hi", turns: 1, input: 2 },
+      { tools: [], text: "hi", turns: 1, input: 2 },
     ]);
     expect(record.lifetimeUsage).toEqual({
       inputTokens: 2,

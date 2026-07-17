@@ -317,6 +317,41 @@ describe("background spawn", () => {
     expect(result.content[0]?.text).toContain("Agent not found");
   });
 
+  test("restarts activity timers while an agent resumes", async () => {
+    const { pi, registeredTool } = createPi();
+    const manager = new AgentManager();
+    const record = completedRecord("continued");
+    let finishResume = () => {};
+    vi.spyOn(manager, "resume").mockReturnValue(new Promise((resolve) => {
+      finishResume = () => resolve(record);
+    }));
+    const ensureTimers = vi.fn();
+
+    registerSubagentTool(
+      pi,
+      createDeps({
+        manager,
+        ensureTimers,
+        discoverAgents: () => createDiscovery([createAgent()]),
+      }),
+    );
+
+    const execution = registeredTool().execute(
+      "tool-call-resume-timer",
+      { agent: "Scout", task: "continue", resume: record.id },
+      undefined,
+      undefined,
+      { cwd: "/repo" } as ExtensionContext,
+    );
+
+    try {
+      expect(ensureTimers).toHaveBeenCalledOnce();
+    } finally {
+      finishResume();
+      await execution;
+    }
+  });
+
   test("isolation param passes through to spawnAndWait without error", async () => {
     const { pi, registeredTool } = createPi();
     const manager = new AgentManager();

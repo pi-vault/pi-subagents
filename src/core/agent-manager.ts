@@ -367,10 +367,8 @@ export class AgentManager {
         record.session = result.session;
         record.completedAt = Date.now();
         record.durationMs = record.completedAt - record.startedAt;
-        if (result.aborted) {
-          record.live.activeTools = [];
-          notifyActivity(record, options.onActivity);
-        }
+        record.live.activeTools = [];
+        notifyActivity(record, options.onActivity);
         // Cleanup worktree
         if (record.worktree) {
           try {
