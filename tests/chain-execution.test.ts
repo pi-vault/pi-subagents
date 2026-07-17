@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { executeChain } from "../src/core/chain-execution.js";
 import type {
@@ -86,6 +89,24 @@ function makeMockDeps(stepResults: Array<{ result: string; status?: string }>) {
 }
 
 describe("executeChain — sequential", () => {
+  test("normalizes and preflights every agent before creating the chain directory", async () => {
+    const runId = `preflight-${Date.now()}`;
+    const chainDir = join(tmpdir(), "pi-subagents-chain-runs", runId);
+    const spawnAndWait = vi.fn();
+
+    await expect(executeChain({
+      steps: [{ agent: "missing", task: "work" }],
+      task: "work",
+      spawnAndWait,
+      findAgent: () => { throw new Error('Unknown agent: "missing"'); },
+      cwd: "/tmp",
+      runId,
+    })).rejects.toThrow('Unknown agent: "missing"');
+
+    expect(spawnAndWait).not.toHaveBeenCalled();
+    expect(existsSync(chainDir)).toBe(false);
+  });
+
   test("runs 2 sequential steps and passes {previous}", async () => {
     const mockDeps = makeMockDeps([
       { result: "step 1 output" },

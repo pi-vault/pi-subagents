@@ -10,6 +10,7 @@ import type {
 import {
   isParallelStep,
   isDynamicParallelStep,
+  getStepAgents,
   resolveChainTemplates,
   createChainDir,
   removeChainDir,
@@ -17,8 +18,8 @@ import {
   buildChainInstructions,
   type AgentBehaviorDefaults,
 } from "./chain-settings.js";
+import { normalizeChainSteps } from "./chain-serializer.js";
 import {
-  validateChainOutputBindings,
   resolveOutputReferences,
   outputEntryFromResult,
 } from "./chain-outputs.js";
@@ -73,23 +74,24 @@ function agentDefaults(agentDef: AgentDefinition): AgentBehaviorDefaults {
 export async function executeChain(
   params: ChainExecutionParams,
 ): Promise<ChainExecutionResult> {
-  const { steps, task, spawnAndWait, findAgent, cwd, runId, signal, onGraphUpdate, getSpawnBudget } = params;
+  const { task, spawnAndWait, findAgent, cwd, runId, signal, onGraphUpdate, getSpawnBudget } = params;
+  const steps = normalizeChainSteps(params.steps, "chain execution");
+  for (const step of steps) {
+    for (const name of getStepAgents(step)) findAgent(name);
+  }
 
   const globalSemaphore = new Semaphore(
     params.globalConcurrencyLimit ?? DEFAULT_GLOBAL_CONCURRENCY_LIMIT,
   );
 
-  // 1. Validate output bindings
-  validateChainOutputBindings(steps);
-
-  // 2. Resolve templates
+  // 1. Resolve templates
   const templates = resolveChainTemplates(steps);
 
-  // 3. Create chain directory
+  // 2. Create chain directory
   const ownedChainDir = !params.chainDir;
   const chainDir = params.chainDir ?? createChainDir(runId);
 
-  // 4. Step loop
+  // 3. Step loop
   const outputs: ChainOutputMap = {};
   let prev = "";
   const results: Array<{ agent: string; output: string; status: string }> = [];

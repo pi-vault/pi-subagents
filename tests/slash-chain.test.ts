@@ -1,11 +1,19 @@
-import { describe, expect, test } from "vitest";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { describe, expect, test, vi } from "vitest";
+import { AgentManager } from "../src/core/agent-manager.js";
 import {
+  executeSlashChain,
   parseSingleTaskToken,
   parseGroupSegment,
   parseChainExpression,
   stripExecutionFlags,
   SlashParseError,
+  registerChainCommands,
 } from "../src/core/slash-chain.js";
+import { createAgent, createDeps, createDiscovery } from "./_test-helpers.js";
 
 describe("stripExecutionFlags", () => {
   test("strips --bg flag and reports bg=true", () => {
@@ -36,6 +44,80 @@ describe("stripExecutionFlags", () => {
     const { args, bg } = stripExecutionFlags("--bg");
     expect(args).toBe("");
     expect(bg).toBe(true);
+  });
+});
+
+describe("/run-chain definition materialization", () => {
+  test("reports an invalid saved schema path before execution", async () => {
+    const dir = join("/tmp", `slash-chain-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "saved.chain.json"), JSON.stringify({
+      name: "saved",
+      description: "saved",
+      chain: [{ agent: "Scout", outputSchema: "missing.json" }],
+    }));
+    const commands = new Map<string, { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }>();
+    const pi = {
+      registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> }) => commands.set(name, command),
+      sendMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+    const notify = vi.fn();
+    const deps = createDeps({
+      resolvePaths: () => ({
+        agentDir: dir,
+        configPath: join(dir, "config.json"),
+        userAgentsDir: join(dir, "agents"),
+        bundledAgentsDir: join(dir, "bundled-agents"),
+        sessionsDir: join(dir, "sessions"),
+        userChainsDir: dir,
+        bundledChainsDir: join(dir, "bundled-chains"),
+        userPromptsDir: join(dir, "prompts"),
+        bundledPromptsDir: join(dir, "bundled-prompts"),
+      }),
+    });
+    registerChainCommands(pi, deps);
+    const command = commands.get("run-chain");
+    if (!command) throw new Error("run-chain was not registered");
+
+    try {
+      await command.handler("saved -- task", {
+        cwd: dir,
+        ui: { notify },
+      } as unknown as ExtensionCommandContext);
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("unable to read schema"), "error");
+      expect(pi.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("executeSlashChain validation", () => {
+  test("rejects an unknown Agent without spawning", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(123456789);
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const messages: Array<{ content: string }> = [];
+    const pi = { sendMessage: (message: { content: string }) => messages.push(message) };
+    const deps = createDeps({
+      discoverAgents: () => createDiscovery([createAgent()]),
+      manager,
+    });
+
+    await executeSlashChain(
+      pi as unknown as ExtensionAPI,
+      { cwd: "/tmp" } as ExtensionCommandContext,
+      deps,
+      [{ agent: "Missing", task: "work" }],
+      "work",
+      false,
+      true,
+    );
+
+    expect(messages[0]?.content).toContain('Unknown agent: "Missing"');
+    expect(spawn).not.toHaveBeenCalled();
+    expect(existsSync(join(tmpdir(), "pi-subagents-chain-runs", "chain-21i3v9"))).toBe(false);
+    now.mockRestore();
   });
 });
 
