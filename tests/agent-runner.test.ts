@@ -349,6 +349,36 @@ describe("runAgent", () => {
     expect(result.steered).toBe(false);
   });
 
+  it("notifies settlement only for agent_settled", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const onSettled = vi.fn();
+    let handler: (event: { type: string; willRetry?: boolean }) => void = () => {};
+    const mockSession = {
+      subscribe: vi.fn((callback) => {
+        handler = callback;
+        return () => {};
+      }),
+      bindExtensions: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn(async () => {
+        handler({ type: "agent_end", willRetry: true });
+        expect(onSettled).not.toHaveBeenCalled();
+        handler({ type: "agent_settled" });
+      }),
+      abort: vi.fn(),
+      steer: vi.fn(),
+      messages: [],
+    };
+    vi.mocked(createAgentSession).mockResolvedValue({
+      session: mockSession as never,
+      extensionsResult: { extensions: [] } as never,
+    });
+
+    await runAgent(makeAgentDef(), makeRunOptions({ onSettled }), {});
+
+    expect(onSettled).toHaveBeenCalledOnce();
+  });
+
   it("sets noExtensions: true when isolated is true", async () => {
     const { DefaultResourceLoader } =
       await import("@earendil-works/pi-coding-agent");
@@ -616,6 +646,37 @@ describe("resumeAgent", () => {
       },
     });
     expect(toolStartCount).toBe(1);
+  });
+
+  it("publishes streamed text, turns, and settlement", async () => {
+    const onTextDelta = vi.fn();
+    const onTurnEnd = vi.fn();
+    const onSettled = vi.fn();
+    const mockSession = {
+      subscribe: vi.fn((handler) => {
+        handler({ type: "message_start", message: { role: "assistant" } });
+        handler({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "hi" },
+        });
+        handler({ type: "turn_end" });
+        handler({ type: "agent_settled" });
+        return () => {};
+      }),
+      prompt: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn(),
+      messages: [],
+    };
+
+    await resumeAgent(mockSession as unknown as AgentSession, "do task", {
+      onTextDelta,
+      onTurnEnd,
+      onSettled,
+    });
+
+    expect(onTextDelta).toHaveBeenCalledWith("hi", "hi");
+    expect(onTurnEnd).toHaveBeenCalledOnce();
+    expect(onSettled).toHaveBeenCalledOnce();
   });
 });
 

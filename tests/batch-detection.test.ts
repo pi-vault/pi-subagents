@@ -14,6 +14,7 @@ function makeRecord(
     status: "completed",
     toolUses: 0,
     turnCount: 0,
+    live: { activeTools: [], responseText: "" },
     startedAt: Date.now(),
     lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
     ...opts,

@@ -213,6 +213,12 @@ export interface AgentInvocation {
   inheritContext?: boolean;
 }
 
+export interface AgentLiveState {
+  activeTools: string[];
+  responseText: string;
+  maxTurns?: number;
+}
+
 export interface AgentRecord {
   id: string;
   type: string;
@@ -222,6 +228,7 @@ export interface AgentRecord {
   error?: string;
   toolUses: number;
   turnCount: number;
+  live: AgentLiveState;
   startedAt: number;
   completedAt?: number;
   durationMs?: number;
@@ -275,6 +282,7 @@ export interface RunOptions {
   onTurnEnd?: (turnCount: number) => void;
   onUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
   onSessionCreated?: (session: unknown) => void;
+  onSettled?: () => void;
   toolBudget?: ResolvedToolBudget;
   customTools?: unknown[];
 }
@@ -301,11 +309,8 @@ export interface SpawnOptions {
   allowedAgents?: string[];
   isolation?: string;
   model?: unknown;
-  onToolActivity?: (activity: ToolActivity) => void;
-  onTextDelta?: (delta: string, fullText: string) => void;
-  onTurnEnd?: (turnCount: number) => void;
-  onUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
   onSessionCreated?: (session: unknown) => void;
+  onActivity?: (record: AgentRecord) => void;
   toolBudget?: ResolvedToolBudget;
   spawnedBy?: string;
   _deps?: unknown;

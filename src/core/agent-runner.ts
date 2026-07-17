@@ -362,6 +362,9 @@ export async function runAgent(
         });
       }
     }
+    if (event.type === "agent_settled") {
+      options.onSettled?.();
+    }
   });
 
   // 8. Wire parent abort signal
@@ -396,6 +399,9 @@ export async function resumeAgent(
   options: {
     onToolActivity?: (activity: ToolActivity) => void;
     onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
+    onTextDelta?: (delta: string, fullText: string) => void;
+    onTurnEnd?: () => void;
+    onSettled?: () => void;
     signal?: AbortSignal;
   } = {},
 ): Promise<string> {
@@ -406,6 +412,7 @@ export async function resumeAgent(
     if (event.type === "message_start") responseText = "";
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       responseText += event.assistantMessageEvent.delta;
+      options.onTextDelta?.(event.assistantMessageEvent.delta, responseText);
     }
     if (event.type === "tool_execution_start") {
       options.onToolActivity?.({ type: "start", toolName: event.toolName });
@@ -422,6 +429,12 @@ export async function resumeAgent(
           cacheWrite: usage.cacheWrite ?? 0,
         });
       }
+    }
+    if (event.type === "turn_end") {
+      options.onTurnEnd?.();
+    }
+    if (event.type === "agent_settled") {
+      options.onSettled?.();
     }
   });
 

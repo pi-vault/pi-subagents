@@ -10,6 +10,7 @@ function makeRecord(id: string, status: AgentRecord["status"] = "completed"): Ag
     status,
     toolUses: 0,
     turnCount: 0,
+    live: { activeTools: [], responseText: "" },
     startedAt: Date.now(),
     lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
   };

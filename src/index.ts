@@ -42,7 +42,6 @@ import {
 import { formatWatchdogWarningText } from "./core/watchdog-render.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import type { NotificationDetails } from "./shared/types.js";
-import type { AgentActivity } from "./tui/activity.js";
 import { AgentWidget, type UICtx } from "./tui/agent-widget.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
 import { ChainWidget } from "./tui/chain-widget.js";
@@ -100,10 +99,9 @@ function buildNotificationDetails(record: AgentRecordSnapshot): NotificationDeta
 export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   const pendingNudges = new Map<string, ReturnType<typeof setTimeout>>();
 
-  // ---- TUI: per-agent activity tracking + widget/fleet (forward-declared) ----
+  // ---- TUI: widget/fleet (forward-declared) ----
   // widget and fleet are created after the manager (they need it), but the manager's
   // callbacks close over them. Safe because callbacks only fire after full init.
-  const agentActivity = new Map<string, AgentActivity>();
   let widget!: AgentWidget;
   let fleet!: FleetList;
 
@@ -229,7 +227,6 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     }
 
     // TUI: mark agent finished immediately regardless of notification path
-    agentActivity.delete(record.id);
     widget.markFinished(record.id);
     fleet.update();
 
@@ -287,8 +284,8 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
   );
 
   // ---- TUI: create widget and fleet (after manager) ----
-  widget = new AgentWidget(manager, agentActivity, () => deps.settings.widgetMode);
-  fleet = new FleetList(manager, agentActivity);
+  widget = new AgentWidget(manager, () => deps.settings.widgetMode);
+  fleet = new FleetList(manager);
   const chainWidget = new ChainWidget();
 
   const deps: RuntimeDeps = {
@@ -317,7 +314,6 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     disposeBatchTracker: () => tracker.dispose(),
     widget,
     fleet,
-    agentActivity,
     chainWidget,
     intercom,
     watchdog,
@@ -662,7 +658,6 @@ export function registerSubagentsExtension(
     deps.widget?.dispose();
     deps.chainWidget?.dispose();
     deps.fleet?.dispose();
-    deps.agentActivity?.clear();
     deps.intercom?.dispose();
     deps.manager.abortAll();
     deps.manager.dispose();

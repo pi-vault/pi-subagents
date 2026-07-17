@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   AgentInvocation,
   AgentRecord,
@@ -15,6 +15,7 @@ describe("new execution model types", () => {
       status: "running",
       toolUses: 0,
       turnCount: 0,
+      live: { activeTools: [], responseText: "" },
       startedAt: Date.now(),
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       description: "smoke test agent",
@@ -47,6 +48,7 @@ describe("Task 5.1: description fields and WidgetMode", () => {
       status: "queued",
       toolUses: 0,
       turnCount: 0,
+      live: { activeTools: [], responseText: "" },
       startedAt: 0,
       lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
       description: "doing a task",
@@ -82,5 +84,10 @@ describe("Task 5.1: description fields and WidgetMode", () => {
     };
     expect(withDesc.description).toBe("a label");
     expect(withoutDesc.description).toBeUndefined();
+  });
+
+  it("SpawnOptions exposes only the record and session callbacks", () => {
+    expectTypeOf<Extract<keyof SpawnOptions, `on${string}`>>()
+      .toEqualTypeOf<"onActivity" | "onSessionCreated">();
   });
 });

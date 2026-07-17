@@ -11,6 +11,7 @@ function makeRecord(overrides: Partial<AgentRecord>): AgentRecord {
     startedAt: Date.now() - 60_000,
     toolUses: 0,
     turnCount: 0,
+    live: { activeTools: [], responseText: "" },
     lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
     ...overrides,
   } as AgentRecord;

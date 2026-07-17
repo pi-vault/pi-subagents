@@ -8,7 +8,6 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { AgentManager } from "../core/agent-manager.js";
 import type { AgentRecord, WidgetMode } from "../shared/types.js";
-import { type AgentActivity, getLifetimeTotal } from "./activity.js";
 import { SPINNER, describeActivity, formatMs, formatTokens, formatTurns } from "./format.js";
 
 // ---- Constants ----
@@ -50,7 +49,6 @@ export function renderFinishedLine(
     completedAt?: number;
     error?: string;
   },
-  activity: AgentActivity | undefined,
   theme: Theme,
 ): string {
   const name = a.type;
@@ -78,7 +76,6 @@ export function renderFinishedLine(
   }
 
   const parts: string[] = [];
-  if (activity) parts.push(formatTurns(activity.turnCount, activity.maxTurns));
   if (a.toolUses > 0) parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
   parts.push(duration);
 
@@ -106,7 +103,6 @@ export class AgentWidget {
 
   constructor(
     private manager: AgentManager,
-    private agentActivity: Map<string, AgentActivity>,
     /**
      * Read live at render time. Selects which agents the widget shows — see WidgetMode.
      * Defaults to `"all"` when no policy is supplied.
@@ -210,9 +206,8 @@ export class AgentWidget {
 
     const finishedLines: string[] = [];
     for (const a of finished) {
-      const activity = this.agentActivity.get(a.id);
       finishedLines.push(
-        truncate(`${theme.fg("dim", "├─")} ${renderFinishedLine(a, activity, theme)}`),
+        truncate(`${theme.fg("dim", "├─")} ${renderFinishedLine(a, theme)}`),
       );
     }
 
@@ -221,19 +216,20 @@ export class AgentWidget {
       const name = a.type;
       const elapsed = formatMs(Date.now() - a.startedAt);
 
-      const bg = this.agentActivity.get(a.id);
-      const toolUses = bg?.toolUses ?? a.toolUses;
-      const tokens = getLifetimeTotal(bg?.lifetimeUsage);
+      const toolUses = a.toolUses;
+      const tokens =
+        a.lifetimeUsage.inputTokens +
+        a.lifetimeUsage.outputTokens +
+        a.lifetimeUsage.cacheWriteTokens;
       const tokenText = tokens > 0 ? formatTokens(tokens) : "";
 
-      const parts: string[] = [];
-      if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
+      const parts: string[] = [formatTurns(Math.max(1, a.turnCount), a.live.maxTurns)];
       if (toolUses > 0) parts.push(`${toolUses} tool use${toolUses === 1 ? "" : "s"}`);
       if (tokenText) parts.push(tokenText);
       parts.push(elapsed);
       const statsText = parts.join(" · ");
 
-      const activityDesc = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
+      const activityDesc = describeActivity(a.live.activeTools, a.live.responseText);
 
       runningLines.push([
         truncate(
