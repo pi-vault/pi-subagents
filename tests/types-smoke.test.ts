@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   AgentInvocation,
   AgentRecord,
@@ -87,22 +87,7 @@ describe("Task 5.1: description fields and WidgetMode", () => {
   });
 
   it("SpawnOptions exposes only the record and session callbacks", () => {
-    type CallbackKeys = Extract<keyof SpawnOptions, `on${string}`>;
-    type HasExactCallbacks = [CallbackKeys] extends ["onActivity" | "onSessionCreated"]
-      ? ["onActivity" | "onSessionCreated"] extends [CallbackKeys]
-        ? true
-        : false
-      : false;
-    const hasExactCallbacks: HasExactCallbacks = true;
-    const options: SpawnOptions = {
-      prompt: "do something",
-      cwd: "/tmp",
-      onActivity: () => {},
-      onSessionCreated: () => {},
-    };
-
-    expect(hasExactCallbacks).toBe(true);
-    expect(options.onActivity).toBeTypeOf("function");
-    expect(options.onSessionCreated).toBeTypeOf("function");
+    expectTypeOf<Extract<keyof SpawnOptions, `on${string}`>>()
+      .toEqualTypeOf<"onActivity" | "onSessionCreated">();
   });
 });
