@@ -38,6 +38,28 @@ describe("normalizeChainSteps", () => {
     });
   });
 
+  test("rejects sequential fields on a static parallel group", () => {
+    expect(() =>
+      normalizeChainSteps(
+        [{ parallel: [{ agent: "worker" }], task: "misplaced" }],
+        "tool chain",
+      ),
+    ).toThrow(/step 1.*task/);
+  });
+
+  test("rejects group fields on a sequential step without rejecting extensions", () => {
+    expect(() =>
+      normalizeChainSteps([{ agent: "worker", failFast: true }], "tool chain"),
+    ).toThrow(/step 1.*failFast/);
+
+    expect(
+      normalizeChainSteps(
+        [{ agent: "worker", extensionHint: "keep" }],
+        "tool chain",
+      ),
+    ).toEqual([{ agent: "worker", extensionHint: "keep" }]);
+  });
+
   test.each([
     [{ agent: "worker", parallel: [{ agent: "other" }] }, /mix/i],
     [{ agent: " " }, /agent.*non-blank/i],

@@ -19,6 +19,31 @@ export class ChainDefinitionError extends Error {
 type DefinitionMode = "saved" | "executable";
 type UnknownRecord = Record<string, unknown>;
 
+const SEQUENTIAL_STEP_FIELDS = new Set([
+  "agent",
+  "task",
+  "phase",
+  "label",
+  "as",
+  "outputSchema",
+  "output",
+  "outputMode",
+  "reads",
+  "model",
+  "skills",
+  "progress",
+  "cwd",
+  "acceptance",
+  "toolBudget",
+]);
+const STATIC_TASK_FIELDS = new Set([...SEQUENTIAL_STEP_FIELDS, "count"]);
+const STATIC_STEP_FIELDS = new Set([
+  "parallel",
+  "concurrency",
+  "failFast",
+  "worktree",
+  "cwd",
+]);
 const DYNAMIC_STEP_FIELDS = new Set([
   "expand",
   "parallel",
@@ -31,23 +56,15 @@ const DYNAMIC_STEP_FIELDS = new Set([
 ]);
 const DYNAMIC_EXPAND_FIELDS = new Set(["from", "item", "key", "maxItems", "onEmpty"]);
 const DYNAMIC_FROM_FIELDS = new Set(["output", "path"]);
-const DYNAMIC_TEMPLATE_FIELDS = new Set([
-  "agent",
-  "task",
-  "phase",
-  "label",
-  "outputSchema",
-  "output",
-  "outputMode",
-  "reads",
-  "model",
-  "skills",
-  "progress",
-  "cwd",
-  "acceptance",
-  "toolBudget",
-]);
+const DYNAMIC_TEMPLATE_FIELDS = new Set(
+  [...SEQUENTIAL_STEP_FIELDS].filter((field) => field !== "as"),
+);
 const DYNAMIC_COLLECT_FIELDS = new Set(["as", "outputSchema"]);
+const RECOGNIZED_STEP_FIELDS = new Set([
+  ...STATIC_TASK_FIELDS,
+  ...STATIC_STEP_FIELDS,
+  ...DYNAMIC_STEP_FIELDS,
+]);
 
 function definitionError(source: string, message: string): never {
   throw new ChainDefinitionError(source, message);
@@ -68,6 +85,19 @@ function rejectUnknownFields(
 ): void {
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
+      definitionError(source, `${label} does not support field '${key}'`);
+    }
+  }
+}
+
+function rejectMisplacedFields(
+  value: UnknownRecord,
+  allowed: Set<string>,
+  source: string,
+  label: string,
+): void {
+  for (const key of Object.keys(value)) {
+    if (RECOGNIZED_STEP_FIELDS.has(key) && !allowed.has(key)) {
       definitionError(source, `${label} does not support field '${key}'`);
     }
   }
@@ -262,8 +292,15 @@ function normalizeDefinitions(
       }
       parallel.forEach((rawTask: unknown, taskIndex: number) => {
         const task = asRecord(rawTask, source, `${label}.parallel task ${taskIndex + 1}`);
+        rejectMisplacedFields(
+          task,
+          STATIC_TASK_FIELDS,
+          source,
+          `${label}.parallel task ${taskIndex + 1}`,
+        );
         validateTaskFields(task, mode, source, `${label}.parallel task ${taskIndex + 1}`, true);
       });
+      rejectMisplacedFields(step, STATIC_STEP_FIELDS, source, label);
       validatePositiveInteger(step, "concurrency", source, label);
       validateBoolean(step, "failFast", source, label);
       validateBoolean(step, "worktree", source, label);
@@ -273,6 +310,7 @@ function normalizeDefinitions(
 
     validateTaskFields(step, mode, source, label, false);
     validateBoolean(step, "failFast", source, label);
+    rejectMisplacedFields(step, SEQUENTIAL_STEP_FIELDS, source, label);
     return step;
   });
 
