@@ -542,6 +542,7 @@ export class AgentManager {
 
   setMaxConcurrent(n: number): void {
     this.maxConcurrent = n;
+    this.drainQueue();
   }
 
   getMaxConcurrent(): number {

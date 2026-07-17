@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { DEFAULT_SETTINGS } from "../src/core/settings.js";
 import { registerSubagentTool } from "../src/core/subagent.js";
 import type { RuntimeDeps } from "../src/shared/runtime-deps.js";
 import type {
@@ -59,10 +60,10 @@ export function createDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
       userPromptsDir: "/tmp/pi-agent/prompts",
       bundledPromptsDir: "/repo/prompts",
     }),
-    loadConfig: () => ({
-      exists: false,
-      config: { maxConcurrency: 3, maxRecursiveLevel: 3, defaultMaxTurns: 0, graceTurns: 5, defaultJoinMode: "smart" as const, maxSpawnsPerSession: 40 },
-    }),
+    settings: { ...DEFAULT_SETTINGS },
+    loadSettings: () => ({ ...DEFAULT_SETTINGS }),
+    saveSetting: async () => true,
+    refreshSettings: () => {},
     discoverAgents: () => createDiscovery([createAgent()]),
     discoverAgentCatalog: () => ({
       entries: [],
@@ -78,7 +79,6 @@ export function createDeps(overrides: Partial<RuntimeDeps> = {}): RuntimeDeps {
     exportAgentToUserScope: () => { throw new Error("not used"); },
     disableAgentInUserScope: () => { throw new Error("not used"); },
     deleteUserAgentOverride: () => {},
-    saveConfig: () => {},
     manager: new AgentManager(),
     ...overrides,
   };

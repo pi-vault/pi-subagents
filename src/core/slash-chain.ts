@@ -498,7 +498,7 @@ export async function executeSlashChain(
 ): Promise<void> {
   let chain = inputChain;
   const paths = deps.resolvePaths();
-  const loadedConfig = deps.loadConfig(paths);
+  const settings = deps.settings;
   const discovery = deps.discoverAgents(paths);
   const chainRunId = `chain-${Date.now().toString(36)}`;
 
@@ -513,7 +513,7 @@ export async function executeSlashChain(
     return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
       prompt,
       cwd: stepCwd || ctx.cwd,
-      maxTurns: loadedConfig.config.defaultMaxTurns,
+      maxTurns: settings.defaultMaxTurns,
       toolBudget: options?.toolBudget,
       isolation: options?.isolation,
     });

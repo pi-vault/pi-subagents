@@ -1,13 +1,11 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { describe, expect, it, vi } from "vitest";
 import { matchesPattern, parseModelScopeConfig, checkModelScope } from "../src/core/model-scope.js";
 import type { ModelScopeConfig } from "../src/core/model-scope.js";
 import { createAgent, createDeps, createDiscovery } from "./_test-helpers.js";
 import { registerSubagentTool } from "../src/core/subagent.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { DEFAULT_SETTINGS } from "../src/core/settings.js";
 
 vi.mock("../src/core/agent-runner.js", () => ({
   runAgent: vi.fn().mockResolvedValue({
@@ -187,29 +185,19 @@ describe("checkModelScope", () => {
 });
 
 describe("subagent tool: model scope enforcement", () => {
-  const testDir = join(tmpdir(), `pi-model-scope-test-${Date.now()}`);
-  const piDir = join(testDir, ".pi");
-
-  beforeEach(() => {
-    mkdirSync(piDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
+  const testDir = "/tmp";
 
   function setupScopeTest(modelScope: object, agentOverrides?: Partial<Parameters<typeof createAgent>[0]>) {
-    writeFileSync(
-      join(piDir, "subagents.json"),
-      JSON.stringify({ modelScope }),
-    );
-
     const manager = new AgentManager();
     const sentMessages: Array<{ customType: string; content: string }> = [];
     const deps = createDeps({
       discoverAgents: () =>
         createDiscovery([createAgent({ name: "Scout", model: undefined, ...agentOverrides })]),
       manager,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        modelScope: parseModelScopeConfig(modelScope),
+      },
     });
 
     let toolDef: { execute: (...args: unknown[]) => Promise<unknown> } | undefined;

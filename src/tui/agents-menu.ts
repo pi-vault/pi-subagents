@@ -1,12 +1,13 @@
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, Text, matchesKey } from "@earendil-works/pi-tui";
 import type { AgentCatalogEntry } from "../core/agents.js";
-import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
-  AgentCreationInput,
-  SubagentsConfig,
-  WidgetMode,
-} from "../shared/types.js";
+  EditableSettingKey,
+  SettingsScope,
+  SubagentsSettings,
+} from "../core/settings.js";
+import type { RuntimeDeps } from "../shared/runtime-deps.js";
+import type { AgentCreationInput } from "../shared/types.js";
 
 type MenuChoice<T> = { label: string; value: T };
 
@@ -17,37 +18,25 @@ type MenuRow<T> = {
   kind?: "normal" | "back";
 };
 
-type SettingsKey =
-  | "maxConcurrency"
-  | "maxRecursiveLevel"
-  | "defaultMaxTurns"
-  | "graceTurns"
-  | "defaultJoinMode"
-  | "maxSpawnsPerSession"
-  | "widgetMode"
-  | "fleetView";
-
 type SettingsMenuItem = {
-  key: SettingsKey;
+  key: EditableSettingKey;
   label: string;
   promptTitle: string;
-  formatValue: (config: SubagentsConfig, deps?: Partial<RuntimeDeps>) => string;
+  formatValue: (settings: SubagentsSettings) => string;
   parse: (raw: string) => number | string | boolean | undefined;
-  apply?: (value: number | string | boolean, deps: RuntimeDeps) => void;
 };
 
 export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
   {
-    key: "maxConcurrency",
+    key: "maxConcurrent",
     label: "Max Concurrency",
     promptTitle: "Max Concurrency",
-    formatValue: (config) => String(config.maxConcurrency),
+    formatValue: (settings) => String(settings.maxConcurrent),
     parse: (raw) => {
       const value = Number(raw);
-      return Number.isInteger(value) && value > 0 ? value : undefined;
-    },
-    apply: (value, deps) => {
-      deps.manager.setMaxConcurrent(value as number);
+      return Number.isInteger(value) && value >= 1 && value <= 1024
+        ? value
+        : undefined;
     },
   },
   {
@@ -94,11 +83,6 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
         ? trimmed
         : undefined;
     },
-    apply: (value, deps) => {
-      if (deps.defaultJoinMode !== undefined) {
-        deps.defaultJoinMode = value as "async" | "group" | "smart";
-      }
-    },
   },
   {
     key: "maxSpawnsPerSession",
@@ -107,38 +91,29 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItem[] = [
     formatValue: (config) => String(config.maxSpawnsPerSession),
     parse: (raw) => {
       const value = Number(raw);
-      return Number.isInteger(value) && value >= 0 ? value : undefined;
-    },
-    apply: (value, deps) => {
-      deps.manager.setMaxSpawnsPerSession(value as number);
+      return Number.isInteger(value) && value >= 0 && value <= 10_000
+        ? value
+        : undefined;
     },
   },
   {
     key: "widgetMode",
     label: "Widget Mode",
     promptTitle: "Widget Mode (all / background / off)",
-    formatValue: (_config, deps) => deps?.widgetMode ?? "background",
+    formatValue: (settings) => settings.widgetMode,
     parse: (raw) => {
       const t = raw.trim();
       return t === "all" || t === "background" || t === "off" ? t : undefined;
-    },
-    apply: (value, deps) => {
-      deps.widgetMode = value as WidgetMode;
-      deps.setWidgetMode?.(value as WidgetMode);
     },
   },
   {
     key: "fleetView",
     label: "Fleet View",
     promptTitle: "Fleet View (true / false)",
-    formatValue: (_config, deps) => String(deps?.fleetView ?? true),
+    formatValue: (settings) => String(settings.fleetView),
     parse: (raw) => {
       const t = raw.trim().toLowerCase();
       return t === "true" ? true : t === "false" ? false : undefined;
-    },
-    apply: (value, deps) => {
-      deps.fleetView = value as boolean;
-      deps.setFleetView?.(value as boolean);
     },
   },
 ];
@@ -254,13 +229,12 @@ async function promptForAgentName(
 }
 
 function buildSettingsRows(
-  config: SubagentsConfig,
-  deps: RuntimeDeps,
-): Array<MenuRow<SettingsKey | "back">> {
+  settings: SubagentsSettings,
+): Array<MenuRow<EditableSettingKey | "back">> {
   return [
     ...SETTINGS_MENU_ITEMS.map((item) => ({
       label: item.label,
-      detail: item.formatValue(config, deps),
+      detail: item.formatValue(settings),
       value: item.key,
     })),
     { label: "Back", value: "back", kind: "back" },
@@ -387,34 +361,49 @@ async function editOverrideAgent(
   }
 }
 
+async function selectSettingsScope(
+  ctx: ExtensionCommandContext,
+  projectTrusted: boolean,
+): Promise<SettingsScope | undefined> {
+  return showRowsMenu(
+    ctx,
+    "Settings scope",
+    [
+      ...(projectTrusted
+        ? [{ label: "Project", value: "project" as const }]
+        : []),
+      { label: "Global", value: "global" as const },
+      { label: "Back", value: undefined, kind: "back" as const },
+    ],
+    projectTrusted
+      ? "Choose where settings are stored"
+      : "Project settings require a trusted project",
+  );
+}
+
 export async function runAgentsMenuSettingsFlow(
   ctx: ExtensionCommandContext,
   deps: RuntimeDeps,
 ): Promise<void> {
-  const paths = deps.resolvePaths();
+  const projectTrusted = ctx.isProjectTrusted();
+  const scope = await selectSettingsScope(ctx, projectTrusted);
+  if (!scope) return;
 
   while (true) {
-    const { config } = deps.loadConfig(paths);
+    const settings = deps.loadSettings(ctx.cwd, scope);
     const selected = await showRowsMenu(
       ctx,
       "Settings",
-      buildSettingsRows(config, deps),
+      buildSettingsRows(settings),
       "Select a setting to edit",
     );
-
-    if (!selected || selected === "back") {
-      return;
-    }
+    if (!selected || selected === "back") return;
 
     const item = SETTINGS_MENU_ITEMS.find((entry) => entry.key === selected);
-    if (!item) {
-      return;
-    }
+    if (!item) return;
 
-    const raw = await ctx.ui.input(item.promptTitle, item.formatValue(config, deps));
-    if (raw === undefined) {
-      continue;
-    }
+    const raw = await ctx.ui.input(item.promptTitle, item.formatValue(settings));
+    if (raw === undefined) continue;
 
     const parsed = item.parse(raw);
     if (parsed === undefined) {
@@ -425,11 +414,16 @@ export async function runAgentsMenuSettingsFlow(
       continue;
     }
 
-    deps.saveConfig(paths, {
-      ...config,
-      [item.key]: parsed,
-    } as SubagentsConfig);
-    item.apply?.(parsed, deps);
+    const saved = await deps.saveSetting(ctx.cwd, scope, item.key, parsed);
+    if (!saved) {
+      ctx.ui.notify(
+        "Settings not saved: could not write subagents settings.",
+        "error",
+      );
+      continue;
+    }
+
+    deps.refreshSettings(ctx.cwd, ctx.isProjectTrusted());
     ctx.ui.notify("Updated subagents settings", "info");
   }
 }

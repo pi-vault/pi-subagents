@@ -1,107 +1,187 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { JoinMode, WidgetMode } from "../shared/types.js";
+import { dirname, resolve } from "node:path";
+import {
+  CONFIG_DIR_NAME,
+  getAgentDir,
+  withFileMutationQueue,
+} from "@earendil-works/pi-coding-agent";
+import type {
+  JoinMode,
+  ToolBudgetConfig,
+  WidgetMode,
+} from "../shared/types.js";
 import type { ModelScopeConfig } from "./model-scope.js";
 import { parseModelScopeConfig } from "./model-scope.js";
+import { resolvePaths } from "./paths.js";
 import { parseWatchdogConfig, type WatchdogConfig } from "./watchdog.js";
 
+export type SettingsScope = "project" | "global";
+
+const EDITABLE_KEYS = [
+  "maxConcurrent",
+  "maxRecursiveLevel",
+  "defaultMaxTurns",
+  "graceTurns",
+  "defaultJoinMode",
+  "maxSpawnsPerSession",
+  "widgetMode",
+  "fleetView",
+] as const;
+
+export type EditableSettingKey = (typeof EDITABLE_KEYS)[number];
+
 export interface SubagentsSettings {
-  maxConcurrent?: number;
-  defaultJoinMode?: JoinMode;
-  widgetMode?: WidgetMode;
-  fleetView?: boolean;
-  maxSpawnsPerSession?: number;
+  maxConcurrent: number;
+  maxRecursiveLevel: number;
+  defaultMaxTurns: number;
+  graceTurns: number;
+  defaultJoinMode: JoinMode;
+  maxSpawnsPerSession: number;
+  widgetMode: WidgetMode;
+  fleetView: boolean;
+  toolBudget?: ToolBudgetConfig;
   modelScope?: ModelScopeConfig;
   watchdog?: WatchdogConfig;
 }
 
-export interface SettingsAppliers {
-  setMaxConcurrent: (n: number) => void;
-  setDefaultJoinMode: (mode: JoinMode) => void;
-  setWidgetMode?: (mode: WidgetMode) => void;
-  setFleetView?: (enabled: boolean) => void;
-  setMaxSpawnsPerSession?: (n: number) => void;
+export const DEFAULT_SETTINGS: SubagentsSettings = {
+  maxConcurrent: 3,
+  maxRecursiveLevel: 3,
+  defaultMaxTurns: 0,
+  graceTurns: 5,
+  defaultJoinMode: "smart",
+  maxSpawnsPerSession: 40,
+  widgetMode: "background",
+  fleetView: true,
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-const MAX_CONCURRENT_CEILING = 1024;
-const MAX_SPAWNS_PER_SESSION_CEILING = 10_000; // upper bound for user-facing settings
-const VALID_JOIN_MODES: ReadonlySet<string> = new Set(["async", "group", "smart"]);
-const VALID_WIDGET_MODES: ReadonlySet<string> = new Set(["all", "background", "off"]);
+function isIntegerInRange(
+  value: unknown,
+  minimum: number,
+  maximum = Number.POSITIVE_INFINITY,
+): value is number {
+  return (
+    Number.isInteger(value) &&
+    (value as number) >= minimum &&
+    (value as number) <= maximum
+  );
+}
 
-function sanitize(raw: unknown): SubagentsSettings {
-  if (!raw || typeof raw !== "object") return {};
-  const r = raw as Record<string, unknown>;
-  const out: SubagentsSettings = {};
+function sanitize(raw: unknown): Partial<SubagentsSettings> {
+  if (!isRecord(raw)) return {};
+  const out: Partial<SubagentsSettings> = {};
+
+  const maxConcurrent = isIntegerInRange(raw.maxConcurrent, 1, 1024)
+    ? raw.maxConcurrent
+    : raw.maxConcurrency;
+  if (isIntegerInRange(maxConcurrent, 1, 1024)) {
+    out.maxConcurrent = maxConcurrent;
+  }
+  if (isIntegerInRange(raw.maxRecursiveLevel, 1)) {
+    out.maxRecursiveLevel = raw.maxRecursiveLevel;
+  }
+  if (isIntegerInRange(raw.defaultMaxTurns, 0)) {
+    out.defaultMaxTurns = raw.defaultMaxTurns;
+  }
+  if (isIntegerInRange(raw.graceTurns, 0)) {
+    out.graceTurns = raw.graceTurns;
+  }
   if (
-    Number.isInteger(r.maxConcurrent) &&
-    (r.maxConcurrent as number) >= 1 &&
-    (r.maxConcurrent as number) <= MAX_CONCURRENT_CEILING
+    raw.defaultJoinMode === "async" ||
+    raw.defaultJoinMode === "group" ||
+    raw.defaultJoinMode === "smart"
   ) {
-    out.maxConcurrent = r.maxConcurrent as number;
+    out.defaultJoinMode = raw.defaultJoinMode;
   }
-  if (typeof r.defaultJoinMode === "string" && VALID_JOIN_MODES.has(r.defaultJoinMode)) {
-    out.defaultJoinMode = r.defaultJoinMode as JoinMode;
-  }
-  if (typeof r.widgetMode === "string" && VALID_WIDGET_MODES.has(r.widgetMode)) {
-    out.widgetMode = r.widgetMode as WidgetMode;
-  }
-  if (typeof r.fleetView === "boolean") {
-    out.fleetView = r.fleetView;
+  if (isIntegerInRange(raw.maxSpawnsPerSession, 0, 10_000)) {
+    out.maxSpawnsPerSession = raw.maxSpawnsPerSession;
   }
   if (
-    Number.isInteger(r.maxSpawnsPerSession) &&
-    (r.maxSpawnsPerSession as number) >= 1 &&
-    (r.maxSpawnsPerSession as number) <= MAX_SPAWNS_PER_SESSION_CEILING
+    raw.widgetMode === "all" ||
+    raw.widgetMode === "background" ||
+    raw.widgetMode === "off"
   ) {
-    out.maxSpawnsPerSession = r.maxSpawnsPerSession as number;
+    out.widgetMode = raw.widgetMode;
   }
-  if (r.modelScope !== undefined) {
-    const parsed = parseModelScopeConfig(r.modelScope);
-    if (parsed) out.modelScope = parsed;
+  if (typeof raw.fleetView === "boolean") {
+    out.fleetView = raw.fleetView;
   }
-  if (r.watchdog !== undefined) {
-    out.watchdog = parseWatchdogConfig(r.watchdog);
+  if (isRecord(raw.toolBudget)) {
+    out.toolBudget = raw.toolBudget as unknown as ToolBudgetConfig;
   }
+  if (raw.modelScope !== undefined) {
+    const modelScope = parseModelScopeConfig(raw.modelScope);
+    if (modelScope) out.modelScope = modelScope;
+  }
+  if (isRecord(raw.watchdog)) {
+    out.watchdog = parseWatchdogConfig(raw.watchdog);
+  }
+
   return out;
 }
 
 function globalPath(): string {
-  return join(getAgentDir(), "subagents.json");
+  return resolve(getAgentDir(), "subagents.json");
 }
 
 function projectPath(cwd: string): string {
-  return join(cwd, ".pi", "subagents.json");
+  return resolve(cwd, CONFIG_DIR_NAME, "subagents.json");
 }
 
-function readSettingsFile(path: string): SubagentsSettings {
+function readObject(path: string): Record<string, unknown> | undefined {
   if (!existsSync(path)) return {};
   try {
-    return sanitize(JSON.parse(readFileSync(path, "utf-8")));
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
   } catch {
-    return {};
+    return undefined;
   }
 }
 
-export function loadSettings(cwd: string = process.cwd()): SubagentsSettings {
-  return { ...readSettingsFile(globalPath()), ...readSettingsFile(projectPath(cwd)) };
+function readLayer(path: string): Partial<SubagentsSettings> {
+  return sanitize(readObject(path));
 }
 
-export function saveSettings(s: SubagentsSettings, cwd: string = process.cwd()): boolean {
-  const path = projectPath(cwd);
+export function loadSettings(
+  cwd: string = process.cwd(),
+  scope: SettingsScope = "global",
+): SubagentsSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...readLayer(resolvePaths().configPath),
+    ...readLayer(globalPath()),
+    ...(scope === "project" ? readLayer(projectPath(cwd)) : {}),
+  };
+}
+
+export async function saveSetting(
+  cwd: string,
+  scope: SettingsScope,
+  key: EditableSettingKey,
+  value: unknown,
+): Promise<boolean> {
+  if (!EDITABLE_KEYS.includes(key)) return false;
+  const normalized = sanitize({ [key]: value });
+  if (!Object.hasOwn(normalized, key)) return false;
+
+  const path = scope === "project" ? projectPath(cwd) : globalPath();
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(s, null, 2), "utf-8");
-    return true;
+    return await withFileMutationQueue(path, async () => {
+      const current = readObject(path);
+      if (!current) return false;
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        `${JSON.stringify({ ...current, [key]: normalized[key] }, null, 2)}\n`,
+        "utf8",
+      );
+      return true;
+    });
   } catch {
     return false;
   }
-}
-
-export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers): void {
-  if (typeof s.maxConcurrent === "number") appliers.setMaxConcurrent(s.maxConcurrent);
-  if (s.defaultJoinMode) appliers.setDefaultJoinMode(s.defaultJoinMode);
-  if (s.widgetMode !== undefined) appliers.setWidgetMode?.(s.widgetMode);
-  if (s.fleetView !== undefined) appliers.setFleetView?.(s.fleetView);
-  if (typeof s.maxSpawnsPerSession === "number") appliers.setMaxSpawnsPerSession?.(s.maxSpawnsPerSession);
 }

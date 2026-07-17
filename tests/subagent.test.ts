@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { DEFAULT_SETTINGS } from "../src/core/settings.js";
 import {
   findAgentByName,
   parseAgentCommandArgs,
@@ -169,6 +170,44 @@ describe("registerSubagentTool", () => {
 
     expect(result.isError).toBe(false);
     expect(result.content).toContainEqual({ type: "text", text: "found it" });
+  });
+
+  test("uses the active settings snapshot when params.cwd differs", async () => {
+    const { pi, registeredTool } = createPi();
+    const manager = new AgentManager();
+    const spawnAndWait = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "run-settings",
+      record: completedRecord("done"),
+    });
+    registerSubagentTool(
+      pi,
+      createDeps({
+        manager,
+        settings: {
+          ...DEFAULT_SETTINGS,
+          defaultMaxTurns: 17,
+          graceTurns: 2,
+        },
+      }),
+    );
+
+    await registeredTool().execute(
+      "tool-call-settings",
+      { agent: "Scout", task: "explore", cwd: "/tmp" },
+      undefined,
+      undefined,
+      { cwd: "/repo" } as ExtensionContext,
+    );
+
+    expect(spawnAndWait).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        cwd: "/tmp",
+        maxTurns: 17,
+        graceTurns: 2,
+      }),
+    );
   });
 
   test("execute returns isError=true when agent is unknown", async () => {
