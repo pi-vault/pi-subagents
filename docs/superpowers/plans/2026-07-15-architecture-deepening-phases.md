@@ -14,13 +14,9 @@
 
 Read the authoritative source plan without editing it: [architecture deepening parent plan](./2026-07-15-architecture-deepening.md).
 
-For every phase, run tests with process-local Git signing disabled:
+When a phase's tests create temporary Git repositories, prefix that individual `pnpm vitest run` command with `env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false`.
 
-```bash
-export GIT_CONFIG_COUNT=1
-export GIT_CONFIG_KEY_0=commit.gpgsign
-export GIT_CONFIG_VALUE_0=false
-```
+Do not export these variables and do not use them for any branch commit.
 
 ## Phase sequence
 
@@ -30,7 +26,7 @@ export GIT_CONFIG_VALUE_0=false
 | 2 | [Agent persistence](./2026-07-15-architecture-deepening-phase-2-agent-persistence.md) | Agents menu delegates safe persistence and precedence to the Agent module. | `refactor: add agent catalog seam` → `refactor: delegate agents menu persistence` |
 | 3 | [Configuration](./2026-07-15-architecture-deepening-phase-3-settings.md) | One settings module resolves legacy/global/project values; recursion setting works. | `refactor: add unified settings resolver` → `refactor: migrate settings callers` |
 | 4 | [Live activity](./2026-07-15-architecture-deepening-phase-4-activity.md) | One Agent record supplies live state to all TUI adapters. | `refactor: add agent live record` → `refactor: migrate tui activity state` |
-| 5 | [Chain definitions](./2026-07-15-architecture-deepening-phase-5-chain-definition.md) | All Chain forms normalize before side effects. | `refactor: add chain definition normalizer` → `refactor: route chain adapters through normalizer` |
+| 5 | [Chain definitions](./2026-07-15-architecture-deepening-phase-5-chain-definition.md) | Saved and executable Chain definitions validate before side effects; background appends are validated and consumed. | `refactor: centralize chain definition validation` → `refactor: normalize chain entry points` → `fix: activate validated chain appends` |
 | 6 | [Agent lifecycle](./2026-07-15-architecture-deepening-phase-6-agent-lifecycle.md) | AgentManager owns lifecycle transitions and custom-tool setup. | `refactor: replace spawn dependency bag` → `refactor: centralize agent lifecycle transitions` |
 
 ## Phase gates
