@@ -10,7 +10,6 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
-  ChainStep,
   ResolvedToolBudget,
   SubagentExecutionDetails,
   SubagentToolInput,
@@ -20,9 +19,70 @@ import { renderSubagentCall, renderSubagentResult } from "../tui/render.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
 import { resolveModel } from "./model-resolver.js";
 import { checkModelScope, type ModelSource } from "./model-scope.js";
+import { normalizeChainSteps } from "./chain-serializer.js";
+import { getStepAgents } from "./chain-settings.js";
 import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 import { validateToolBudget } from "./tool-budget.js";
+
+const CHAIN_OBJECT_SCHEMA = Type.Object({}, { additionalProperties: true });
+const CHAIN_ACCEPTANCE = Type.Object({
+  description: Type.Optional(Type.String()),
+  command: Type.Optional(Type.String()),
+});
+const CHAIN_TOOL_BUDGET = Type.Object({
+  soft: Type.Optional(Type.Number()),
+  hard: Type.Optional(Type.Number()),
+  block: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal("*")])),
+});
+const CHAIN_TASK_FIELDS = {
+  agent: Type.Optional(Type.String()),
+  task: Type.Optional(Type.String()),
+  phase: Type.Optional(Type.String()),
+  label: Type.Optional(Type.String()),
+  as: Type.Optional(Type.String()),
+  outputSchema: Type.Optional(CHAIN_OBJECT_SCHEMA),
+  output: Type.Optional(Type.Union([Type.String(), Type.Literal(false)])),
+  outputMode: Type.Optional(Type.String()),
+  reads: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal(false)])),
+  model: Type.Optional(Type.String()),
+  skills: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal(false)])),
+  progress: Type.Optional(Type.Boolean()),
+  cwd: Type.Optional(Type.String()),
+  acceptance: Type.Optional(CHAIN_ACCEPTANCE),
+  toolBudget: Type.Optional(CHAIN_TOOL_BUDGET),
+};
+const CHAIN_STATIC_TASK = Type.Object({
+  ...CHAIN_TASK_FIELDS,
+  count: Type.Optional(Type.Number()),
+});
+const CHAIN_DYNAMIC_EXPAND = Type.Object({
+  from: Type.Optional(Type.Object({
+    output: Type.Optional(Type.String()),
+    path: Type.Optional(Type.String()),
+  })),
+  item: Type.Optional(Type.String()),
+  key: Type.Optional(Type.String()),
+  maxItems: Type.Optional(Type.Number()),
+  onEmpty: Type.Optional(Type.String()),
+});
+const { as: _as, ...CHAIN_DYNAMIC_TEMPLATE_FIELDS } = CHAIN_TASK_FIELDS;
+const CHAIN_DYNAMIC_TEMPLATE = Type.Object(CHAIN_DYNAMIC_TEMPLATE_FIELDS);
+const CHAIN_COLLECT = Type.Object({
+  as: Type.Optional(Type.String()),
+  outputSchema: Type.Optional(CHAIN_OBJECT_SCHEMA),
+});
+const CHAIN_STEP = Type.Object({
+  ...CHAIN_TASK_FIELDS,
+  parallel: Type.Optional(Type.Unsafe({
+    anyOf: [Type.Array(CHAIN_STATIC_TASK), CHAIN_DYNAMIC_TEMPLATE],
+  })),
+  expand: Type.Optional(CHAIN_DYNAMIC_EXPAND),
+  collect: Type.Optional(CHAIN_COLLECT),
+  concurrency: Type.Optional(Type.Number()),
+  failFast: Type.Optional(Type.Boolean()),
+  worktree: Type.Optional(Type.Boolean()),
+});
 
 const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
@@ -73,26 +133,7 @@ const SUBAGENT_TOOL_PARAMETERS = Type.Object({
   ),
   chain: Type.Optional(
     Type.Array(
-      Type.Object({
-        agent: Type.Optional(Type.String()),
-        task: Type.Optional(Type.String()),
-        phase: Type.Optional(Type.String()),
-        label: Type.Optional(Type.String()),
-        as: Type.Optional(Type.String()),
-        output: Type.Optional(Type.Union([Type.String(), Type.Literal(false)])),
-        outputMode: Type.Optional(Type.String()),
-        reads: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal(false)])),
-        model: Type.Optional(Type.String()),
-        skills: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal(false)])),
-        progress: Type.Optional(Type.Boolean()),
-        cwd: Type.Optional(Type.String()),
-        parallel: Type.Optional(Type.Array(Type.Any())),
-        concurrency: Type.Optional(Type.Number()),
-        failFast: Type.Optional(Type.Boolean()),
-        worktree: Type.Optional(Type.Boolean()),
-        expand: Type.Optional(Type.Any()),
-        collect: Type.Optional(Type.Any()),
-      }),
+      CHAIN_STEP,
       { description: "Chain execution: sequential/parallel steps" },
     ),
   ),
@@ -220,7 +261,16 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       if (params.chain) {
         try {
           // Clarification TUI — show before execution when clarify=true (interactive only)
-          let chainSteps = params.chain as ChainStep[];
+          const normalizeAndPreflight = (value: unknown) => {
+            const steps = normalizeChainSteps(value, "subagent chain");
+            for (const step of steps) {
+              for (const name of getStepAgents(step)) {
+                if (!findAgentByName(discovery, name)) throw new Error(`Unknown agent: "${name}"`);
+              }
+            }
+            return steps;
+          };
+          let chainSteps = normalizeAndPreflight(params.chain);
           if (params.clarify && !params.run_in_background) {
             const customUI = (
               ctx as {
@@ -263,7 +313,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               if (result.action === "bg") {
                 params.run_in_background = true;
               }
-              chainSteps = result.steps;
+              chainSteps = normalizeAndPreflight(result.steps);
             }
           }
 
@@ -305,6 +355,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               maxTurns: settings.defaultMaxTurns,
               toolBudget: options?.toolBudget,
               isolation: options?.isolation,
+              parentSignal: options?.parentSignal,
             });
           };
 
@@ -319,13 +370,18 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             deps.manager.fireAndForgetChain(
               chainRunId,
               params.task ?? "",
-              executeChain({
+              chainSteps,
+              effectiveCwd,
+              (chainSignal, closeAppendAdmission) => executeChain({
                 steps: chainSteps,
                 task: params.task ?? "",
                 spawnAndWait,
                 findAgent,
                 cwd: effectiveCwd,
                 runId: chainRunId,
+                signal: chainSignal,
+                isAsync: true,
+                onAppendClose: closeAppendAdmission,
                 onGraphUpdate: (snapshot) => {
                   deps.chainWidget?.update(snapshot);
                   const record = deps.manager.getRecord(chainRunId);
@@ -337,7 +393,6 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                 },
                 getSpawnBudget: () => deps.manager.getSpawnBudget(),
               }),
-              effectiveCwd,
               () => deps.chainWidget?.clear(),
             );
             return {
@@ -392,22 +447,41 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       // --- Chain append dispatch ---
       if (params.chain_append) {
         const { enqueueChainAppendRequest } = await import("./chain-append.js");
-        enqueueChainAppendRequest(
-          params.chain_append.chain_id,
-          params.chain_append.steps as ChainStep[],
-        );
-        return {
-          content: [
-            { type: "text", text: `Steps appended to chain ${params.chain_append.chain_id}.` },
-          ],
-          isError: false,
-          details: stubDetails({
-            status: "success",
-            agent: "(chain-append)",
-            task: `append to ${params.chain_append.chain_id}`,
-            stopReason: "completed",
-          }),
-        };
+        try {
+          enqueueChainAppendRequest(
+            deps.manager,
+            params.chain_append.chain_id,
+            params.chain_append.steps,
+            (name) => {
+              const agent = findAgentByName(discovery, name);
+              if (!agent) throw new Error(`Unknown agent: "${name}"`);
+              return agent;
+            },
+          );
+          return {
+            content: [
+              { type: "text", text: `Steps appended to chain ${params.chain_append.chain_id}.` },
+            ],
+            isError: false,
+            details: stubDetails({
+              status: "success",
+              agent: "(chain-append)",
+              task: `append to ${params.chain_append.chain_id}`,
+              stopReason: "completed",
+            }),
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: [{ type: "text", text: message }],
+            isError: true,
+            details: stubDetails({
+              agent: "(chain-append)",
+              task: `append to ${params.chain_append.chain_id}`,
+              stderr: message,
+            }),
+          };
+        }
       }
 
       // --- Guard: agent required for single mode ---

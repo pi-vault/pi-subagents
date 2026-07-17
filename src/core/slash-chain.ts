@@ -2,6 +2,8 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type { AgentDefinition, ChainStep, SequentialStep } from "../shared/types.js";
 import { discoverChains } from "./agents.js";
+import { materializeSavedChainSteps, normalizeChainSteps } from "./chain-serializer.js";
+import { getStepAgents } from "./chain-settings.js";
 import { findAgentByName } from "./subagent.js";
 
 export class SlashParseError extends Error {}
@@ -496,7 +498,6 @@ export async function executeSlashChain(
   bg = false,
   yes = false,
 ): Promise<void> {
-  let chain = inputChain;
   const paths = deps.resolvePaths();
   const settings = deps.settings;
   const discovery = deps.discoverAgents(paths);
@@ -516,6 +517,7 @@ export async function executeSlashChain(
       maxTurns: settings.defaultMaxTurns,
       toolBudget: options?.toolBudget,
       isolation: options?.isolation,
+      parentSignal: options?.parentSignal,
     });
   };
 
@@ -524,6 +526,25 @@ export async function executeSlashChain(
     if (!agent) throw new Error(`Unknown agent: "${name}"`);
     return agent;
   };
+
+  const normalizeAndPreflight = (value: unknown) => {
+    const steps = normalizeChainSteps(value, "slash chain");
+    for (const step of steps) {
+      for (const name of getStepAgents(step)) findAgent(name);
+    }
+    return steps;
+  };
+  let chain: ChainStep[];
+  try {
+    chain = normalizeAndPreflight(inputChain);
+  } catch (error) {
+    pi.sendMessage({
+      customType: "pi-subagent-result",
+      content: error instanceof Error ? error.message : String(error),
+      display: true,
+    });
+    return;
+  }
 
   // Clarification TUI — show step preview before foreground execution
   // Skip when: --bg (background), --yes (auto-confirm), or no UI available
@@ -537,7 +558,16 @@ export async function executeSlashChain(
     );
 
     if (!result || result.action === "cancel") return;
-    chain = result.steps; // Apply any task/model edits from the TUI
+    try {
+      chain = normalizeAndPreflight(result.steps); // Apply and validate TUI edits
+    } catch (error) {
+      pi.sendMessage({
+        customType: "pi-subagent-result",
+        content: error instanceof Error ? error.message : String(error),
+        display: true,
+      });
+      return;
+    }
     if (result.action === "bg") bg = true;
   }
 
@@ -547,13 +577,18 @@ export async function executeSlashChain(
     deps.manager.fireAndForgetChain(
       chainRunId,
       task,
-      executeChain({
+      chain,
+      ctx.cwd,
+      (chainSignal, closeAppendAdmission) => executeChain({
         steps: chain,
         task,
         spawnAndWait,
         findAgent,
         cwd: ctx.cwd,
         runId: chainRunId,
+        signal: chainSignal,
+        isAsync: true,
+        onAppendClose: closeAppendAdmission,
         onGraphUpdate: (snapshot) => {
           deps.chainWidget?.update(snapshot);
           const record = deps.manager.getRecord(chainRunId);
@@ -565,7 +600,6 @@ export async function executeSlashChain(
         },
         getSpawnBudget: () => deps.manager.getSpawnBudget(),
       }),
-      ctx.cwd,
       () => deps.chainWidget?.clear(),
     );
     pi.sendMessage({
@@ -713,8 +747,11 @@ export function registerChainCommands(pi: ExtensionAPI, deps: RuntimeDeps): void
         return;
       }
 
-      // ChainStepConfig[] is structurally compatible with ChainStep[] at runtime
-      await executeSlashChain(pi, ctx, deps, chain.steps as ChainStep[], task, bg, yes);
+      try {
+        await executeSlashChain(pi, ctx, deps, materializeSavedChainSteps(chain), task, bg, yes);
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
     },
   });
 }

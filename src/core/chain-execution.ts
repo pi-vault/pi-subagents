@@ -10,6 +10,7 @@ import type {
 import {
   isParallelStep,
   isDynamicParallelStep,
+  getStepAgents,
   resolveChainTemplates,
   createChainDir,
   removeChainDir,
@@ -17,8 +18,8 @@ import {
   buildChainInstructions,
   type AgentBehaviorDefaults,
 } from "./chain-settings.js";
+import { normalizeChainSteps } from "./chain-serializer.js";
 import {
-  validateChainOutputBindings,
   resolveOutputReferences,
   outputEntryFromResult,
 } from "./chain-outputs.js";
@@ -36,6 +37,7 @@ export interface StepSpawnOptions {
   isolation?: "worktree";
   skills?: string[];
   model?: string;
+  parentSignal?: AbortSignal;
 }
 
 export interface ChainExecutionParams {
@@ -54,6 +56,7 @@ export interface ChainExecutionParams {
   signal?: AbortSignal;
   onGraphUpdate?: (snapshot: WorkflowGraphSnapshot) => void;
   isAsync?: boolean;
+  onAppendClose?: () => void;
   getSpawnBudget?: () => number;
   globalConcurrencyLimit?: number;
 }
@@ -73,23 +76,24 @@ function agentDefaults(agentDef: AgentDefinition): AgentBehaviorDefaults {
 export async function executeChain(
   params: ChainExecutionParams,
 ): Promise<ChainExecutionResult> {
-  const { steps, task, spawnAndWait, findAgent, cwd, runId, signal, onGraphUpdate, getSpawnBudget } = params;
+  const { task, spawnAndWait, findAgent, cwd, runId, signal, onGraphUpdate, getSpawnBudget } = params;
+  const steps = normalizeChainSteps(params.steps, "chain execution");
+  for (const step of steps) {
+    for (const name of getStepAgents(step)) findAgent(name);
+  }
 
   const globalSemaphore = new Semaphore(
     params.globalConcurrencyLimit ?? DEFAULT_GLOBAL_CONCURRENCY_LIMIT,
   );
 
-  // 1. Validate output bindings
-  validateChainOutputBindings(steps);
-
-  // 2. Resolve templates
+  // 1. Resolve templates
   const templates = resolveChainTemplates(steps);
 
-  // 3. Create chain directory
+  // 2. Create chain directory
   const ownedChainDir = !params.chainDir;
   const chainDir = params.chainDir ?? createChainDir(runId);
 
-  // 4. Step loop
+  // 3. Step loop
   const outputs: ChainOutputMap = {};
   let prev = "";
   const results: Array<{ agent: string; output: string; status: string }> = [];
@@ -191,7 +195,7 @@ export async function executeChain(
           const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
 
           // Build spawn options
-          const parallelOptions: StepSpawnOptions = {};
+          const parallelOptions: StepSpawnOptions = { parentSignal: signal };
           if (item.toolBudget) {
             const validated = validateToolBudget(item.toolBudget);
             if (!validated.error && validated.budget) parallelOptions.toolBudget = validated.budget;
@@ -333,7 +337,7 @@ export async function executeChain(
       const { prefix: dynPrefix, suffix: dynSuffix } = buildChainInstructions(dynBehavior, chainDir, false);
 
       // Build spawn options (shared across all dynamic items)
-      const dynOptions: StepSpawnOptions = {};
+      const dynOptions: StepSpawnOptions = { parentSignal: signal };
       if (step.parallel.toolBudget) {
         const validated = validateToolBudget(step.parallel.toolBudget);
         if (!validated.error && validated.budget) dynOptions.toolBudget = validated.budget;
@@ -437,7 +441,7 @@ export async function executeChain(
       const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
 
       // Build spawn options
-      const seqOptions: StepSpawnOptions = {};
+      const seqOptions: StepSpawnOptions = { parentSignal: signal };
       if (seqStep.toolBudget) {
         const validated = validateToolBudget(seqStep.toolBudget);
         if (!validated.error && validated.budget) seqOptions.toolBudget = validated.budget;
@@ -513,6 +517,7 @@ export async function executeChain(
     workflowGraph: finalSnapshot(),
   };
   } finally {
+    params.onAppendClose?.();
     if (ownedChainDir) removeChainDir(chainDir);
   }
 }

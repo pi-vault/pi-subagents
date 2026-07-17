@@ -829,11 +829,79 @@ describe("registerExternalRecord / notifyComplete", () => {
     const record = manager.fireAndForgetChain(
       "chain-live",
       "test",
-      new Promise(() => {}),
+      [],
       "/tmp",
+      () => new Promise(() => {}),
     );
 
     expect(record.live).toEqual({ activeTools: [], responseText: "" });
+    manager.dispose();
+  });
+
+  it("registers a copied chain definition before starting execution", () => {
+    const manager = new AgentManager();
+    const definition = [{ agent: "Scout", task: "work" }];
+    const start = vi.fn(() => {
+      const record = manager.getRecord("chain-visible");
+      expect(record?.chainDefinition).toEqual(definition);
+      expect(record?.chainDefinition).not.toBe(definition);
+      return new Promise<{ content: string; isError: boolean }>(() => {});
+    });
+
+    manager.fireAndForgetChain("chain-visible", "test", definition, "/tmp", start);
+
+    expect(start).toHaveBeenCalledOnce();
+    manager.dispose();
+  });
+
+  it("clears chain append requests when background execution settles", async () => {
+    const { countPendingChainAppendRequests, enqueueChainAppendRequest } = await import(
+      "../src/core/chain-append.js"
+    );
+    const manager = new AgentManager();
+    let finish!: (result: { content: string; isError: boolean }) => void;
+    manager.fireAndForgetChain(
+      "chain-cleanup",
+      "test",
+      [{ agent: "Scout" }],
+      "/tmp",
+      () => new Promise((resolve) => { finish = resolve; }),
+    );
+    enqueueChainAppendRequest(manager, "chain-cleanup", [{ agent: "Scout" }], () => makeAgentDef());
+
+    finish({ content: "done", isError: false });
+    await vi.waitFor(() => expect(manager.getRecord("chain-cleanup")?.status).toBe("completed"));
+
+    expect(countPendingChainAppendRequests("chain-cleanup")).toBe(0);
+    manager.dispose();
+  });
+
+  it("clears chain append requests when a background chain is aborted", async () => {
+    const { countPendingChainAppendRequests, enqueueChainAppendRequest } = await import(
+      "../src/core/chain-append.js"
+    );
+    const manager = new AgentManager();
+    manager.fireAndForgetChain(
+      "chain-abort-cleanup",
+      "test",
+      [{ agent: "Scout" }],
+      "/tmp",
+      () => new Promise(() => {}),
+    );
+    enqueueChainAppendRequest(manager, "chain-abort-cleanup", [{ agent: "Scout" }], () =>
+      makeAgentDef(),
+    );
+    const record = manager.getRecord("chain-abort-cleanup");
+    const definitionLength = record?.chainDefinition?.length;
+
+    expect(manager.abort("chain-abort-cleanup")).toBe(true);
+    expect(() =>
+      enqueueChainAppendRequest(manager, "chain-abort-cleanup", [{ agent: "Scout" }], () =>
+        makeAgentDef(),
+      ),
+    ).toThrow();
+    expect(record?.chainDefinition).toHaveLength(definitionLength ?? 0);
+    expect(countPendingChainAppendRequests("chain-abort-cleanup")).toBe(0);
     manager.dispose();
   });
 

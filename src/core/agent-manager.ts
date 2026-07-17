@@ -2,10 +2,11 @@ import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
-import type { AgentDefinition, AgentRecord, SpawnOptions, ToolActivity } from "../shared/types.js";
+import type { AgentDefinition, AgentRecord, ChainStep, SpawnOptions, ToolActivity } from "../shared/types.js";
 import { resumeAgent, runAgent } from "./agent-runner.js";
 import { createChildGetResultTool, createChildSubagentTool } from "./child-subagent-tool.js";
 import { createContactSupervisorTool } from "./intercom.js";
+import { clearChainAppendRequests } from "./chain-append.js";
 import {
   checkSpawnLimit,
   DEFAULT_MAX_SPAWNS_PER_SESSION,
@@ -27,6 +28,12 @@ function notifyActivity(
   } catch {
     // Rendering must not fail an agent run.
   }
+}
+
+function closeChainAppendAdmission(record: AgentRecord): void {
+  if (record.type !== "(chain)") return;
+  record.acceptsChainAppends = false;
+  clearChainAppendRequests(record.id);
 }
 
 export type OnAgentComplete = (record: AgentRecord) => void;
@@ -171,10 +178,15 @@ export class AgentManager {
   fireAndForgetChain(
     id: string,
     task: string,
-    promise: Promise<{ content: string; isError: boolean }>,
+    chainDefinition: ChainStep[],
     cwd: string,
+    startFactory: (
+      signal: AbortSignal,
+      closeAppendAdmission: () => void,
+    ) => Promise<{ content: string; isError: boolean }>,
     onClear?: () => void,
   ): AgentRecord {
+    const abortController = new AbortController();
     const record: AgentRecord = {
       id,
       type: "(chain)",
@@ -188,26 +200,46 @@ export class AgentManager {
       isBackground: true,
       cwd,
       chainSteps: [],
+      chainDefinition: [...chainDefinition],
+      acceptsChainAppends: true,
+      abortController,
     };
     this.registerExternalRecord(id, record);
-    promise
-      .then((result) => {
-        record.status = result.isError ? "error" : "completed";
+    const closeAppendAdmission = () => closeChainAppendAdmission(record);
+    abortController.signal.addEventListener("abort", closeAppendAdmission, {
+      once: true,
+    });
+    let promise: Promise<{ content: string; isError: boolean }>;
+    try {
+      promise = startFactory(abortController.signal, closeAppendAdmission);
+    } catch (error) {
+      promise = Promise.reject(error);
+    }
+    record.promise = promise.then(
+      (result) => {
+        closeAppendAdmission();
+        const aborted = abortController.signal.aborted;
+        record.status = aborted ? "aborted" : result.isError ? "error" : "completed";
         record.result = result.content;
-        record.error = result.isError ? result.content : undefined;
+        record.error = !aborted && result.isError ? result.content : undefined;
         record.completedAt = Date.now();
         record.durationMs = record.completedAt - record.startedAt;
         onClear?.();
         this.notifyComplete(id);
-      })
-      .catch((error) => {
-        record.status = "error";
-        record.error = error instanceof Error ? error.message : String(error);
+        return result.content;
+      },
+      (error) => {
+        closeAppendAdmission();
+        const aborted = abortController.signal.aborted;
+        record.status = aborted ? "aborted" : "error";
+        record.error = aborted ? undefined : error instanceof Error ? error.message : String(error);
         record.completedAt = Date.now();
         record.durationMs = record.completedAt - record.startedAt;
         onClear?.();
         this.notifyComplete(id);
-      });
+        return "";
+      },
+    ).catch(() => "");
     return record;
   }
 
@@ -531,6 +563,7 @@ export class AgentManager {
       return true;
     }
     if (record.status !== "running") return false;
+    closeChainAppendAdmission(record);
     record.abortController?.abort();
     record.live.activeTools = [];
     return true;
@@ -553,6 +586,7 @@ export class AgentManager {
     // Abort running
     for (const record of this.agents.values()) {
       if (record.status === "running") {
+        closeChainAppendAdmission(record);
         record.abortController?.abort();
         record.live.activeTools = [];
       }
@@ -635,6 +669,7 @@ export class AgentManager {
     clearInterval(this.cleanupInterval);
     for (const record of this.agents.values()) {
       if (record.status === "running") {
+        closeChainAppendAdmission(record);
         record.abortController?.abort();
         record.live.activeTools = [];
       }

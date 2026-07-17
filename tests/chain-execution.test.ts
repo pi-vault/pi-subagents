@@ -1,5 +1,14 @@
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { executeChain } from "../src/core/chain-execution.js";
+import { AgentManager } from "../src/core/agent-manager.js";
+import {
+  countPendingChainAppendRequests,
+  enqueueChainAppendRequest,
+  resetAppendQueues,
+} from "../src/core/chain-append.js";
 import type {
   AgentDefinition,
   AgentRecord,
@@ -86,6 +95,140 @@ function makeMockDeps(stepResults: Array<{ result: string; status?: string }>) {
 }
 
 describe("executeChain — sequential", () => {
+  test("aborts an in-flight single step through StepSpawnOptions", async () => {
+    const controller = new AbortController();
+    let releaseChild!: () => void;
+    const spawnAndWait = vi.fn(
+      (
+        _agentDef: AgentDefinition,
+        _prompt: string,
+        _cwd: string,
+        options?: import("../src/core/chain-execution.js").StepSpawnOptions,
+      ) => new Promise<{ id: string; record: AgentRecord }>((resolve) => {
+        releaseChild = () => resolve({
+          id: "child",
+          record: { ...makeRecord("completed", ""), status: "aborted" },
+        });
+        options?.parentSignal?.addEventListener("abort", releaseChild, { once: true });
+      }),
+    );
+    const run = executeChain({
+      steps: [{ agent: "scout" }],
+      task: "work",
+      spawnAndWait,
+      findAgent: makeAgentDef,
+      cwd: "/tmp",
+      runId: `cancel-${Date.now()}`,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(spawnAndWait).toHaveBeenCalledOnce());
+    controller.abort();
+    try {
+      expect(spawnAndWait.mock.calls[0]?.[3]?.parentSignal).toBe(controller.signal);
+    } finally {
+      releaseChild();
+      await run;
+    }
+  });
+
+  test("consumes a validated appended batch without revalidating the whole chain", async () => {
+    const manager = new AgentManager();
+    const runId = `append-${Date.now()}`;
+    const steps: ChainStep[] = [{ agent: "scout", as: "first" }];
+    manager.registerExternalRecord(runId, {
+      id: runId,
+      type: "(chain)",
+      description: "Chain: append",
+      status: "running",
+      toolUses: 0,
+      turnCount: 0,
+      live: { activeTools: [], responseText: "" },
+      startedAt: Date.now(),
+      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+      isBackground: true,
+      chainDefinition: [...steps],
+      acceptsChainAppends: true,
+    });
+    enqueueChainAppendRequest(
+      manager,
+      runId,
+      [{ agent: "planner", task: "use {outputs.first}" }],
+      makeAgentDef,
+    );
+    const deps = makeMockDeps([{ result: "one" }, { result: "two" }]);
+
+    const result = await executeChain({
+      steps,
+      task: "work",
+      spawnAndWait: deps.spawnAndWait,
+      findAgent: deps.findAgent,
+      cwd: "/tmp",
+      runId,
+      isAsync: true,
+    });
+
+    expect(result.content).toBe("two");
+    expect(deps.spawnAndWait).toHaveBeenCalledTimes(2);
+    resetAppendQueues();
+    manager.dispose();
+  });
+
+  test("closes append admission after the final consumption point", async () => {
+    const manager = new AgentManager();
+    const runId = `append-close-${Date.now()}`;
+    const steps: ChainStep[] = [{ agent: "scout" }];
+    const deps = makeMockDeps([{ result: "done" }]);
+    let checkedBoundary = false;
+
+    manager.fireAndForgetChain(
+      runId,
+      "work",
+      steps,
+      "/tmp",
+      (_signal, closeAppendAdmission) =>
+        executeChain({
+          steps,
+          task: "work",
+          spawnAndWait: deps.spawnAndWait,
+          findAgent: deps.findAgent,
+          cwd: "/tmp",
+          runId,
+          isAsync: true,
+          onAppendClose: () => {
+            closeAppendAdmission();
+            expect(() =>
+              enqueueChainAppendRequest(manager, runId, [{ agent: "planner" }], makeAgentDef),
+            ).toThrow();
+            checkedBoundary = true;
+          },
+        }),
+    );
+
+    await vi.waitFor(() => expect(manager.getRecord(runId)?.status).toBe("completed"));
+    expect(checkedBoundary).toBe(true);
+    expect(countPendingChainAppendRequests(runId)).toBe(0);
+    manager.dispose();
+  });
+
+  test("normalizes and preflights every agent before creating the chain directory", async () => {
+    const runId = `preflight-${Date.now()}`;
+    const chainDir = join(tmpdir(), "pi-subagents-chain-runs", runId);
+    const spawnAndWait = vi.fn();
+
+    await expect(executeChain({
+      steps: [{ agent: "missing", task: "work" }],
+      task: "work",
+      spawnAndWait,
+      findAgent: () => { throw new Error('Unknown agent: "missing"'); },
+      cwd: "/tmp",
+      runId,
+    })).rejects.toThrow('Unknown agent: "missing"');
+
+    expect(spawnAndWait).not.toHaveBeenCalled();
+    expect(existsSync(chainDir)).toBe(false);
+  });
+
   test("runs 2 sequential steps and passes {previous}", async () => {
     const mockDeps = makeMockDeps([
       { result: "step 1 output" },
