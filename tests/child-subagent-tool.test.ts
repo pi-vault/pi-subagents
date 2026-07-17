@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   createChildSubagentTool,
   createChildGetResultTool,
+  createAgentCustomToolsFactory,
 } from "../src/core/child-subagent-tool.js";
 import { AgentManager } from "../src/core/agent-manager.js";
 import { createAgent, createDeps, createDiscovery } from "./_test-helpers.js";
@@ -41,6 +42,8 @@ function makeSubagentTool(
 }
 
 const exec = (tool: ReturnType<typeof createChildSubagentTool>, params: Record<string, unknown>) =>
+  tool.execute("tc-1", params as never, undefined, undefined, CTX) as unknown as Promise<ToolResult>;
+const execGet = (tool: ReturnType<typeof createChildGetResultTool>, params: Record<string, unknown>) =>
   tool.execute("tc-1", params as never, undefined, undefined, CTX) as unknown as Promise<ToolResult>;
 
 describe("createChildSubagentTool", () => {
@@ -87,6 +90,41 @@ describe("createChildSubagentTool", () => {
     expect(manager.listAgents()[0].spawnedBy).toBe("parent-1");
   });
 
+  it("gives the spawned child its own custom-tool factory", async () => {
+    const spawn = vi.spyOn(manager, "spawn").mockReturnValue("child-1");
+    await exec(
+      makeSubagentTool(manager, {
+        discovery: createDiscovery([createAgent({ subagentAgents: ["Scout"] })]),
+      }),
+      { agent: "Scout", task: "test" },
+    );
+
+    const options = spawn.mock.calls[0]?.[2];
+    expect(options?.createCustomTools).toBeTypeOf("function");
+    const tools = options?.createCustomTools?.({
+      id: "child-1",
+      cwd: "/tmp",
+      allowRecursion: true,
+    });
+    expect(tools?.map((tool) => (tool as { name: string }).name)).toEqual([
+      "subagent",
+      "get_subagent_result",
+    ]);
+
+    spawn.mockRestore();
+    const ownChild = manager.spawn({}, scout(), {
+      prompt: "nested",
+      cwd: "/tmp",
+      isBackground: true,
+      spawnedBy: "child-1",
+    });
+    const getResult = tools?.find(
+      (tool) => (tool as { name: string }).name === "get_subagent_result",
+    ) as ReturnType<typeof createChildGetResultTool>;
+    const result = await execGet(getResult, { agent_id: ownChild });
+    expect(result.content[0].text).not.toContain("Agent not found");
+  });
+
   it("passes incremented depth to spawn", async () => {
     const result = await exec(
       makeSubagentTool(manager, { currentDepth: 2 }),
@@ -114,6 +152,48 @@ describe("createChildSubagentTool", () => {
   });
 });
 
+describe("createAgentCustomToolsFactory", () => {
+  it("discovers agents lazily and returns recursion and intercom tools", () => {
+    const manager = new AgentManager();
+    const discoverAgents = vi.fn(() => createDiscovery([scout()]));
+    const deps = createDeps({
+      manager,
+      discoverAgents,
+      intercom: { sendRequest: vi.fn() } as never,
+    });
+    const factory = createAgentCustomToolsFactory(
+      manager,
+      deps,
+      createAgent({ subagentAgents: ["Scout"], intercom: true }),
+      1,
+    );
+    expect(discoverAgents).not.toHaveBeenCalled();
+
+    const tools = factory({ id: "child-2", cwd: "/tmp", allowRecursion: true });
+
+    expect(discoverAgents).toHaveBeenCalledOnce();
+    expect(tools.map((tool) => (tool as { name: string }).name)).toEqual([
+      "subagent",
+      "get_subagent_result",
+      "contact_supervisor",
+    ]);
+  });
+
+  it("returns only intercom for an intercom-only agent", () => {
+    const manager = new AgentManager();
+    const deps = createDeps({ manager, intercom: { sendRequest: vi.fn() } as never });
+    const factory = createAgentCustomToolsFactory(
+      manager,
+      deps,
+      createAgent({ intercom: true, subagentAgents: [] }),
+      0,
+    );
+
+    expect(factory({ id: "agent-1", cwd: "/tmp", allowRecursion: false }))
+      .toEqual([expect.objectContaining({ name: "contact_supervisor" })]);
+  });
+});
+
 describe("createChildGetResultTool", () => {
   let manager: AgentManager;
 
@@ -121,9 +201,6 @@ describe("createChildGetResultTool", () => {
     vi.clearAllMocks();
     manager = new AgentManager();
   });
-
-  const execGet = (tool: ReturnType<typeof createChildGetResultTool>, params: Record<string, unknown>) =>
-    tool.execute("tc-1", params as never, undefined, undefined, CTX) as unknown as Promise<ToolResult>;
 
   it("returns result for agent spawned by parent", async () => {
     const { id } = await manager.spawnAndWait({}, scout(), { prompt: "test", cwd: "/tmp", spawnedBy: "parent-1" });

@@ -114,7 +114,7 @@ describe("chain mode dispatch", () => {
 
   test("dispatches to executeChain and returns success", async () => {
     const manager = new AgentManager();
-    vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
       id: "step-1",
       record: {
         id: "step-1",
@@ -141,6 +141,7 @@ describe("chain mode dispatch", () => {
     expect(result.isError).toBe(false);
     expect(result.details.agent).toBe("(chain)");
     expect(result.details.status).toBe("success");
+    expect(spawn.mock.calls[0]?.[2]?.createCustomTools).toBeTypeOf("function");
   });
 
   test("returns error details when executeChain throws", async () => {

@@ -4,6 +4,7 @@ import type { AgentDefinition, ChainStep, SequentialStep } from "../shared/types
 import { discoverChains } from "./agents.js";
 import { materializeSavedChainSteps, normalizeChainSteps } from "./chain-serializer.js";
 import { getStepAgents } from "./chain-settings.js";
+import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
 import { findAgentByName } from "./subagent.js";
 
 export class SlashParseError extends Error {}
@@ -518,6 +519,12 @@ export async function executeSlashChain(
       toolBudget: options?.toolBudget,
       isolation: options?.isolation,
       parentSignal: options?.parentSignal,
+      createCustomTools: createAgentCustomToolsFactory(
+        deps.manager,
+        deps,
+        effectiveAgentDef,
+        0,
+      ),
     });
   };
 

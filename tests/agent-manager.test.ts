@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
-import { createDeps } from "./_test-helpers.js";
 import type { AgentDefinition } from "../src/shared/types.js";
+import { createWorktree } from "../src/core/worktree.js";
 
 const tmpDir = "/tmp";
 
@@ -14,6 +14,12 @@ vi.mock("../src/core/agent-runner.js", () => ({
     steered: false,
   }),
   resumeAgent: vi.fn().mockResolvedValue("resumed"),
+}));
+
+vi.mock("../src/core/worktree.js", () => ({
+  createWorktree: vi.fn().mockReturnValue(undefined),
+  cleanupWorktree: vi.fn(),
+  pruneWorktrees: vi.fn(),
 }));
 
 function makeAgentDef(
@@ -302,30 +308,31 @@ describe("AgentManager", () => {
     );
   });
 
-  it("constructs customTools when _deps and subagentAgents are present", async () => {
+  it("creates customTools once with the generated id, cwd, and recursion flag", async () => {
     const { runAgent } = await import("../src/core/agent-runner.js");
-    const deps = createDeps({ manager });
     const agentDef = makeAgentDef({ subagentAgents: ["helper"] });
+    const tools = [{ name: "factory-tool" }];
+    const createCustomTools = vi.fn().mockReturnValue(tools);
     await manager.spawnAndWait({}, agentDef, {
       prompt: "test",
       cwd: "/tmp",
       currentDepth: 0,
-      _deps: deps,
+      createCustomTools,
     });
+    const id = manager.listAgents()[0]?.id;
+    expect(createCustomTools).toHaveBeenCalledOnce();
+    expect(createCustomTools).toHaveBeenCalledWith({ id, cwd: "/tmp", allowRecursion: true });
     expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
       agentDef,
       expect.objectContaining({
         allowRecursion: true,
-        customTools: expect.arrayContaining([
-          expect.objectContaining({ name: "subagent" }),
-          expect.objectContaining({ name: "get_subagent_result" }),
-        ]),
+        customTools: tools,
       }),
       expect.anything(),
     );
   });
 
-  it("passes empty customTools when _deps is absent", async () => {
+  it("passes empty customTools when no factory is supplied", async () => {
     const { runAgent } = await import("../src/core/agent-runner.js");
     const agentDef = makeAgentDef({ subagentAgents: ["helper"] });
     await manager.spawnAndWait({}, agentDef, {
@@ -341,6 +348,37 @@ describe("AgentManager", () => {
       }),
       expect.anything(),
     );
+  });
+
+  it("creates tools with the worktree cwd", async () => {
+    vi.mocked(createWorktree).mockReturnValueOnce({
+      path: "/tmp/repo/.git/worktrees/agent",
+      branch: "agent/test",
+      baseSha: "abc123",
+      workPath: "/tmp/worktree",
+    });
+    const createCustomTools = vi.fn().mockReturnValue([]);
+
+    await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+      isolation: "worktree",
+      createCustomTools,
+    });
+
+    expect(createCustomTools).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/tmp/worktree" }));
+  });
+
+  it("tells the factory when recursion is blocked at the depth limit", async () => {
+    const createCustomTools = vi.fn().mockReturnValue([]);
+    await manager.spawnAndWait({}, makeAgentDef({ subagentAgents: ["helper"] }), {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 2,
+      createCustomTools,
+    });
+
+    expect(createCustomTools).toHaveBeenCalledWith(expect.objectContaining({ allowRecursion: false }));
   });
 
   it("records error status when runAgent throws", async () => {

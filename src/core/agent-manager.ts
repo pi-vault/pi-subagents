@@ -1,11 +1,8 @@
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type { AgentDefinition, AgentRecord, ChainStep, SpawnOptions, ToolActivity } from "../shared/types.js";
 import { resumeAgent, runAgent } from "./agent-runner.js";
-import { createChildGetResultTool, createChildSubagentTool } from "./child-subagent-tool.js";
-import { createContactSupervisorTool } from "./intercom.js";
 import { clearChainAppendRequests } from "./chain-append.js";
 import {
   checkSpawnLimit,
@@ -305,35 +302,11 @@ export class AgentManager {
     const allowRecursion =
       agentDef.subagentAgents.length > 0 && (options.currentDepth ?? 0) + 1 < effectiveMaxDepth;
 
-    // Build custom tools for child sessions that allow recursion
-    let customTools: unknown[] = [];
-    if (allowRecursion) {
-      const deps = (options as { _deps?: RuntimeDeps })._deps;
-      const paths = deps?.resolvePaths?.();
-      if (deps && paths) {
-        const discovery = deps.discoverAgents(paths);
-        customTools = [
-          createChildSubagentTool({
-            manager: this,
-            discovery,
-            allowedAgents: agentDef.subagentAgents,
-            currentDepth: (options.currentDepth ?? 0) + 1,
-            parentCwd: effectiveCwd,
-            parentAgentId: id,
-            deps,
-          }),
-          createChildGetResultTool(this, id),
-        ];
-      }
-    }
-
-    // Inject contact_supervisor tool for intercom-enabled agents
-    if (agentDef.intercom) {
-      const deps = (options as { _deps?: RuntimeDeps })._deps;
-      if (deps?.intercom) {
-        customTools.push(createContactSupervisorTool(deps.intercom, id, agentDef.name));
-      }
-    }
+    const customTools = options.createCustomTools?.({
+      id,
+      cwd: effectiveCwd,
+      allowRecursion,
+    }) ?? [];
 
     const promise = runAgent(
       agentDef,

@@ -143,7 +143,10 @@ describe("registerSubagentTool", () => {
 
     registerSubagentTool(
       pi,
-      createDeps({ manager, discoverAgents: () => createDiscovery([createAgent()]) }),
+      createDeps({
+        manager,
+        discoverAgents: () => createDiscovery([createAgent({ subagentAgents: ["Scout"] })]),
+      }),
     );
 
     const tool = registeredTool();
@@ -169,6 +172,10 @@ describe("registerSubagentTool", () => {
 
     expect(result.isError).toBe(false);
     expect(result.content).toContainEqual({ type: "text", text: "found it" });
+    const createCustomTools = vi.mocked(manager.spawnAndWait).mock.calls[0]?.[2]?.createCustomTools;
+    expect(createCustomTools?.({ id: "run-1", cwd: "/repo", allowRecursion: true })
+      .map((tool) => (tool as { name: string }).name))
+      .toEqual(["subagent", "get_subagent_result"]);
   });
 
   test("uses the active settings snapshot when params.cwd differs", async () => {
@@ -261,7 +268,10 @@ describe("background spawn", () => {
 
     registerSubagentTool(
       pi,
-      createDeps({ manager, discoverAgents: () => createDiscovery([createAgent()]) }),
+      createDeps({
+        manager,
+        discoverAgents: () => createDiscovery([createAgent({ subagentAgents: ["Scout"] })]),
+      }),
     );
 
     const tool = registeredTool();
@@ -283,6 +293,12 @@ describe("background spawn", () => {
 
     expect(result.isError).toBe(false);
     expect(spawnSpy).toHaveBeenCalledOnce();
+    expect(spawnSpy.mock.calls[0]?.[2]?.createCustomTools?.({
+      id: "agent-bg-1",
+      cwd: "/repo",
+      allowRecursion: true,
+    }).map((tool) => (tool as { name: string }).name))
+      .toEqual(["subagent", "get_subagent_result"]);
     expect(result.content[0]?.text).toContain("Agent ID: agent-bg-1");
   });
 
@@ -508,7 +524,10 @@ describe("registerAgentCommand", () => {
 
     registerAgentCommand(
       pi,
-      createDeps({ manager, discoverAgents: () => createDiscovery([createAgent()]) }),
+      createDeps({
+        manager,
+        discoverAgents: () => createDiscovery([createAgent({ subagentAgents: ["Scout"] })]),
+      }),
     );
 
     await registeredCommand("agent")?.handler(
@@ -519,6 +538,12 @@ describe("registerAgentCommand", () => {
     expect(sentMessages).toHaveLength(1);
     expect(sentMessages[0]?.customType).toBe("pi-subagent-result");
     expect(sentMessages[0]?.content).toBe("summary output");
+    expect(vi.mocked(manager.spawnAndWait).mock.calls[0]?.[2]?.createCustomTools?.({
+      id: "run-2",
+      cwd: "/repo",
+      allowRecursion: true,
+    }).map((tool) => (tool as { name: string }).name))
+      .toEqual(["subagent", "get_subagent_result"]);
   });
 
   test("sends error message when agent name is unknown", async () => {

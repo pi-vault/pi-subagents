@@ -315,7 +315,11 @@ export interface SpawnOptions {
   onActivity?: (record: AgentRecord) => void;
   toolBudget?: ResolvedToolBudget;
   spawnedBy?: string;
-  _deps?: unknown;
+  createCustomTools?: (context: {
+    id: string;
+    cwd: string;
+    allowRecursion: boolean;
+  }) => unknown[];
 }
 
 export interface EnvInfo {

@@ -4,6 +4,7 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type { AgentDefinition, AgentDiscoveryResult, ResolvedToolBudget } from "../shared/types.js";
 import { resolveModel } from "./model-resolver.js";
 import { validateToolBudget } from "./tool-budget.js";
+import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
 
 const RPC_VERSION = 1;
 
@@ -142,6 +143,7 @@ export function registerRpcHandlers(
           isBackground: true,
           model,
           toolBudget: resolvedBudget,
+          createCustomTools: createAgentCustomToolsFactory(manager, deps, agentDef, 0),
           ...(typeof req.thinking === "string"
             ? { thinking: req.thinking }
             : {}),

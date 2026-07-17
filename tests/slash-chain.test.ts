@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
 import { enqueueChainAppendRequest } from "../src/core/chain-append.js";
+import { createAgentCustomToolsFactory } from "../src/core/child-subagent-tool.js";
 import {
   executeSlashChain,
   parseSingleTaskToken,
@@ -15,6 +16,14 @@ import {
   registerChainCommands,
 } from "../src/core/slash-chain.js";
 import { completedRecord, createAgent, createDeps, createDiscovery } from "./_test-helpers.js";
+
+vi.mock("../src/core/child-subagent-tool.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/core/child-subagent-tool.js")>();
+  return {
+    ...actual,
+    createAgentCustomToolsFactory: vi.fn(actual.createAgentCustomToolsFactory),
+  };
+});
 
 describe("stripExecutionFlags", () => {
   test("strips --bg flag and reports bg=true", () => {
@@ -94,6 +103,47 @@ describe("/run-chain definition materialization", () => {
 });
 
 describe("executeSlashChain validation", () => {
+  test("supplies the common tool factory for the effective chain-step agent", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step-1",
+      record: completedRecord("done"),
+    });
+    const deps = createDeps({
+      manager,
+      discoverAgents: () => createDiscovery([
+        createAgent({ subagentAgents: ["Scout"] }),
+      ]),
+    });
+    vi.mocked(createAgentCustomToolsFactory).mockClear();
+
+    await executeSlashChain(
+      { sendMessage: vi.fn() } as unknown as ExtensionAPI,
+      { cwd: "/tmp" } as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout", skills: ["review"], model: "test/model" }],
+      "work",
+      false,
+      true,
+    );
+
+    expect(createAgentCustomToolsFactory).toHaveBeenCalledWith(
+      manager,
+      deps,
+      expect.objectContaining({ name: "Scout", skills: ["review"], model: "test/model" }),
+      0,
+    );
+    expect(spawn.mock.calls[0]?.[2]?.createCustomTools)
+      .toBe(vi.mocked(createAgentCustomToolsFactory).mock.results[0]?.value);
+    expect(spawn.mock.calls[0]?.[2]?.createCustomTools?.({
+      id: "step-1",
+      cwd: "/tmp",
+      allowRecursion: true,
+    }).map((tool) => (tool as { name: string }).name))
+      .toEqual(["subagent", "get_subagent_result"]);
+    manager.dispose();
+  });
+
   test("aborting a background slash chain cancels its in-flight child", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(246813579);
     const manager = new AgentManager();
