@@ -58,12 +58,11 @@ function getTemplateStrings(step: ChainStep): string[] {
   return task ? [task] : [];
 }
 
-export function validateChainOutputBindingsWithContext(
+export function validateChainOutputBindings(
   steps: ChainStep[],
   context: ChainOutputValidationContext = {},
 ): void {
   const defined = new Set<string>();
-  const claimed = new Set<string>();
 
   for (const name of context.priorOutputNames ?? []) {
     if (!SAFE_OUTPUT_NAME_PATTERN.test(name)) {
@@ -71,11 +70,10 @@ export function validateChainOutputBindingsWithContext(
         `Invalid prior chain output name '${name}': must match ${SAFE_OUTPUT_NAME_PATTERN.source}`,
       );
     }
-    if (claimed.has(name)) {
+    if (defined.has(name)) {
       throw new ChainOutputValidationError(`Duplicate chain output name '${name}'.`);
     }
     defined.add(name);
-    claimed.add(name);
   }
 
   for (const [index, step] of steps.entries()) {
@@ -116,17 +114,12 @@ export function validateChainOutputBindingsWithContext(
           `Invalid chain output name '${name}': must match ${SAFE_OUTPUT_NAME_PATTERN.source}`,
         );
       }
-      if (claimed.has(name)) {
+      if (defined.has(name)) {
         throw new ChainOutputValidationError(`Duplicate chain output name '${name}'.`);
       }
       defined.add(name);
-      claimed.add(name);
     }
   }
-}
-
-export function validateChainOutputBindings(steps: ChainStep[]): void {
-  validateChainOutputBindingsWithContext(steps);
 }
 
 export function resolveOutputReferences(template: string, outputs: ChainOutputMap): string {

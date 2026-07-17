@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
   validateChainOutputBindings,
-  validateChainOutputBindingsWithContext,
   getChainOutputNames,
   resolveOutputReferences,
   outputEntryFromResult,
@@ -74,7 +73,7 @@ describe("validateChainOutputBindings", () => {
     const steps: ChainStep[] = [{ agent: "worker", task: "use {outputs.prior}", as: "next" }];
 
     expect(() =>
-      validateChainOutputBindingsWithContext(steps, {
+      validateChainOutputBindings(steps, {
         priorOutputNames: ["prior"],
         startStepIndex: 3,
       }),
@@ -97,7 +96,7 @@ describe("validateChainOutputBindings", () => {
 
   test("rejects an output name already reserved by an earlier batch", () => {
     expect(() =>
-      validateChainOutputBindingsWithContext([{ agent: "worker", task: "work", as: "prior" }], {
+      validateChainOutputBindings([{ agent: "worker", task: "work", as: "prior" }], {
         priorOutputNames: ["prior"],
       }),
     ).toThrow(/Duplicate.*prior/);

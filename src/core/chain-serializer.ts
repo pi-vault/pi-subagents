@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import {
   ChainOutputValidationError,
   type ChainOutputValidationContext,
-  validateChainOutputBindingsWithContext,
+  validateChainOutputBindings,
 } from "./chain-outputs.js";
 import { validateToolBudget } from "./tool-budget.js";
 import type { ChainConfig, ChainStep, ChainStepConfig, JsonSchemaObject } from "../shared/types.js";
@@ -150,7 +150,6 @@ function validateStringArrayOrFalse(
 function validateAcceptance(value: unknown, source: string, label: string): void {
   if (value === undefined) return;
   const acceptance = asRecord(value, source, label);
-  validateOptionalString(acceptance, "description", source, label);
   if (typeof acceptance.description !== "string") {
     definitionError(source, `${label}.description must be a string`);
   }
@@ -315,7 +314,7 @@ function normalizeDefinitions(
   });
 
   try {
-    validateChainOutputBindingsWithContext(steps as unknown as ChainStep[], context);
+    validateChainOutputBindings(steps as unknown as ChainStep[], context);
   } catch (error) {
     if (error instanceof ChainOutputValidationError) {
       definitionError(source, error.message);
