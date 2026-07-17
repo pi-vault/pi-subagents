@@ -3,6 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { executeChain } from "../src/core/chain-execution.js";
+import { AgentManager } from "../src/core/agent-manager.js";
+import {
+  countPendingChainAppendRequests,
+  enqueueChainAppendRequest,
+  resetAppendQueues,
+} from "../src/core/chain-append.js";
 import type {
   AgentDefinition,
   AgentRecord,
@@ -89,6 +95,85 @@ function makeMockDeps(stepResults: Array<{ result: string; status?: string }>) {
 }
 
 describe("executeChain — sequential", () => {
+  test("consumes a validated appended batch without revalidating the whole chain", async () => {
+    const manager = new AgentManager();
+    const runId = `append-${Date.now()}`;
+    const steps: ChainStep[] = [{ agent: "scout", as: "first" }];
+    manager.registerExternalRecord(runId, {
+      id: runId,
+      type: "(chain)",
+      description: "Chain: append",
+      status: "running",
+      toolUses: 0,
+      turnCount: 0,
+      live: { activeTools: [], responseText: "" },
+      startedAt: Date.now(),
+      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+      isBackground: true,
+      chainDefinition: [...steps],
+      acceptsChainAppends: true,
+    });
+    enqueueChainAppendRequest(
+      manager,
+      runId,
+      [{ agent: "planner", task: "use {outputs.first}" }],
+      makeAgentDef,
+    );
+    const deps = makeMockDeps([{ result: "one" }, { result: "two" }]);
+
+    const result = await executeChain({
+      steps,
+      task: "work",
+      spawnAndWait: deps.spawnAndWait,
+      findAgent: deps.findAgent,
+      cwd: "/tmp",
+      runId,
+      isAsync: true,
+    });
+
+    expect(result.content).toBe("two");
+    expect(deps.spawnAndWait).toHaveBeenCalledTimes(2);
+    resetAppendQueues();
+    manager.dispose();
+  });
+
+  test("closes append admission after the final consumption point", async () => {
+    const manager = new AgentManager();
+    const runId = `append-close-${Date.now()}`;
+    const steps: ChainStep[] = [{ agent: "scout" }];
+    const deps = makeMockDeps([{ result: "done" }]);
+    let checkedBoundary = false;
+
+    manager.fireAndForgetChain(
+      runId,
+      "work",
+      steps,
+      "/tmp",
+      (_signal, closeAppendAdmission) =>
+        executeChain({
+          steps,
+          task: "work",
+          spawnAndWait: deps.spawnAndWait,
+          findAgent: deps.findAgent,
+          cwd: "/tmp",
+          runId,
+          isAsync: true,
+          onAppendClose: () => {
+            closeAppendAdmission();
+            expect(() =>
+              enqueueChainAppendRequest(manager, runId, [{ agent: "planner" }], makeAgentDef),
+            ).toThrow();
+            checkedBoundary = true;
+          },
+        }),
+    );
+
+    await vi.waitFor(() => expect(manager.getRecord(runId)?.status).toBe("completed"));
+    expect(checkedBoundary).toBe(true);
+    expect(countPendingChainAppendRequests(runId)).toBe(0);
+    manager.dispose();
+  });
+
   test("normalizes and preflights every agent before creating the chain directory", async () => {
     const runId = `preflight-${Date.now()}`;
     const chainDir = join(tmpdir(), "pi-subagents-chain-runs", runId);

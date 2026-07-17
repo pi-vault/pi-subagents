@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { enqueueChainAppendRequest } from "../src/core/chain-append.js";
 import {
   executeSlashChain,
   parseSingleTaskToken,
@@ -13,7 +14,7 @@ import {
   SlashParseError,
   registerChainCommands,
 } from "../src/core/slash-chain.js";
-import { createAgent, createDeps, createDiscovery } from "./_test-helpers.js";
+import { completedRecord, createAgent, createDeps, createDiscovery } from "./_test-helpers.js";
 
 describe("stripExecutionFlags", () => {
   test("strips --bg flag and reports bg=true", () => {
@@ -93,6 +94,46 @@ describe("/run-chain definition materialization", () => {
 });
 
 describe("executeSlashChain validation", () => {
+  test("a background slash chain consumes an appended batch", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(987654321);
+    const manager = new AgentManager();
+    let release!: () => void;
+    const first = new Promise<{ id: string; record: ReturnType<typeof completedRecord> }>((resolve) => {
+      release = () => resolve({ id: "step-1", record: completedRecord("first") });
+    });
+    const spawn = vi.spyOn(manager, "spawnAndWait")
+      .mockImplementationOnce(() => first)
+      .mockResolvedValueOnce({ id: "step-2", record: completedRecord("second") });
+    const agent = createAgent();
+    const deps = createDeps({
+      discoverAgents: () => createDiscovery([agent]),
+      manager,
+    });
+    const chainId = `chain-${(987654321).toString(36)}`;
+
+    await executeSlashChain(
+      { sendMessage: vi.fn() } as unknown as ExtensionAPI,
+      { cwd: "/tmp" } as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout", as: "first" }],
+      "work",
+      true,
+      true,
+    );
+    enqueueChainAppendRequest(
+      manager,
+      chainId,
+      [{ agent: "Scout", task: "use {outputs.first}" }],
+      () => agent,
+    );
+
+    release();
+    await vi.waitFor(() => expect(manager.getRecord(chainId)?.status).toBe("completed"));
+    expect(spawn).toHaveBeenCalledTimes(2);
+    manager.dispose();
+    now.mockRestore();
+  });
+
   test("rejects an unknown Agent without spawning", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(123456789);
     const manager = new AgentManager();

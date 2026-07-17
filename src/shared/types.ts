@@ -262,6 +262,8 @@ export interface AgentRecord {
     status: WorkflowNodeStatus;
     error?: string;
   }>;
+  chainDefinition?: ChainStep[];
+  acceptsChainAppends?: boolean;
 }
 
 export interface RunOptions {

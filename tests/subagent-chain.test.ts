@@ -5,6 +5,7 @@ import { AgentManager } from "../src/core/agent-manager.js";
 import { registerSubagentTool } from "../src/core/subagent.js";
 import {
   CTX,
+  completedRecord,
   createAgent,
   createDeps,
   createDiscovery,
@@ -203,7 +204,22 @@ describe("chain mode dispatch", () => {
 
 describe("chain_append dispatch", () => {
   test("enqueues steps and returns success", async () => {
-    const deps = createDeps();
+    const manager = new AgentManager();
+    manager.registerExternalRecord("chain-abc", {
+      id: "chain-abc",
+      type: "(chain)",
+      description: "Chain: test",
+      status: "running",
+      toolUses: 0,
+      turnCount: 0,
+      live: { activeTools: [], responseText: "" },
+      startedAt: Date.now(),
+      lifetimeUsage: emptyUsage(),
+      isBackground: true,
+      chainDefinition: [{ agent: "Scout" }],
+      acceptsChainAppends: true,
+    });
+    const deps = createDeps({ manager });
     const result = await executeTool(deps, {
       task: "",
       chain_append: {
@@ -215,6 +231,42 @@ describe("chain_append dispatch", () => {
     expect(result.isError).toBe(false);
     expect(result.content[0]?.text).toContain("chain-abc");
     expect(result.details.status).toBe("success");
+    manager.dispose();
+  });
+
+  test("a background chain consumes an appended batch", async () => {
+    const manager = new AgentManager();
+    let release!: () => void;
+    const first = new Promise<{ id: string; record: ReturnType<typeof completedRecord> }>((resolve) => {
+      release = () => resolve({ id: "step-1", record: completedRecord("first") });
+    });
+    const spawn = vi.spyOn(manager, "spawnAndWait")
+      .mockImplementationOnce(() => first)
+      .mockResolvedValueOnce({ id: "step-2", record: completedRecord("second") });
+    const deps = createDeps({ manager });
+
+    const started = await executeTool(deps, {
+      task: "work",
+      chain: [{ agent: "Scout", as: "first" }],
+      run_in_background: true,
+    });
+    const chainId = started.content[0]?.text.match(/Chain ID: (\S+)/)?.[1];
+    expect(chainId).toBeTruthy();
+    if (!chainId) throw new Error("background chain ID missing");
+
+    const appended = await executeTool(deps, {
+      task: "",
+      chain_append: {
+        chain_id: chainId,
+        steps: [{ agent: "Scout", task: "use {outputs.first}" }],
+      },
+    });
+    expect(appended.isError).toBe(false);
+
+    release();
+    await vi.waitFor(() => expect(manager.getRecord(chainId)?.status).toBe("completed"));
+    expect(spawn).toHaveBeenCalledTimes(2);
+    manager.dispose();
   });
 });
 

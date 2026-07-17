@@ -55,6 +55,7 @@ export interface ChainExecutionParams {
   signal?: AbortSignal;
   onGraphUpdate?: (snapshot: WorkflowGraphSnapshot) => void;
   isAsync?: boolean;
+  onAppendClose?: () => void;
   getSpawnBudget?: () => number;
   globalConcurrencyLimit?: number;
 }
@@ -515,6 +516,7 @@ export async function executeChain(
     workflowGraph: finalSnapshot(),
   };
   } finally {
+    params.onAppendClose?.();
     if (ownedChainDir) removeChainDir(chainDir);
   }
 }

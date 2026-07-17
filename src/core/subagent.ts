@@ -10,7 +10,6 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
-  ChainStep,
   ResolvedToolBudget,
   SubagentExecutionDetails,
   SubagentToolInput,
@@ -370,13 +369,18 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             deps.manager.fireAndForgetChain(
               chainRunId,
               params.task ?? "",
-              executeChain({
+              chainSteps,
+              effectiveCwd,
+              (chainSignal, closeAppendAdmission) => executeChain({
                 steps: chainSteps,
                 task: params.task ?? "",
                 spawnAndWait,
                 findAgent,
                 cwd: effectiveCwd,
                 runId: chainRunId,
+                signal: chainSignal,
+                isAsync: true,
+                onAppendClose: closeAppendAdmission,
                 onGraphUpdate: (snapshot) => {
                   deps.chainWidget?.update(snapshot);
                   const record = deps.manager.getRecord(chainRunId);
@@ -388,7 +392,6 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                 },
                 getSpawnBudget: () => deps.manager.getSpawnBudget(),
               }),
-              effectiveCwd,
               () => deps.chainWidget?.clear(),
             );
             return {
@@ -443,22 +446,41 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       // --- Chain append dispatch ---
       if (params.chain_append) {
         const { enqueueChainAppendRequest } = await import("./chain-append.js");
-        enqueueChainAppendRequest(
-          params.chain_append.chain_id,
-          params.chain_append.steps as ChainStep[],
-        );
-        return {
-          content: [
-            { type: "text", text: `Steps appended to chain ${params.chain_append.chain_id}.` },
-          ],
-          isError: false,
-          details: stubDetails({
-            status: "success",
-            agent: "(chain-append)",
-            task: `append to ${params.chain_append.chain_id}`,
-            stopReason: "completed",
-          }),
-        };
+        try {
+          enqueueChainAppendRequest(
+            deps.manager,
+            params.chain_append.chain_id,
+            params.chain_append.steps,
+            (name) => {
+              const agent = findAgentByName(discovery, name);
+              if (!agent) throw new Error(`Unknown agent: "${name}"`);
+              return agent;
+            },
+          );
+          return {
+            content: [
+              { type: "text", text: `Steps appended to chain ${params.chain_append.chain_id}.` },
+            ],
+            isError: false,
+            details: stubDetails({
+              status: "success",
+              agent: "(chain-append)",
+              task: `append to ${params.chain_append.chain_id}`,
+              stopReason: "completed",
+            }),
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return {
+            content: [{ type: "text", text: message }],
+            isError: true,
+            details: stubDetails({
+              agent: "(chain-append)",
+              task: `append to ${params.chain_append.chain_id}`,
+              stderr: message,
+            }),
+          };
+        }
       }
 
       // --- Guard: agent required for single mode ---
