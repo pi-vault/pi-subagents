@@ -2,7 +2,7 @@
 
 ## Goal
 
-Upgrade to Pi 0.80.6 and make each `AgentRecord` the single source of live Agent activity for initial runs and resumed runs, using Pi's settled/idle lifecycle while preserving existing commands, notifications, TUI wording, and timing behavior.
+With Pi 0.80.10 already installed, make each `AgentRecord` the single source of live Agent activity for initial runs and resumed runs, using Pi's settled/idle lifecycle while preserving existing commands, notifications, TUI wording, and timing behavior.
 
 ## Current Problem
 
@@ -14,11 +14,11 @@ This split creates three problems:
 - adapters contain fallbacks between the map and `AgentRecord`;
 - resumed Agents bypass the activity map and can display stale or incomplete live state.
 
-Pi 0.80.6 also distinguishes `agent_end` from `agent_settled`. An Agent may emit multiple `agent_end` events while retrying or processing queued follow-ups; `agent_settled` is the single terminal event and observes an idle session.
+Pi 0.80.10 distinguishes `agent_end` from `agent_settled`. An Agent may emit multiple `agent_end` events while retrying or processing queued follow-ups; `agent_settled` is the single terminal event and observes an idle session.
 
 ## Scope
 
-This phase upgrades `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` together from 0.80.3 to `^0.80.6`, refreshes `pnpm-lock.yaml`, consolidates live state for normal spawns, queued Agents when they start, resumed Agents, and externally registered Chain records, and removes the TUI activity map and tracker.
+The repository already declares and resolves `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` at 0.80.10. This phase consolidates live state for normal spawns, queued Agents when they start, resumed Agents, and externally registered Chain records, and removes the TUI activity map and tracker.
 
 This phase does not change command names, tool wire shapes, notification payloads, persistence formats, Agent scheduling, turn-limit policy, or TUI copy.
 
@@ -61,7 +61,7 @@ export interface AgentRecord {
 
 The resume runner gains text-delta, turn-end, and settled callbacks so `AgentManager.resume()` can maintain the same record invariant as initial execution. Neither runner treats `agent_end` as terminal because Pi may retry or continue with a queued follow-up.
 
-## Pi 0.80.6 Alignment
+## Pi 0.80.10 Alignment
 
 Pi's lifecycle contract makes `agent_settled` the correct cleanup boundary: it fires once after retries, automatic compaction, and follow-up continuations, with `isIdle` already true. `AgentSession.prompt()` resolves after that event, so no second idle wait is needed.
 
@@ -104,22 +104,21 @@ Manager tests cover:
 
 Adapter tests construct records only and prove foreground working messages, widget rows, fleet rows, and viewer activity read the record without a map. Format tests retain the current activity wording using arrays.
 
-All direct `AgentRecord` fixtures receive the required `live` field. Typecheck is the backstop for missed constructors. The dependency-only commit runs the current suite against Pi 0.80.6. Later commits run focused tests first, followed by typecheck, touched-file lint, and the full suite. In environments with signed Git commits configured, the full suite disables `commit.gpgsign` for its temporary repositories.
+All direct `AgentRecord` fixtures receive the required `live` field. Typecheck is the backstop for missed constructors. The existing Pi 0.80.10 baseline passes 56 test files and 1,092 tests. Each implementation commit runs focused tests first, followed by typecheck, touched-file lint, and the full suite. In environments with signed Git commits configured, the full suite disables `commit.gpgsign` for its temporary repositories.
 
 ## Implementation Shape
 
-Use three independently green commits:
+Use two independently green commits:
 
-1. `chore: upgrade pi packages to 0.80.6` — update the three lockstep Pi package ranges and lockfile, then prove the existing suite remains green.
-2. `refactor: add agent live record` — add the required state, manager ownership, settled/idle integration, resume callbacks, core tests, and the mechanical `live` field in every direct record fixture. Keep the old activity callbacks working during this commit so the existing adapters remain green.
-3. `refactor: migrate tui activity state` — migrate adapters and runtime wiring, remove the old callbacks, update adapter expectations, and delete the mirror.
+1. `refactor: add agent live record` — add the required state, manager ownership, settled/idle integration, resume callbacks, core tests, and the mechanical `live` field in every direct record fixture. Keep the old activity callbacks working during this commit so the existing adapters remain green.
+2. `refactor: migrate tui activity state` — migrate adapters and runtime wiring, remove the old callbacks, update adapter expectations, and delete the mirror.
 
-The existing phase-4 implementation plan must be rewritten before implementation because its file list omits current runtime wiring, formatter changes, resume support, deleted tests, and required record fixtures.
+The phase-4 implementation plan must be rebased onto the already-upgraded dependency state before implementation.
 
 ## Success Criteria
 
 - No `AgentActivity`, `createActivityTracker`, or `agentActivity` map remains.
-- The three Pi packages resolve to 0.80.6 and the code uses `agent_settled` and `session.isIdle`.
+- The three Pi packages remain at 0.80.10 and the code uses `agent_settled` and `session.isIdle`.
 - Every `AgentRecord` has required `live` state.
 - Initial and resumed runs update the same record-owned fields.
 - Retry and follow-up activity remains live until the single settled boundary.
