@@ -16,8 +16,6 @@ import type { TUI } from "@earendil-works/pi-tui";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../core/agent-manager.js";
 import type { AgentRecord } from "../shared/types.js";
-import type { AgentActivity } from "./activity.js";
-import { getLifetimeTotal } from "./activity.js";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT, type ViewerKeybindings } from "./conversation-viewer.js";
 import type { Theme } from "./agent-widget.js";
 
@@ -105,10 +103,7 @@ export class FleetList {
   private viewerClose: (() => void) | undefined;
   private viewingAgentId: string | undefined;
 
-  constructor(
-    private manager: AgentManager,
-    private agentActivity: Map<string, AgentActivity>,
-  ) {}
+  constructor(private manager: AgentManager) {}
 
   // ---- Lifecycle ----
 
@@ -310,7 +305,6 @@ export class FleetList {
       return;
     }
     const session = record.session as AgentSession;
-    const activity = this.agentActivity.get(record.id);
     this.viewingAgentId = record.id;
 
     void this.ui
@@ -321,7 +315,6 @@ export class FleetList {
             tui as TUI,
             session,
             record,
-            activity,
             theme,
             done,
             () => {
@@ -408,12 +401,10 @@ export class FleetList {
     theme: Theme,
   ): string {
     const left = `  ${this.bullet(rosterIndex, sel, theme)} ${theme.fg("muted", record.type)}  ${record.description}`;
-    const activityUsage = this.agentActivity.get(record.id)?.lifetimeUsage;
-    const tokens = activityUsage
-      ? getLifetimeTotal(activityUsage)
-      : record.lifetimeUsage.inputTokens +
-        record.lifetimeUsage.outputTokens +
-        record.lifetimeUsage.cacheWriteTokens;
+    const tokens =
+      record.lifetimeUsage.inputTokens +
+      record.lifetimeUsage.outputTokens +
+      record.lifetimeUsage.cacheWriteTokens;
     const elapsedMs = (record.completedAt ?? Date.now()) - record.startedAt; // freezes once finished
     const right = theme.fg("dim", `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}`);
     return rightAlign(left, right, width);

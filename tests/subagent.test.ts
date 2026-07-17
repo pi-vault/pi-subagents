@@ -18,7 +18,6 @@ import {
   createAgent,
   createDeps,
   createDiscovery,
-  emptyUsage,
 } from "./_test-helpers.js";
 
 type ToolDef = Parameters<ExtensionAPI["registerTool"]>[0];
@@ -400,11 +399,17 @@ describe("background spawn activity wiring", () => {
     );
   }
 
-  test("stores activity state in agentActivity when spawning background agent", async () => {
-    const agentActivity = new Map();
-    const deps = makeSpawnDeps({ agentActivity });
+  test("updates the widget from background record activity", async () => {
+    const update = vi.fn();
+    const deps = makeSpawnDeps({ widget: { update } as unknown as RuntimeDeps["widget"] });
     await spawnBackground(deps);
-    expect(agentActivity.size).toBe(1);
+
+    const options = vi.mocked(deps.manager.spawn).mock.calls[0]?.[2];
+    expect(options?.onActivity).toBeTypeOf("function");
+    const record = deps.manager.getRecord("agent-bg-act");
+    if (!record) throw new Error("background record missing");
+    options?.onActivity?.(record);
+    expect(update).toHaveBeenCalledOnce();
   });
 
   test("calls ensureTimers when spawning background agent", async () => {
@@ -412,6 +417,38 @@ describe("background spawn activity wiring", () => {
     const deps = makeSpawnDeps({ ensureTimers });
     await spawnBackground(deps);
     expect(ensureTimers).toHaveBeenCalled();
+  });
+});
+
+describe("foreground spawn activity wiring", () => {
+  test("sets the working message from record activity", async () => {
+    const manager = new AgentManager();
+    const record = completedRecord("done");
+    vi.spyOn(manager, "spawnAndWait").mockImplementation(async (_ctx, _agent, options) => {
+      options.onActivity?.({
+        ...record,
+        status: "running",
+        live: { activeTools: ["read"], responseText: "" },
+      });
+      return { id: record.id, record };
+    });
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(
+      pi,
+      createDeps({ manager, discoverAgents: () => createDiscovery([createAgent()]) }),
+    );
+    const setWorkingMessage = vi.fn();
+
+    await registeredTool().execute(
+      "tool-call-fg-activity",
+      { agent: "Scout", task: "explore" },
+      undefined,
+      undefined,
+      { cwd: "/repo", ui: { setWorkingMessage } } as unknown as ExtensionContext,
+    );
+
+    expect(setWorkingMessage).toHaveBeenCalledWith("Scout: reading…");
+    expect(setWorkingMessage).toHaveBeenLastCalledWith();
   });
 });
 

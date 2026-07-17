@@ -309,10 +309,6 @@ export interface SpawnOptions {
   allowedAgents?: string[];
   isolation?: string;
   model?: unknown;
-  onToolActivity?: (activity: ToolActivity) => void;
-  onTextDelta?: (delta: string, fullText: string) => void;
-  onTurnEnd?: (turnCount: number) => void;
-  onUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
   onSessionCreated?: (session: unknown) => void;
   onActivity?: (record: AgentRecord) => void;
   toolBudget?: ResolvedToolBudget;

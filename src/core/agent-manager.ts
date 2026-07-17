@@ -325,19 +325,16 @@ export class AgentManager {
             if (index !== -1) record.live.activeTools.splice(index, 1);
             record.toolUses++;
           }
-          options.onToolActivity?.(activity);
           notifyActivity(record, options.onActivity);
         },
         onTurnEnd: (count: number) => {
           record.turnCount = count;
-          options.onTurnEnd?.(count);
           notifyActivity(record, options.onActivity);
         },
         onUsage: (usage) => {
           record.lifetimeUsage.inputTokens += usage.input;
           record.lifetimeUsage.outputTokens += usage.output;
           record.lifetimeUsage.cacheWriteTokens += usage.cacheWrite;
-          options.onUsage?.(usage);
           notifyActivity(record, options.onActivity);
         },
         onSessionCreated: (session) => {
@@ -351,9 +348,8 @@ export class AgentManager {
             record.pendingSteers = [];
           }
         },
-        onTextDelta: (delta, fullText) => {
+        onTextDelta: (_delta, fullText) => {
           record.live.responseText = fullText;
-          options.onTextDelta?.(delta, fullText);
           notifyActivity(record, options.onActivity);
         },
         onSettled: () => {

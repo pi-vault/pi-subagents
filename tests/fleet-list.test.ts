@@ -7,6 +7,7 @@ import type { Theme } from "../src/tui/agent-widget.js";
 const DOWN = "\x1b[B";
 const UP_ARROW = "\x1b[A";
 const ESC = "\x1b";
+const ENTER = "\r";
 /** Kitty key-release event for 'A' (codepoint 65, event type 3). */
 const KEY_RELEASE = "\x1b[65:3u";
 
@@ -83,7 +84,7 @@ describe("formatFleetTokens", () => {
 
 describe("FleetList handleKey", () => {
   it("returns undefined when no agents", () => {
-    const fleet = new FleetList(makeMockManager([]), new Map());
+    const fleet = new FleetList(makeMockManager([]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     expect(fleet.handleKey(DOWN)).toBeUndefined();
@@ -92,7 +93,7 @@ describe("FleetList handleKey", () => {
 
   it("returns undefined when editor has text (even with agents)", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx("some text");
     fleet.setUICtx(ui);
     expect(fleet.handleKey(DOWN)).toBeUndefined();
@@ -101,7 +102,7 @@ describe("FleetList handleKey", () => {
 
   it("down arrow at empty editor with agents activates list and returns {consume:true}", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     const result = fleet.handleKey(DOWN);
@@ -111,7 +112,7 @@ describe("FleetList handleKey", () => {
 
   it("up arrow when inactive returns undefined", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     expect(fleet.handleKey(UP_ARROW)).toBeUndefined();
@@ -120,7 +121,7 @@ describe("FleetList handleKey", () => {
 
   it("non-activator key when inactive returns undefined", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     expect(fleet.handleKey("x")).toBeUndefined();
@@ -129,7 +130,7 @@ describe("FleetList handleKey", () => {
 
   it("down arrow when active navigates and returns {consume:true}", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     fleet.handleKey(DOWN); // activate (selectedIndex=0)
@@ -140,7 +141,7 @@ describe("FleetList handleKey", () => {
 
   it("escape when active deactivates and returns {consume:true}", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     fleet.handleKey(DOWN); // activate
@@ -153,7 +154,7 @@ describe("FleetList handleKey", () => {
 
   it("key-release event returns undefined (filtered out)", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     fleet.handleKey(DOWN); // activate
@@ -163,7 +164,7 @@ describe("FleetList handleKey", () => {
 
   it("update() calls without throwing after agent finishes", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     expect(() => fleet.update()).not.toThrow();
@@ -172,7 +173,7 @@ describe("FleetList handleKey", () => {
 
   it("setEnabled(false) deactivates the list", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     fleet.handleKey(DOWN); // activate
@@ -183,7 +184,7 @@ describe("FleetList handleKey", () => {
   });
 
   it("dispose() runs without throwing", () => {
-    const fleet = new FleetList(makeMockManager([]), new Map());
+    const fleet = new FleetList(makeMockManager([]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     expect(() => fleet.dispose()).not.toThrow();
@@ -195,7 +196,7 @@ describe("FleetList handleKey", () => {
 describe("FleetList rendering", () => {
   it("update() with a running agent calls setWidget with key 'fleet'", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     fleet.update();
@@ -209,7 +210,7 @@ describe("FleetList rendering", () => {
 
   it("rendered output includes 'main' and agent type row", () => {
     const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]), new Map());
+    const fleet = new FleetList(makeMockManager([record]));
     const ui = makeUICtx();
     fleet.setUICtx(ui);
     fleet.update();
@@ -228,6 +229,46 @@ describe("FleetList rendering", () => {
 
     expect(lines.some((l) => l.includes("main"))).toBe(true);
     expect(lines.some((l) => l.includes("coder"))).toBe(true);
+    expect(lines.some((l) => l.includes("↓ 150 tokens"))).toBe(true);
+    fleet.dispose();
+  });
+
+  it("passes the live record to the conversation viewer", () => {
+    const session = makeRecord().session as NonNullable<AgentRecord["session"]>;
+    Object.assign(session, {
+      messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+      subscribe: vi.fn(() => () => {}),
+    });
+    const record = makeRecord({
+      session,
+      toolUses: 2,
+      live: { activeTools: ["read", "read"], responseText: "" },
+    });
+    const fleet = new FleetList(makeMockManager([record]));
+    const ui = makeUICtx();
+    ui.custom.mockReturnValue(Promise.resolve(undefined));
+    fleet.setUICtx(ui);
+    fleet.handleKey(DOWN);
+    fleet.handleKey(DOWN);
+    fleet.handleKey(ENTER);
+
+    const factory = ui.custom.mock.calls[0]?.[0] as unknown as (
+      tui: unknown,
+      theme: Theme,
+      keybindings: unknown,
+      done: (result: undefined) => void,
+    ) => { render(width: number): string[] };
+    const viewer = factory(
+      { terminal: { rows: 40, columns: 80 }, requestRender: vi.fn() },
+      makeTheme(),
+      undefined,
+      vi.fn(),
+    );
+    const output = viewer.render(80).join("\n");
+
+    expect(output).toContain("2 tools");
+    expect(output).toContain("150 token");
+    expect(output).toContain("reading 2 files…");
     fleet.dispose();
   });
 });

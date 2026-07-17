@@ -38,40 +38,35 @@ describe("formatTurns", () => {
 
 describe("describeActivity", () => {
   it("returns thinking when no tools active", () => {
-    expect(describeActivity(new Map())).toBe("thinking…");
+    expect(describeActivity([])).toBe("thinking…");
   });
   it("shows tool action", () => {
-    const tools = new Map([["read_1", "read"]]);
-    expect(describeActivity(tools)).toBe("reading…");
+    expect(describeActivity(["read"])).toBe("reading…");
   });
   it("groups multiple same-tool", () => {
-    const tools = new Map([
-      ["read_1", "read"],
-      ["read_2", "read"],
-    ]);
-    expect(describeActivity(tools)).toBe("reading 2 files…");
+    expect(describeActivity(["read", "read"])).toBe("reading 2 files…");
   });
   it("joins different tools", () => {
-    const tools = new Map([
-      ["read_1", "read"],
-      ["edit_1", "edit"],
-    ]);
-    expect(describeActivity(tools)).toBe("reading, editing…");
+    expect(describeActivity(["read", "edit"])).toBe("reading, editing…");
+  });
+  it("preserves first-seen action order while grouping duplicates", () => {
+    expect(describeActivity(["edit", "read", "edit", "grep"])).toBe(
+      "editing 2 files, reading, searching…",
+    );
   });
   it("falls back to response text when no tools active", () => {
-    expect(describeActivity(new Map(), "I will search the code")).toBe(
+    expect(describeActivity([], "I will search the code")).toBe(
       "I will search the code",
     );
   });
   it("truncates long response text to 60 chars", () => {
     const long = "a".repeat(100);
-    expect(describeActivity(new Map(), long).length).toBeLessThanOrEqual(63); // 60 + "..."
+    expect(describeActivity([], long).length).toBeLessThanOrEqual(63); // 60 + "..."
   });
   it("falls back to thinking when response text is empty", () => {
-    expect(describeActivity(new Map(), "")).toBe("thinking…");
+    expect(describeActivity([], "")).toBe("thinking…");
   });
   it("unknown tool name falls back to raw name", () => {
-    const tools = new Map([["custom_1", "my_custom_tool"]]);
-    expect(describeActivity(tools)).toBe("my_custom_tool…");
+    expect(describeActivity(["my_custom_tool"])).toBe("my_custom_tool…");
   });
 });

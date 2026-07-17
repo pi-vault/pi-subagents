@@ -17,8 +17,6 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { AgentRecord } from "../shared/types.js";
-import type { AgentActivity } from "./activity.js";
-import { getLifetimeTotal } from "./activity.js";
 import type { Theme } from "./agent-widget.js";
 import { describeActivity, formatMs, formatTokens } from "./format.js";
 /** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
@@ -74,7 +72,6 @@ export class ConversationViewer implements Component {
     private tui: TUI,
     private session: AgentSession,
     private record: AgentRecord,
-    private activity: AgentActivity | undefined,
     private theme: Theme,
     private done: (result: undefined) => void,
     /** Abort the agent shown here. Omitted → no stop affordance (e.g. read-only history). */
@@ -190,9 +187,12 @@ export class ConversationViewer implements Component {
     const duration = this.record.completedAt ? formatMs(this.record.completedAt - this.record.startedAt) : `${formatMs(Date.now() - this.record.startedAt)} (running)`;
 
     const headerParts: string[] = [duration];
-    const toolUses = this.activity?.toolUses ?? this.record.toolUses;
+    const toolUses = this.record.toolUses;
     if (toolUses > 0) headerParts.unshift(`${toolUses} tool${toolUses === 1 ? "" : "s"}`);
-    const tokens = getLifetimeTotal(this.activity?.lifetimeUsage);
+    const tokens =
+      this.record.lifetimeUsage.inputTokens +
+      this.record.lifetimeUsage.outputTokens +
+      this.record.lifetimeUsage.cacheWriteTokens;
     if (tokens > 0) headerParts.push(formatTokens(tokens));
 
     lines.push(
@@ -395,8 +395,8 @@ export class ConversationViewer implements Component {
     }
 
     // Streaming indicator for running agents
-    if (this.record.status === "running" && this.activity) {
-      const act = describeActivity(this.activity.activeTools, this.activity.responseText);
+    if (this.record.status === "running") {
+      const act = describeActivity(this.record.live.activeTools, this.record.live.responseText);
       lines.push("");
       lines.push(truncateToWidth(th.fg("accent", "▍ ") + th.fg("dim", act), width));
     }

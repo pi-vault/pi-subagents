@@ -15,7 +15,6 @@ import type {
   SubagentExecutionDetails,
   SubagentToolInput,
 } from "../shared/types.js";
-import { createActivityTracker } from "../tui/activity.js";
 import { describeActivity } from "../tui/format.js";
 import { renderSubagentCall, renderSubagentResult } from "../tui/render.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
@@ -643,17 +642,11 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
 
         // Background spawn path
         if (params.run_in_background) {
-          // Create activity tracker for live widget/fleet updates
-          const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(
-            resolved.maxTurns,
-            () => deps.widget?.update(),
-          );
-
           const id = deps.manager.spawn(ctx, agentDef, {
             ...spawnOptions,
             isBackground: true,
             isolation: params.isolation as "worktree" | undefined,
-            ...bgCallbacks,
+            onActivity: () => deps.widget?.update(),
             onSessionCreated: (session) => {
               try {
                 const sessionPath = createOutputFilePath(effectiveCwd, id, `bg-${Date.now()}`);
@@ -675,8 +668,6 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             },
           });
 
-          // Store in shared activity map and start timers
-          deps.agentActivity?.set(id, bgState);
           deps.ensureTimers?.();
 
           // Register in batch tracker for smart group detection
@@ -705,19 +696,14 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
         }
 
         // Synchronous foreground path (with optional isolation)
-        const { state: fgState, callbacks: fgCallbacks } = createActivityTracker(
-          resolved.maxTurns,
-          () => {
-            ctx.ui?.setWorkingMessage?.(
-              `${agentDef.name}: ${describeActivity(fgState.activeTools, fgState.responseText)}`,
-            );
-          },
-        );
-
         const { id, record } = await deps.manager.spawnAndWait(ctx, agentDef, {
           ...spawnOptions,
           isolation: params.isolation as "worktree" | undefined,
-          ...fgCallbacks,
+          onActivity: (record) => {
+            ctx.ui?.setWorkingMessage?.(
+              `${agentDef.name}: ${describeActivity(record.live.activeTools, record.live.responseText)}`,
+            );
+          },
         });
 
         ctx.ui?.setWorkingMessage?.();

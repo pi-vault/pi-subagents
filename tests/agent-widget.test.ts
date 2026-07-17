@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentActivity } from "../src/tui/activity.js";
 import {
   AgentWidget,
   ERROR_STATUSES,
@@ -86,7 +85,7 @@ describe("renderFinishedLine", () => {
   };
 
   it("completed: contains ✓, description, and formatted duration", () => {
-    const line = renderFinishedLine({ ...BASE, status: "completed" }, undefined, makeMockTheme());
+    const line = renderFinishedLine({ ...BASE, status: "completed" }, makeMockTheme());
     expect(line).toContain("✓");
     expect(line).toContain("scan repo");
     expect(line).toContain("5.0s");
@@ -95,7 +94,6 @@ describe("renderFinishedLine", () => {
   it("error: contains ✗ and error message", () => {
     const line = renderFinishedLine(
       { ...BASE, status: "error", error: "connection refused" },
-      undefined,
       makeMockTheme(),
     );
     expect(line).toContain("✗");
@@ -103,39 +101,40 @@ describe("renderFinishedLine", () => {
   });
 
   it("steered: contains ✓ and (turn limit)", () => {
-    const line = renderFinishedLine({ ...BASE, status: "steered" }, undefined, makeMockTheme());
+    const line = renderFinishedLine({ ...BASE, status: "steered" }, makeMockTheme());
     expect(line).toContain("✓");
     expect(line).toContain("(turn limit)");
   });
 
   it("stopped: contains ■", () => {
-    const line = renderFinishedLine({ ...BASE, status: "stopped" }, undefined, makeMockTheme());
+    const line = renderFinishedLine({ ...BASE, status: "stopped" }, makeMockTheme());
     expect(line).toContain("■");
   });
 
   it("aborted: contains ✗ and aborted", () => {
-    const line = renderFinishedLine({ ...BASE, status: "aborted" }, undefined, makeMockTheme());
+    const line = renderFinishedLine({ ...BASE, status: "aborted" }, makeMockTheme());
     expect(line).toContain("✗");
     expect(line).toContain("aborted");
   });
 
-  it("includes turn count from activity when provided", () => {
-    const activity: AgentActivity = {
-      activeTools: new Map(),
-      toolUses: 0,
-      responseText: "",
-      turnCount: 5,
-      maxTurns: 30,
-      lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
-    };
-    const line = renderFinishedLine({ ...BASE, status: "completed" }, activity, makeMockTheme());
-    expect(line).toContain("↻5≤30");
+  it("does not include retained turn or live state", () => {
+    const line = renderFinishedLine(
+      makeRecord({
+        status: "completed",
+        completedAt: Date.now(),
+        turnCount: 5,
+        live: { activeTools: ["read"], responseText: "draft response" },
+      }),
+      makeMockTheme(),
+    );
+    expect(line).not.toContain("↻");
+    expect(line).not.toContain("reading");
+    expect(line).not.toContain("draft response");
   });
 
   it("includes tool use count in stats", () => {
     const line = renderFinishedLine(
       { ...BASE, status: "completed", toolUses: 3 },
-      undefined,
       makeMockTheme(),
     );
     expect(line).toContain("3 tool uses");
@@ -144,7 +143,6 @@ describe("renderFinishedLine", () => {
   it("shows singular tool use when count is 1", () => {
     const line = renderFinishedLine(
       { ...BASE, status: "completed", toolUses: 1 },
-      undefined,
       makeMockTheme(),
     );
     expect(line).toContain("1 tool use");
@@ -154,7 +152,6 @@ describe("renderFinishedLine", () => {
   it("uses completedAt for duration when available", () => {
     const line = renderFinishedLine(
       { ...BASE, status: "completed", startedAt: 0, completedAt: 10_000 },
-      undefined,
       makeMockTheme(),
     );
     expect(line).toContain("10.0s");
@@ -163,7 +160,6 @@ describe("renderFinishedLine", () => {
   it("shows agent type as display name", () => {
     const line = renderFinishedLine(
       { ...BASE, type: "my-custom-agent", status: "completed" },
-      undefined,
       makeMockTheme(),
     );
     expect(line).toContain("my-custom-agent");
@@ -177,7 +173,7 @@ describe("AgentWidget.markFinished", () => {
     const agent = makeRecord({ id: "fin", status: "completed", completedAt: Date.now() - 1000 });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
 
     widget.markFinished("fin");
@@ -196,7 +192,7 @@ describe("AgentWidget.setUICtx", () => {
     const agent = makeRecord({ status: "running" });
     const manager = makeMockManager([agent]);
     const ctx1 = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
 
     widget.setUICtx(ctx1);
     widget.update(); // registers on ctx1
@@ -215,7 +211,7 @@ describe("AgentWidget.setUICtx", () => {
     const agent = makeRecord({ status: "running" });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
 
     widget.setUICtx(ctx);
     widget.update(); // registers once
@@ -231,7 +227,7 @@ describe("AgentWidget.onTurnStart", () => {
     const agent = makeRecord({ id: "fin", status: "completed", completedAt: Date.now() - 1000 });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.markFinished("fin");
     widget.update(); // visible: age=0
@@ -244,7 +240,7 @@ describe("AgentWidget.onTurnStart", () => {
     const agent = makeRecord({ id: "err", status: "error", completedAt: Date.now() - 1000 });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.markFinished("err");
     widget.update(); // registers widget
@@ -260,7 +256,7 @@ describe("AgentWidget.onTurnStart", () => {
     const agent = makeRecord({ id: "err", status: "error", completedAt: Date.now() - 1000 });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.markFinished("err");
     widget.update();
@@ -276,7 +272,7 @@ describe("AgentWidget widget modes", () => {
     const agent = makeRecord({ status: "running" });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map(), () => "off");
+    const widget = new AgentWidget(manager, () => "off");
     widget.setUICtx(ctx);
     widget.update();
 
@@ -290,7 +286,7 @@ describe("AgentWidget widget modes", () => {
     const bg = makeRecord({ id: "bg", status: "running", isBackground: true });
     const manager = makeMockManager([fg, bg]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map(), () => "background");
+    const widget = new AgentWidget(manager, () => "background");
     widget.setUICtx(ctx);
     widget.update();
 
@@ -302,7 +298,7 @@ describe("AgentWidget widget modes", () => {
     const unknown_ = makeRecord({ id: "u", status: "running", isBackground: undefined });
     const manager = makeMockManager([unknown_]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map(), () => "background");
+    const widget = new AgentWidget(manager, () => "background");
     widget.setUICtx(ctx);
     widget.update();
 
@@ -314,7 +310,7 @@ describe("AgentWidget widget modes", () => {
     const bg = makeRecord({ id: "bg", status: "running", isBackground: true });
     const manager = makeMockManager([fg, bg]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map(), () => "all");
+    const widget = new AgentWidget(manager, () => "all");
     widget.setUICtx(ctx);
     widget.update();
 
@@ -327,7 +323,7 @@ describe("AgentWidget.update", () => {
     let agents = [makeRecord({ status: "running" })];
     const manager = { listAgents: () => agents } as unknown as AgentManager;
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update(); // registers widget
 
@@ -340,7 +336,7 @@ describe("AgentWidget.update", () => {
   it("only calls setStatus() when text changes", () => {
     const manager = makeMockManager([makeRecord({ status: "running" })]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
 
     widget.update();
@@ -354,7 +350,7 @@ describe("AgentWidget.update", () => {
     let agents: AgentRecord[] = [makeRecord({ status: "running" })];
     const manager = { listAgents: () => agents } as unknown as AgentManager;
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update(); // sets status to "1 running agent"
 
@@ -368,7 +364,7 @@ describe("AgentWidget.update", () => {
     const agent = makeRecord({ id: "fin", status: "completed", completedAt: Date.now() - 1000 });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.markFinished("fin");
     widget.setUICtx(ctx);
     widget.update();
@@ -384,7 +380,7 @@ describe("AgentWidget.update", () => {
       makeRecord({ id: "a2", status: "running" }),
     ]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 
@@ -397,7 +393,7 @@ describe("AgentWidget.update", () => {
       makeRecord({ id: "q1", status: "queued" }),
     ]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 
@@ -410,7 +406,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     const agent = makeRecord({ status: "running" });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 
@@ -423,7 +419,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     const agent = makeRecord({ status: "running" });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 
@@ -435,7 +431,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     const agent = makeRecord({ id: "fin", status: "completed", completedAt: Date.now() - 1000 });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.markFinished("fin");
     widget.setUICtx(ctx);
     widget.update();
@@ -448,7 +444,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     const agent = makeRecord({ type: "researcher", status: "running" });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 
@@ -460,7 +456,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     const agent = makeRecord({ description: "find all bugs", status: "running" });
     const manager = makeMockManager([agent]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 
@@ -468,10 +464,31 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     expect(lines.some((l) => l.includes("find all bugs"))).toBe(true);
   });
 
+  it("reads running stats and activity from the record", () => {
+    const agent = makeRecord({
+      status: "running",
+      toolUses: 2,
+      turnCount: 0,
+      live: { activeTools: ["read", "read"], responseText: "" },
+      lifetimeUsage: { inputTokens: 4, outputTokens: 5, cacheWriteTokens: 1 },
+    });
+    const manager = makeMockManager([agent]);
+    const ctx = makeMockUICtx();
+    const widget = new AgentWidget(manager);
+    widget.setUICtx(ctx);
+    widget.update();
+
+    const output = captureRender(ctx, makeMockTheme()).join("\n");
+    expect(output).toContain("↻1");
+    expect(output).toContain("2 tool uses");
+    expect(output).toContain("10 token");
+    expect(output).toContain("reading 2 files…");
+  });
+
   it("returns empty array when no agents", () => {
     const manager = makeMockManager([]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     // update() won't register a widget when empty, so factory won't exist
     widget.update();
@@ -482,7 +499,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
   it("shows queued count line", () => {
     const manager = makeMockManager([makeRecord({ id: "q1", status: "queued" })]);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 
@@ -497,7 +514,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     );
     const manager = makeMockManager(agents);
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager, new Map());
+    const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 

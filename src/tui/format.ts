@@ -41,12 +41,12 @@ function truncateLine(text: string, len = 60): string {
 
 /** Build a human-readable activity string from currently-running tools or response text. */
 export function describeActivity(
-  activeTools: Map<string, string>,
+  activeTools: readonly string[],
   responseText?: string,
 ): string {
-  if (activeTools.size > 0) {
+  if (activeTools.length > 0) {
     const groups = new Map<string, number>();
-    for (const toolName of activeTools.values()) {
+    for (const toolName of activeTools) {
       const action = TOOL_DISPLAY[toolName] ?? toolName;
       groups.set(action, (groups.get(action) ?? 0) + 1);
     }

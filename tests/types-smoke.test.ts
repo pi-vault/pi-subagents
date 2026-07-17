@@ -85,4 +85,24 @@ describe("Task 5.1: description fields and WidgetMode", () => {
     expect(withDesc.description).toBe("a label");
     expect(withoutDesc.description).toBeUndefined();
   });
+
+  it("SpawnOptions exposes only the record and session callbacks", () => {
+    type CallbackKeys = Extract<keyof SpawnOptions, `on${string}`>;
+    type HasExactCallbacks = [CallbackKeys] extends ["onActivity" | "onSessionCreated"]
+      ? ["onActivity" | "onSessionCreated"] extends [CallbackKeys]
+        ? true
+        : false
+      : false;
+    const hasExactCallbacks: HasExactCallbacks = true;
+    const options: SpawnOptions = {
+      prompt: "do something",
+      cwd: "/tmp",
+      onActivity: () => {},
+      onSessionCreated: () => {},
+    };
+
+    expect(hasExactCallbacks).toBe(true);
+    expect(options.onActivity).toBeTypeOf("function");
+    expect(options.onSessionCreated).toBeTypeOf("function");
+  });
 });

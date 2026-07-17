@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "../src/tui/conversation-viewer.js";
-import type { AgentActivity } from "../src/tui/activity.js";
 import type { AgentRecord } from "../src/shared/types.js";
 
 // Raw escape sequences for key input (VT100/xterm)
@@ -43,7 +42,6 @@ function makeViewer(opts: {
   rows?: number;
   messages?: unknown[];
   record?: AgentRecord;
-  activity?: AgentActivity;
   onStop?: () => void;
   onSteer?: (msg: string) => void;
 } = {}) {
@@ -54,7 +52,6 @@ function makeViewer(opts: {
     tui as unknown as TUI,
     session as unknown as AgentSession,
     opts.record ?? makeRecord(),
-    opts.activity,
     makeTheme(),
     done as unknown as (result: undefined) => void,
     opts.onStop,
@@ -146,21 +143,31 @@ describe("ConversationViewer", () => {
       expect(all).toContain("[Result]");
     });
 
-    it("shows ▍ streaming indicator for running agent with activity", () => {
-      const activity: AgentActivity = {
-        activeTools: new Map(),
-        toolUses: 0,
-        responseText: "thinking...",
-        turnCount: 1,
-        lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
-      };
+    it("reads streaming activity from the live record on every render", () => {
+      const record = makeRecord({
+        status: "running",
+        live: { activeTools: [], responseText: "first thought" },
+      });
       const { viewer } = makeViewer({
-        activity,
-        record: makeRecord({ status: "running" }),
+        record,
         messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
       });
-      const all = viewer.render(80).join("\n");
-      expect(all).toContain("▍");
+      expect(viewer.render(80).join("\n")).toContain("first thought");
+
+      record.live.responseText = "second thought";
+      expect(viewer.render(80).join("\n")).toContain("second thought");
+    });
+
+    it("reads tool and token totals from the record", () => {
+      const { viewer } = makeViewer({
+        record: makeRecord({
+          toolUses: 2,
+          lifetimeUsage: { inputTokens: 4, outputTokens: 5, cacheWriteTokens: 1 },
+        }),
+      });
+      const header = viewer.render(80)[1];
+      expect(header).toContain("2 tools");
+      expect(header).toContain("10 token");
     });
   });
 

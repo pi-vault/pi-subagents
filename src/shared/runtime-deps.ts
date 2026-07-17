@@ -8,7 +8,6 @@ import type {
 import type { WatchdogRuntime } from "../core/watchdog.js";
 import type { IntercomManager } from "../core/intercom.js";
 import type { GroupJoinManager } from "../core/group-join-manager.js";
-import type { AgentActivity } from "../tui/activity.js";
 import type { AgentWidget } from "../tui/agent-widget.js";
 import type { ChainWidget } from "../tui/chain-widget.js";
 import type { FleetList } from "../tui/fleet-list.js";
@@ -68,8 +67,6 @@ export interface RuntimeDeps {
   widget?: AgentWidget;
   /** Fleet list below the editor — present when TUI is active. */
   fleet?: FleetList;
-  /** Per-agent live activity state map — shared between index.ts and subagent.ts. */
-  agentActivity?: Map<string, AgentActivity>;
   /** Ensure widget and fleet timers are running (call after any agent spawn). */
   ensureTimers?: () => void;
   /** Chain progress widget — present when TUI is active. */
