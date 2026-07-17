@@ -463,6 +463,26 @@ describe("setMaxConcurrent / getMaxConcurrent", () => {
     expect(manager.getMaxConcurrent()).toBe(8);
     manager.dispose();
   });
+
+  it("starts queued agents when the concurrency limit increases", () => {
+    const manager = new AgentManager(3, undefined, 1);
+    manager.spawn({}, makeAgentDef(), {
+      prompt: "task 1",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    const queuedId = manager.spawn({}, makeAgentDef(), {
+      prompt: "task 2",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    expect(manager.getRecord(queuedId)?.status).toBe("queued");
+
+    manager.setMaxConcurrent(2);
+
+    expect(manager.getRecord(queuedId)?.status).toBe("running");
+    manager.dispose();
+  });
 });
 
 describe("waitForAll", () => {
