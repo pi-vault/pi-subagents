@@ -67,6 +67,29 @@ describe("wait tool", () => {
   });
 
   describe("waitForSpecific", () => {
+    it("waits for a pending background Chain", async () => {
+      let finish!: (result: { content: string; isError: boolean }) => void;
+      const record = manager.fireAndForgetChain(
+        "chain-wait-specific",
+        "work",
+        [{ agent: "Scout" }],
+        "/tmp",
+        () => new Promise((resolve) => { finish = resolve; }),
+      );
+      let settled = false;
+      const waiting = waitForSpecific(manager, record.id, 5000).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finish({ content: "done", isError: false });
+
+      const result = await waiting;
+      expect(JSON.parse(result.content[0].text).completed[0].status).toBe("completed");
+    });
+
     it("returns immediately if agent already completed", async () => {
       const agentDef = createAgent();
       const { id } = await manager.spawnAndWait({}, agentDef, { prompt: "test", cwd: "/tmp" });
@@ -128,6 +151,29 @@ describe("wait tool", () => {
   });
 
   describe("waitForAll", () => {
+    it("waits for a pending background Chain", async () => {
+      let finish!: (result: { content: string; isError: boolean }) => void;
+      manager.fireAndForgetChain(
+        "chain-wait-all",
+        "work",
+        [{ agent: "Scout" }],
+        "/tmp",
+        () => new Promise((resolve) => { finish = resolve; }),
+      );
+      let settled = false;
+      const waiting = waitForAll(manager, 5000).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finish({ content: "done", isError: false });
+
+      const result = await waiting;
+      expect(JSON.parse(result.content[0].text).completed[0].status).toBe("completed");
+    });
+
     it("returns immediately when no active agents", async () => {
       const result = await waitForAll(manager, 5000);
       const data = JSON.parse(result.content[0].text);

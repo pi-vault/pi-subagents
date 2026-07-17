@@ -95,6 +95,43 @@ function makeMockDeps(stepResults: Array<{ result: string; status?: string }>) {
 }
 
 describe("executeChain — sequential", () => {
+  test("aborts an in-flight single step through StepSpawnOptions", async () => {
+    const controller = new AbortController();
+    let releaseChild!: () => void;
+    const spawnAndWait = vi.fn(
+      (
+        _agentDef: AgentDefinition,
+        _prompt: string,
+        _cwd: string,
+        options?: import("../src/core/chain-execution.js").StepSpawnOptions,
+      ) => new Promise<{ id: string; record: AgentRecord }>((resolve) => {
+        releaseChild = () => resolve({
+          id: "child",
+          record: { ...makeRecord("completed", ""), status: "aborted" },
+        });
+        options?.parentSignal?.addEventListener("abort", releaseChild, { once: true });
+      }),
+    );
+    const run = executeChain({
+      steps: [{ agent: "scout" }],
+      task: "work",
+      spawnAndWait,
+      findAgent: makeAgentDef,
+      cwd: "/tmp",
+      runId: `cancel-${Date.now()}`,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(spawnAndWait).toHaveBeenCalledOnce());
+    controller.abort();
+    try {
+      expect(spawnAndWait.mock.calls[0]?.[3]?.parentSignal).toBe(controller.signal);
+    } finally {
+      releaseChild();
+      await run;
+    }
+  });
+
   test("consumes a validated appended batch without revalidating the whole chain", async () => {
     const manager = new AgentManager();
     const runId = `append-${Date.now()}`;

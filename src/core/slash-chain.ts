@@ -517,6 +517,7 @@ export async function executeSlashChain(
       maxTurns: settings.defaultMaxTurns,
       toolBudget: options?.toolBudget,
       isolation: options?.isolation,
+      parentSignal: options?.parentSignal,
     });
   };
 

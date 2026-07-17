@@ -94,6 +94,47 @@ describe("/run-chain definition materialization", () => {
 });
 
 describe("executeSlashChain validation", () => {
+  test("aborting a background slash chain cancels its in-flight child", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(246813579);
+    const manager = new AgentManager();
+    let releaseChild!: () => void;
+    let childSignal: AbortSignal | undefined;
+    vi.spyOn(manager, "spawnAndWait").mockImplementation((_ctx, _agent, options) =>
+      new Promise((resolve) => {
+        childSignal = options.parentSignal;
+        releaseChild = () => resolve({
+          id: "child",
+          record: { ...completedRecord(""), status: "aborted" },
+        });
+        childSignal?.addEventListener("abort", releaseChild, { once: true });
+      }),
+    );
+    const deps = createDeps({ manager });
+    const chainId = `chain-${(246813579).toString(36)}`;
+
+    await executeSlashChain(
+      { sendMessage: vi.fn() } as unknown as ExtensionAPI,
+      { cwd: "/tmp" } as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+      true,
+      true,
+    );
+
+    try {
+      expect(childSignal).toBe(manager.getRecord(chainId)?.abortController?.signal);
+      expect(manager.abort(chainId)).toBe(true);
+      await manager.getRecord(chainId)?.promise;
+      expect(manager.getRecord(chainId)?.status).toBe("aborted");
+    } finally {
+      manager.abort(chainId);
+      releaseChild();
+      manager.dispose();
+      now.mockRestore();
+    }
+  });
+
   test("a background slash chain consumes an appended batch", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(987654321);
     const manager = new AgentManager();

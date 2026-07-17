@@ -215,26 +215,31 @@ export class AgentManager {
     } catch (error) {
       promise = Promise.reject(error);
     }
-    promise
-      .then((result) => {
+    record.promise = promise.then(
+      (result) => {
         closeAppendAdmission();
-        record.status = result.isError ? "error" : "completed";
+        const aborted = abortController.signal.aborted;
+        record.status = aborted ? "aborted" : result.isError ? "error" : "completed";
         record.result = result.content;
-        record.error = result.isError ? result.content : undefined;
+        record.error = !aborted && result.isError ? result.content : undefined;
         record.completedAt = Date.now();
         record.durationMs = record.completedAt - record.startedAt;
         onClear?.();
         this.notifyComplete(id);
-      })
-      .catch((error) => {
+        return result.content;
+      },
+      (error) => {
         closeAppendAdmission();
-        record.status = "error";
-        record.error = error instanceof Error ? error.message : String(error);
+        const aborted = abortController.signal.aborted;
+        record.status = aborted ? "aborted" : "error";
+        record.error = aborted ? undefined : error instanceof Error ? error.message : String(error);
         record.completedAt = Date.now();
         record.durationMs = record.completedAt - record.startedAt;
         onClear?.();
         this.notifyComplete(id);
-      });
+        return "";
+      },
+    ).catch(() => "");
     return record;
   }
 

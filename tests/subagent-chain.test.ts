@@ -19,6 +19,41 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("chain mode dispatch", () => {
+  test("aborting a background chain cancels its in-flight child", async () => {
+    const manager = new AgentManager();
+    let releaseChild!: () => void;
+    let childSignal: AbortSignal | undefined;
+    vi.spyOn(manager, "spawnAndWait").mockImplementation((_ctx, _agent, options) =>
+      new Promise((resolve) => {
+        childSignal = options.parentSignal;
+        releaseChild = () => resolve({
+          id: "child",
+          record: { ...completedRecord(""), status: "aborted" },
+        });
+        childSignal?.addEventListener("abort", releaseChild, { once: true });
+      }),
+    );
+    const deps = createDeps({ manager });
+    const started = await executeTool(deps, {
+      task: "work",
+      chain: [{ agent: "Scout" }],
+      run_in_background: true,
+    });
+    const chainId = started.content[0]?.text.match(/Chain ID: (\S+)/)?.[1];
+    if (!chainId) throw new Error("background chain ID missing");
+
+    try {
+      expect(childSignal).toBe(manager.getRecord(chainId)?.abortController?.signal);
+      expect(manager.abort(chainId)).toBe(true);
+      await manager.getRecord(chainId)?.promise;
+      expect(manager.getRecord(chainId)?.status).toBe("aborted");
+    } finally {
+      manager.abort(chainId);
+      releaseChild();
+      manager.dispose();
+    }
+  });
+
   test("TypeBox accepts sequential, static parallel, and dynamic parallel chain shapes", () => {
     const { pi, registeredTool } = createPi();
     registerSubagentTool(pi, createDeps());

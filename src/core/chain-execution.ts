@@ -37,6 +37,7 @@ export interface StepSpawnOptions {
   isolation?: "worktree";
   skills?: string[];
   model?: string;
+  parentSignal?: AbortSignal;
 }
 
 export interface ChainExecutionParams {
@@ -194,7 +195,7 @@ export async function executeChain(
           const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
 
           // Build spawn options
-          const parallelOptions: StepSpawnOptions = {};
+          const parallelOptions: StepSpawnOptions = { parentSignal: signal };
           if (item.toolBudget) {
             const validated = validateToolBudget(item.toolBudget);
             if (!validated.error && validated.budget) parallelOptions.toolBudget = validated.budget;
@@ -336,7 +337,7 @@ export async function executeChain(
       const { prefix: dynPrefix, suffix: dynSuffix } = buildChainInstructions(dynBehavior, chainDir, false);
 
       // Build spawn options (shared across all dynamic items)
-      const dynOptions: StepSpawnOptions = {};
+      const dynOptions: StepSpawnOptions = { parentSignal: signal };
       if (step.parallel.toolBudget) {
         const validated = validateToolBudget(step.parallel.toolBudget);
         if (!validated.error && validated.budget) dynOptions.toolBudget = validated.budget;
@@ -440,7 +441,7 @@ export async function executeChain(
       const fullPrompt = [prefix, taskStr, suffix].filter(Boolean).join("\n\n");
 
       // Build spawn options
-      const seqOptions: StepSpawnOptions = {};
+      const seqOptions: StepSpawnOptions = { parentSignal: signal };
       if (seqStep.toolBudget) {
         const validated = validateToolBudget(seqStep.toolBudget);
         if (!validated.error && validated.budget) seqOptions.toolBudget = validated.budget;

@@ -355,6 +355,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               maxTurns: settings.defaultMaxTurns,
               toolBudget: options?.toolBudget,
               isolation: options?.isolation,
+              parentSignal: options?.parentSignal,
             });
           };
 
