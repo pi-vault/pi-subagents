@@ -418,13 +418,15 @@ export interface ChainConfig {
   extraFields?: Record<string, string>;
 }
 
+export type SavedOutputSchema = string | JsonSchemaObject;
+
 export interface ChainStepConfig {
   agent?: string;
   task?: string;
   phase?: string;
   label?: string;
   as?: string;
-  outputSchema?: string | JsonSchemaObject;
+  outputSchema?: SavedOutputSchema;
   output?: string | false;
   outputMode?: "inline" | "file-only";
   reads?: string[] | false;
@@ -434,12 +436,13 @@ export interface ChainStepConfig {
   cwd?: string;
   acceptance?: AcceptanceInput;
   toolBudget?: ToolBudgetConfig;
-  parallel?: ChainStepConfig[];
+  count?: number;
+  parallel?: ChainStepConfig[] | ChainStepConfig;
   concurrency?: number;
   failFast?: boolean;
   worktree?: boolean;
   expand?: DynamicParallelStep["expand"];
-  collect?: DynamicParallelStep["collect"];
+  collect?: { as: string; outputSchema?: SavedOutputSchema };
 }
 
 export type WorkflowNodeStatus =

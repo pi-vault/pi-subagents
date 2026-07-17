@@ -1,10 +1,144 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+  ChainDefinitionError,
+  materializeSavedChainSteps,
+  normalizeChainSteps,
   parseChain,
   parseJsonChain,
   serializeChain,
   serializeJsonChain,
 } from "../src/core/chain-serializer.js";
+
+describe("normalizeChainSteps", () => {
+  test("accepts each step shape and preserves ordinary extension fields", () => {
+    const steps = normalizeChainSteps(
+      [
+        { agent: "scout", task: "scan", extensionHint: "keep" },
+        {
+          parallel: [{ agent: "worker", task: "build", count: 2, taskHint: "keep" }],
+          groupHint: "keep",
+        },
+        {
+          expand: { from: { output: "targets", path: "/items" } },
+          parallel: { agent: "reviewer", task: "review {item}" },
+          collect: { as: "reviews" },
+        },
+      ],
+      "tool chain",
+      { priorOutputNames: ["targets"] },
+    );
+
+    expect(steps[0]).toMatchObject({ extensionHint: "keep" });
+    expect(steps[1]).toMatchObject({
+      parallel: [{ taskHint: "keep", count: 2 }],
+      groupHint: "keep",
+    });
+  });
+
+  test.each([
+    [{ agent: "worker", parallel: [{ agent: "other" }] }, /mix/i],
+    [{ agent: " " }, /agent.*non-blank/i],
+    [{ parallel: [] }, /non-empty/i],
+    [{ agent: "worker", progress: "true" }, /progress.*boolean/i],
+    [{ agent: "worker", reads: ["ok", ""] }, /reads.*non-blank/i],
+    [{ parallel: [{ agent: "worker", count: 0 }] }, /count.*integer.*1/i],
+    [{ agent: "worker", acceptance: { description: 3 } }, /acceptance\.description.*string/i],
+    [{ agent: "worker", outputSchema: [] }, /outputSchema.*object/i],
+    [{ agent: "worker", toolBudget: { soft: 1 } }, /hard/i],
+  ])("rejects invalid recognized fields: %j", (step, message) => {
+    expect(() => normalizeChainSteps([step], "tool chain")).toThrow(message);
+  });
+
+  test.each([
+    [
+      {
+        expand: { from: { output: "targets", path: "/items" } },
+        parallel: { agent: "worker", task: "review", maxItem: 3 },
+        collect: { as: "reviews" },
+      },
+      /dynamic parallel template.*maxItem/i,
+    ],
+    [
+      {
+        expand: {
+          from: { output: "targets", path: "/items", fallback: [] },
+        },
+        parallel: { agent: "worker", task: "review" },
+        collect: { as: "reviews" },
+      },
+      /expand\.from.*fallback/i,
+    ],
+    [
+      {
+        expand: { from: { output: "targets", path: "/items" } },
+        parallel: { agent: "worker", task: "review", count: 2 },
+        collect: { as: "reviews" },
+      },
+      /dynamic parallel template.*count/i,
+    ],
+  ])("rejects strict dynamic fanout fields", (step, message) => {
+    expect(() =>
+      normalizeChainSteps([step], "tool chain", {
+        priorOutputNames: ["targets"],
+      }),
+    ).toThrow(message);
+  });
+});
+
+describe("materializeSavedChainSteps", () => {
+  test("loads saved schemas recursively relative to the chain file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "chain-definition-"));
+    const schema = { type: "object", properties: { value: { type: "string" } } };
+    writeFileSync(join(dir, "schema.json"), JSON.stringify(schema));
+
+    const steps = materializeSavedChainSteps({
+      name: "saved",
+      description: "saved",
+      filePath: join(dir, "saved.chain.json"),
+      steps: [
+        { agent: "scout", as: "targets", outputSchema: "schema.json" },
+        {
+          parallel: [{ agent: "static", outputSchema: "schema.json" }],
+        },
+        {
+          expand: { from: { output: "targets", path: "/items" } },
+          parallel: { agent: "dynamic", outputSchema: "schema.json" },
+          collect: { as: "results", outputSchema: "schema.json" },
+        },
+      ],
+    });
+
+    expect(steps[0]).toMatchObject({ outputSchema: schema });
+    expect(steps[1]).toMatchObject({ parallel: [{ outputSchema: schema }] });
+    expect(steps[2]).toMatchObject({
+      parallel: { outputSchema: schema },
+      collect: { outputSchema: schema },
+    });
+  });
+
+  test.each([
+    ["missing.json", undefined, /unable to read/i],
+    ["invalid.json", "{", /invalid JSON/i],
+    ["null.json", "null", /JSON object/i],
+    ["array.json", "[]", /JSON object/i],
+    ["primitive.json", "true", /JSON object/i],
+  ])("rejects unusable schema file %s", (fileName, content, message) => {
+    const dir = mkdtempSync(join(tmpdir(), "chain-definition-"));
+    if (content !== undefined) writeFileSync(join(dir, fileName), content);
+
+    expect(() =>
+      materializeSavedChainSteps({
+        name: "saved",
+        description: "saved",
+        filePath: join(dir, "saved.chain.json"),
+        steps: [{ agent: "worker", outputSchema: fileName }],
+      }),
+    ).toThrow(message);
+  });
+});
 
 describe("parseChain (.chain.md)", () => {
   test("parses a simple 2-step chain", () => {
@@ -144,15 +278,13 @@ describe("parseChain (.chain.md)", () => {
       "description: test",
       "---",
       "",
-      '## a',
+      "## a",
       'outputSchema: {"type":"object"}',
       "",
       "task",
     ].join("\n");
 
-    expect(() => parseChain("/tmp/test.chain.md", content)).toThrow(
-      /inline.*outputSchema/i,
-    );
+    expect(() => parseChain("/tmp/test.chain.md", content)).toThrow(/inline.*outputSchema/i);
   });
 
   test("parses outputSchema as file path", () => {
@@ -262,29 +394,13 @@ describe("parseChain (.chain.md)", () => {
   });
 
   test("throws on missing frontmatter name", () => {
-    const content = [
-      "---",
-      "description: no name",
-      "---",
-      "",
-      "## a",
-      "",
-      "task text",
-    ].join("\n");
+    const content = ["---", "description: no name", "---", "", "## a", "", "task text"].join("\n");
 
     expect(() => parseChain("/tmp/bad.chain.md", content)).toThrow(/name/);
   });
 
   test("throws on missing frontmatter description", () => {
-    const content = [
-      "---",
-      "name: test",
-      "---",
-      "",
-      "## a",
-      "",
-      "task text",
-    ].join("\n");
+    const content = ["---", "name: test", "---", "", "## a", "", "task text"].join("\n");
 
     expect(() => parseChain("/tmp/bad.chain.md", content)).toThrow(/description/);
   });
@@ -350,6 +466,28 @@ describe("parseJsonChain (.chain.json)", () => {
     expect(config.steps[1]!.collect).toEqual({ as: "reviews" });
   });
 
+  test("validates saved definitions without loading schema paths", () => {
+    const content = JSON.stringify({
+      name: "saved",
+      description: "saved chain",
+      chain: [{ agent: "worker", outputSchema: "not-present.json" }],
+    });
+
+    expect(parseJsonChain("/tmp/saved.chain.json", content).steps[0]).toMatchObject({
+      outputSchema: "not-present.json",
+    });
+  });
+
+  test("rejects invalid recognized fields in saved definitions", () => {
+    const content = JSON.stringify({
+      name: "saved",
+      description: "saved chain",
+      chain: [{ agent: "worker", failFast: "yes" }],
+    });
+
+    expect(() => parseJsonChain("/tmp/saved.chain.json", content)).toThrow(/failFast.*boolean/i);
+  });
+
   test("validates per-step toolBudget", () => {
     const content = JSON.stringify({
       name: "test",
@@ -367,9 +505,7 @@ describe("parseJsonChain (.chain.json)", () => {
       chain: ["not an object"],
     });
 
-    expect(() => parseJsonChain("/tmp/bad.chain.json", content)).toThrow(
-      /must be an object/,
-    );
+    expect(() => parseJsonChain("/tmp/bad.chain.json", content)).toThrow(/must be an object/);
   });
 
   test("validates toolBudget in parallel tasks", () => {
@@ -378,16 +514,12 @@ describe("parseJsonChain (.chain.json)", () => {
       description: "test",
       chain: [
         {
-          parallel: [
-            { agent: "a", task: "t", toolBudget: { hard: -1 } },
-          ],
+          parallel: [{ agent: "a", task: "t", toolBudget: { hard: -1 } }],
         },
       ],
     });
 
-    expect(() => parseJsonChain("/tmp/bad.chain.json", content)).toThrow(
-      /hard/,
-    );
+    expect(() => parseJsonChain("/tmp/bad.chain.json", content)).toThrow(/hard/);
   });
 
   test("preserves extra string fields", () => {
@@ -408,28 +540,19 @@ describe("parseJsonChain (.chain.json)", () => {
 
   test("throws on missing name", () => {
     expect(() =>
-      parseJsonChain(
-        "/tmp/bad.chain.json",
-        JSON.stringify({ description: "no name", chain: [] }),
-      ),
+      parseJsonChain("/tmp/bad.chain.json", JSON.stringify({ description: "no name", chain: [] })),
     ).toThrow();
   });
 
   test("throws on missing description", () => {
     expect(() =>
-      parseJsonChain(
-        "/tmp/bad.chain.json",
-        JSON.stringify({ name: "test", chain: [] }),
-      ),
+      parseJsonChain("/tmp/bad.chain.json", JSON.stringify({ name: "test", chain: [] })),
     ).toThrow();
   });
 
   test("throws on missing chain array", () => {
     expect(() =>
-      parseJsonChain(
-        "/tmp/bad.chain.json",
-        JSON.stringify({ name: "test", description: "test" }),
-      ),
+      parseJsonChain("/tmp/bad.chain.json", JSON.stringify({ name: "test", description: "test" })),
     ).toThrow();
   });
 });
@@ -501,6 +624,17 @@ describe("serializeChain", () => {
     expect(reparsed.steps[0]!.model).toBe("openai/gpt-4o");
     expect(reparsed.steps[0]!.skills).toEqual(["code-review", "testing"]);
     expect(reparsed.steps[0]!.progress).toBe(true);
+  });
+
+  test("rejects non-sequential saved definitions", () => {
+    expect(() =>
+      serializeChain({
+        name: "parallel",
+        description: "parallel",
+        filePath: "/tmp/parallel.chain.md",
+        steps: [{ parallel: [{ agent: "worker" }] }],
+      }),
+    ).toThrow(ChainDefinitionError);
   });
 });
 

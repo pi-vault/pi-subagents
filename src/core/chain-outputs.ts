@@ -14,6 +14,11 @@ export class ChainOutputValidationError extends Error {
   readonly name = "ChainOutputValidationError";
 }
 
+export interface ChainOutputValidationContext {
+  priorOutputNames?: Iterable<string>;
+  startStepIndex?: number;
+}
+
 function isParallelStep(step: ChainStep): step is ParallelStep {
   return "parallel" in step && Array.isArray((step as ParallelStep).parallel);
 }
@@ -38,6 +43,10 @@ function getOutputNames(step: ChainStep): string[] {
   return name ? [name] : [];
 }
 
+export function getChainOutputNames(steps: ChainStep[]): string[] {
+  return steps.flatMap(getOutputNames);
+}
+
 function getTemplateStrings(step: ChainStep): string[] {
   if (isParallelStep(step)) {
     return step.parallel.map((t) => t.task).filter((t): t is string => !!t);
@@ -49,10 +58,28 @@ function getTemplateStrings(step: ChainStep): string[] {
   return task ? [task] : [];
 }
 
-export function validateChainOutputBindings(steps: ChainStep[]): void {
+export function validateChainOutputBindingsWithContext(
+  steps: ChainStep[],
+  context: ChainOutputValidationContext = {},
+): void {
   const defined = new Set<string>();
+  const claimed = new Set<string>();
 
-  for (const step of steps) {
+  for (const name of context.priorOutputNames ?? []) {
+    if (!SAFE_OUTPUT_NAME_PATTERN.test(name)) {
+      throw new ChainOutputValidationError(
+        `Invalid prior chain output name '${name}': must match ${SAFE_OUTPUT_NAME_PATTERN.source}`,
+      );
+    }
+    if (claimed.has(name)) {
+      throw new ChainOutputValidationError(`Duplicate chain output name '${name}'.`);
+    }
+    defined.add(name);
+    claimed.add(name);
+  }
+
+  for (const [index, step] of steps.entries()) {
+    const stepNumber = (context.startStepIndex ?? 0) + index + 1;
     for (const template of getTemplateStrings(step)) {
       for (const match of template.matchAll(OUTPUT_REF_PATTERN)) {
         const name = match[1] ?? "";
@@ -63,9 +90,23 @@ export function validateChainOutputBindings(steps: ChainStep[]): void {
         }
         if (!defined.has(name)) {
           throw new ChainOutputValidationError(
-            `Unknown chain output reference '{outputs.${name}}'. Available: ${[...defined].join(", ") || "(none)"}`,
+            `Unknown chain output reference '{outputs.${name}}' at step ${stepNumber}. Available: ${[...defined].join(", ") || "(none)"}`,
           );
         }
+      }
+    }
+
+    if (isDynamicParallelStep(step)) {
+      const source = step.expand.from.output;
+      if (!SAFE_OUTPUT_NAME_PATTERN.test(source)) {
+        throw new ChainOutputValidationError(
+          `Invalid chain output name '${source}' in expand.from.output: must match ${SAFE_OUTPUT_NAME_PATTERN.source}`,
+        );
+      }
+      if (!defined.has(source)) {
+        throw new ChainOutputValidationError(
+          `Unknown chain output '${source}' in expand.from.output at step ${stepNumber}. Available: ${[...defined].join(", ") || "(none)"}`,
+        );
       }
     }
 
@@ -75,31 +116,27 @@ export function validateChainOutputBindings(steps: ChainStep[]): void {
           `Invalid chain output name '${name}': must match ${SAFE_OUTPUT_NAME_PATTERN.source}`,
         );
       }
-      if (defined.has(name)) {
-        throw new ChainOutputValidationError(
-          `Duplicate chain output name '${name}'.`,
-        );
+      if (claimed.has(name)) {
+        throw new ChainOutputValidationError(`Duplicate chain output name '${name}'.`);
       }
       defined.add(name);
+      claimed.add(name);
     }
   }
 }
 
-export function resolveOutputReferences(
-  template: string,
-  outputs: ChainOutputMap,
-): string {
+export function validateChainOutputBindings(steps: ChainStep[]): void {
+  validateChainOutputBindingsWithContext(steps);
+}
+
+export function resolveOutputReferences(template: string, outputs: ChainOutputMap): string {
   return template.replace(OUTPUT_REF_PATTERN, (raw, name: string) => {
     if (!SAFE_OUTPUT_NAME_PATTERN.test(name)) {
-      throw new ChainOutputValidationError(
-        `Invalid chain output reference '${raw}'.`,
-      );
+      throw new ChainOutputValidationError(`Invalid chain output reference '${raw}'.`);
     }
     const entry = outputs[name];
     if (!entry) {
-      throw new ChainOutputValidationError(
-        `Unknown chain output reference '${raw}'.`,
-      );
+      throw new ChainOutputValidationError(`Unknown chain output reference '${raw}'.`);
     }
     return entry.text;
   });

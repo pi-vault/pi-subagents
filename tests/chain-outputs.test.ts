@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   validateChainOutputBindings,
+  validateChainOutputBindingsWithContext,
+  getChainOutputNames,
   resolveOutputReferences,
   outputEntryFromResult,
   ChainOutputValidationError,
@@ -21,23 +23,17 @@ describe("validateChainOutputBindings", () => {
       { agent: "a", task: "t", as: "dup" },
       { agent: "b", task: "t", as: "dup" },
     ];
-    expect(() => validateChainOutputBindings(steps)).toThrow(
-      ChainOutputValidationError,
-    );
+    expect(() => validateChainOutputBindings(steps)).toThrow(ChainOutputValidationError);
   });
 
   test("rejects reference to nonexistent output", () => {
     const steps: ChainStep[] = [{ agent: "a", task: "use {outputs.missing}" }];
-    expect(() => validateChainOutputBindings(steps)).toThrow(
-      ChainOutputValidationError,
-    );
+    expect(() => validateChainOutputBindings(steps)).toThrow(ChainOutputValidationError);
   });
 
   test("rejects invalid output name characters", () => {
     const steps: ChainStep[] = [{ agent: "a", task: "t", as: "bad-name" }];
-    expect(() => validateChainOutputBindings(steps)).toThrow(
-      ChainOutputValidationError,
-    );
+    expect(() => validateChainOutputBindings(steps)).toThrow(ChainOutputValidationError);
   });
 
   test("accepts parallel step with named outputs", () => {
@@ -58,9 +54,7 @@ describe("validateChainOutputBindings", () => {
       { agent: "a", task: "use {outputs.later}" },
       { agent: "b", task: "t", as: "later" },
     ];
-    expect(() => validateChainOutputBindings(steps)).toThrow(
-      ChainOutputValidationError,
-    );
+    expect(() => validateChainOutputBindings(steps)).toThrow(ChainOutputValidationError);
   });
 
   test("accepts dynamic parallel step with collect output", () => {
@@ -75,6 +69,39 @@ describe("validateChainOutputBindings", () => {
     ];
     expect(() => validateChainOutputBindings(steps)).not.toThrow();
   });
+
+  test("accepts references to outputs reserved by earlier batches", () => {
+    const steps: ChainStep[] = [{ agent: "worker", task: "use {outputs.prior}", as: "next" }];
+
+    expect(() =>
+      validateChainOutputBindingsWithContext(steps, {
+        priorOutputNames: ["prior"],
+        startStepIndex: 3,
+      }),
+    ).not.toThrow();
+    expect(getChainOutputNames(steps)).toEqual(["next"]);
+  });
+
+  test("requires dynamic fanout sources to be earlier named outputs", () => {
+    const steps: ChainStep[] = [
+      {
+        expand: { from: { output: "later", path: "/items" } },
+        parallel: { agent: "worker", task: "review {item}" },
+        collect: { as: "reviews" },
+      },
+      { agent: "scout", task: "find", as: "later" },
+    ];
+
+    expect(() => validateChainOutputBindings(steps)).toThrow(/later/);
+  });
+
+  test("rejects an output name already reserved by an earlier batch", () => {
+    expect(() =>
+      validateChainOutputBindingsWithContext([{ agent: "worker", task: "work", as: "prior" }], {
+        priorOutputNames: ["prior"],
+      }),
+    ).toThrow(/Duplicate.*prior/);
+  });
 });
 
 describe("resolveOutputReferences", () => {
@@ -87,9 +114,9 @@ describe("resolveOutputReferences", () => {
         stepIndex: 0,
       },
     };
-    expect(
-      resolveOutputReferences("Plan from {outputs.context}", outputs),
-    ).toBe("Plan from found 3 files");
+    expect(resolveOutputReferences("Plan from {outputs.context}", outputs)).toBe(
+      "Plan from found 3 files",
+    );
   });
 
   test("replaces multiple references", () => {
@@ -97,15 +124,11 @@ describe("resolveOutputReferences", () => {
       a: { text: "A", structured: undefined, agent: "x", stepIndex: 0 },
       b: { text: "B", structured: undefined, agent: "y", stepIndex: 1 },
     };
-    expect(resolveOutputReferences("{outputs.a} + {outputs.b}", outputs)).toBe(
-      "A + B",
-    );
+    expect(resolveOutputReferences("{outputs.a} + {outputs.b}", outputs)).toBe("A + B");
   });
 
   test("throws on unknown reference", () => {
-    expect(() => resolveOutputReferences("{outputs.nope}", {})).toThrow(
-      ChainOutputValidationError,
-    );
+    expect(() => resolveOutputReferences("{outputs.nope}", {})).toThrow(ChainOutputValidationError);
   });
 
   test("returns string unchanged when no references", () => {
