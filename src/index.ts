@@ -18,7 +18,6 @@ import { evaluateToolCall, validateToolBudget } from "./core/tool-budget.js";
 import { GroupJoinManager } from "./core/group-join-manager.js";
 import { resolvePaths } from "./core/paths.js";
 import {
-  applySettings,
   loadSettings,
   saveSetting,
   type SubagentsSettings,
@@ -42,7 +41,7 @@ import {
 } from "./core/watchdog.js";
 import { formatWatchdogWarningText } from "./core/watchdog-render.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
-import type { NotificationDetails, WidgetMode } from "./shared/types.js";
+import type { NotificationDetails } from "./shared/types.js";
 import type { AgentActivity } from "./tui/activity.js";
 import { AgentWidget, type UICtx } from "./tui/agent-widget.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
@@ -162,7 +161,7 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     getSessionMessages: (agentId: string) => sessionMessageSource?.(agentId),
     resumeAgent: async (agentId: string, message: string) => { await resumeAgentFn?.(agentId, message); },
   };
-  let watchdogConfig = parseWatchdogConfig(settings.watchdog);
+  const watchdogConfig = parseWatchdogConfig(settings.watchdog);
   let watchdogConfigKey = JSON.stringify(watchdogConfig);
   const watchdog = createWatchdogRuntime(watchdogConfig, watchdogOptions);
 
@@ -284,22 +283,13 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     groupJoin,
     (id) => manager.getRecord(id),
     sendNudge,
-    () => deps.defaultJoinMode ?? "smart",
+    () => deps.settings.defaultJoinMode,
   );
 
   // ---- TUI: create widget and fleet (after manager) ----
-  let widgetMode: WidgetMode = "background";
-  widget = new AgentWidget(manager, agentActivity, () => widgetMode);
+  widget = new AgentWidget(manager, agentActivity, () => deps.settings.widgetMode);
   fleet = new FleetList(manager, agentActivity);
   const chainWidget = new ChainWidget();
-
-  function applyWidgetMode(mode: WidgetMode): void {
-    widgetMode = mode;
-    widget.update();
-  }
-  function applyFleetView(enabled: boolean): void {
-    fleet.setEnabled(enabled);
-  }
 
   const deps: RuntimeDeps = {
     resolvePaths,
@@ -323,9 +313,6 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
     manager,
     groupJoin,
     pendingNudges,
-    defaultJoinMode: settings.defaultJoinMode,
-    widgetMode: settings.widgetMode,
-    fleetView: settings.fleetView,
     registerBatchAgent: (id) => tracker.register(id),
     disposeBatchTracker: () => tracker.dispose(),
     widget,
@@ -338,30 +325,15 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
       widget.ensureTimer();
       fleet.ensureTimer();
     },
-    setWidgetMode: applyWidgetMode,
-    setFleetView: applyFleetView,
   };
 
   function applyResolvedSettings(next: SubagentsSettings): void {
     deps.settings = next;
-    applySettings(next, {
-      setMaxConcurrent: (value) => deps.manager.setMaxConcurrent(value),
-      setMaxDepth: (value) => deps.manager.setMaxDepth(value),
-      setDefaultJoinMode: (value) => {
-        deps.defaultJoinMode = value;
-      },
-      setWidgetMode: (value) => {
-        deps.widgetMode = value;
-        deps.setWidgetMode?.(value);
-      },
-      setFleetView: (value) => {
-        deps.fleetView = value;
-        deps.setFleetView?.(value);
-      },
-      setMaxSpawnsPerSession: (value) => {
-        deps.manager.setMaxSpawnsPerSession(value);
-      },
-    });
+    deps.manager.setMaxConcurrent(next.maxConcurrent);
+    deps.manager.setMaxDepth(next.maxRecursiveLevel);
+    deps.manager.setMaxSpawnsPerSession(next.maxSpawnsPerSession);
+    deps.widget?.update();
+    deps.fleet?.setEnabled(next.fleetView);
 
     const nextWatchdogConfig = parseWatchdogConfig(next.watchdog);
     const nextWatchdogKey = JSON.stringify(nextWatchdogConfig);
@@ -371,7 +343,6 @@ export function createRuntimeDeps(pi: ExtensionAPI): RuntimeDeps {
         nextWatchdogConfig,
         watchdogOptions,
       );
-      watchdogConfig = nextWatchdogConfig;
       watchdogConfigKey = nextWatchdogKey;
       previous?.dispose();
     }

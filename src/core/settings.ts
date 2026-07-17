@@ -17,15 +17,18 @@ import { parseWatchdogConfig, type WatchdogConfig } from "./watchdog.js";
 
 export type SettingsScope = "project" | "global";
 
-export type EditableSettingKey =
-  | "maxConcurrent"
-  | "maxRecursiveLevel"
-  | "defaultMaxTurns"
-  | "graceTurns"
-  | "defaultJoinMode"
-  | "maxSpawnsPerSession"
-  | "widgetMode"
-  | "fleetView";
+const EDITABLE_KEYS = [
+  "maxConcurrent",
+  "maxRecursiveLevel",
+  "defaultMaxTurns",
+  "graceTurns",
+  "defaultJoinMode",
+  "maxSpawnsPerSession",
+  "widgetMode",
+  "fleetView",
+] as const;
+
+export type EditableSettingKey = (typeof EDITABLE_KEYS)[number];
 
 export interface SubagentsSettings {
   maxConcurrent: number;
@@ -41,15 +44,6 @@ export interface SubagentsSettings {
   watchdog?: WatchdogConfig;
 }
 
-export interface SettingsAppliers {
-  setMaxConcurrent: (n: number) => void;
-  setMaxDepth?: (n: number) => void;
-  setDefaultJoinMode: (mode: JoinMode) => void;
-  setWidgetMode?: (mode: WidgetMode) => void;
-  setFleetView?: (enabled: boolean) => void;
-  setMaxSpawnsPerSession?: (n: number) => void;
-}
-
 export const DEFAULT_SETTINGS: SubagentsSettings = {
   maxConcurrent: 3,
   maxRecursiveLevel: 3,
@@ -60,17 +54,6 @@ export const DEFAULT_SETTINGS: SubagentsSettings = {
   widgetMode: "background",
   fleetView: true,
 };
-
-const EDITABLE_KEYS: readonly EditableSettingKey[] = [
-  "maxConcurrent",
-  "maxRecursiveLevel",
-  "defaultMaxTurns",
-  "graceTurns",
-  "defaultJoinMode",
-  "maxSpawnsPerSession",
-  "widgetMode",
-  "fleetView",
-];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -201,16 +184,4 @@ export async function saveSetting(
   } catch {
     return false;
   }
-}
-
-export function applySettings(
-  settings: SubagentsSettings,
-  appliers: SettingsAppliers,
-): void {
-  appliers.setMaxConcurrent(settings.maxConcurrent);
-  appliers.setMaxDepth?.(settings.maxRecursiveLevel);
-  appliers.setDefaultJoinMode(settings.defaultJoinMode);
-  appliers.setWidgetMode?.(settings.widgetMode);
-  appliers.setFleetView?.(settings.fleetView);
-  appliers.setMaxSpawnsPerSession?.(settings.maxSpawnsPerSession);
 }

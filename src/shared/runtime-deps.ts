@@ -16,9 +16,7 @@ import type {
   AgentCreationInput,
   AgentDefinition,
   AgentDiscoveryResult,
-  JoinMode,
   ResolvedPaths,
-  WidgetMode,
 } from "./types.js";
 
 export interface RuntimeDeps {
@@ -64,11 +62,6 @@ export interface RuntimeDeps {
   manager: AgentManager;
   groupJoin?: GroupJoinManager;
   pendingNudges?: Map<string, ReturnType<typeof setTimeout>>;
-  defaultJoinMode?: JoinMode;
-  widgetMode?: WidgetMode;
-  fleetView?: boolean;
-  setWidgetMode?: (mode: WidgetMode) => void;
-  setFleetView?: (enabled: boolean) => void;
   registerBatchAgent?: (id: string) => void;
   disposeBatchTracker?: () => void;
   /** Live sidebar widget — present when TUI is active. */

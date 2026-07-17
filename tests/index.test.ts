@@ -672,10 +672,9 @@ describe("TUI wiring", () => {
     const setMaxDepth = vi.spyOn(deps.manager, "setMaxDepth");
     const setMaxConcurrent = vi.spyOn(deps.manager, "setMaxConcurrent");
     const setMaxSpawns = vi.spyOn(deps.manager, "setMaxSpawnsPerSession");
-    const setWidgetMode = vi.fn();
-    const setFleetView = vi.fn();
-    deps.setWidgetMode = setWidgetMode;
-    deps.setFleetView = setFleetView;
+    if (!deps.widget || !deps.fleet) throw new Error("TUI dependencies not initialized");
+    const updateWidget = vi.spyOn(deps.widget, "update");
+    const setFleetEnabled = vi.spyOn(deps.fleet, "setEnabled");
     deps.loadSettings = vi.fn(() => ({
       ...DEFAULT_SETTINGS,
       maxRecursiveLevel: 6,
@@ -694,9 +693,10 @@ describe("TUI wiring", () => {
     expect(setMaxDepth).toHaveBeenCalledWith(6);
     expect(setMaxConcurrent).toHaveBeenCalledWith(7);
     expect(setMaxSpawns).toHaveBeenCalledWith(0);
-    expect(setWidgetMode).toHaveBeenCalledWith("off");
-    expect(setFleetView).toHaveBeenCalledWith(false);
+    expect(updateWidget).toHaveBeenCalled();
+    expect(setFleetEnabled).toHaveBeenCalledWith(false);
     expect(deps.settings.maxRecursiveLevel).toBe(6);
+    expect(deps.settings.widgetMode).toBe("off");
     deps.manager.dispose();
   });
 
@@ -829,7 +829,8 @@ describe("TUI wiring", () => {
     if (!widget) throw new Error("widget not initialized");
 
     // Use "all" mode so both foreground and background agents appear in the widget.
-    deps.setWidgetMode?.("all");
+    deps.loadSettings = () => ({ ...deps.settings, widgetMode: "all" });
+    deps.refreshSettings("/tmp", false);
 
     const setWidgetKeys: string[] = [];
     const mockUiCtx = {

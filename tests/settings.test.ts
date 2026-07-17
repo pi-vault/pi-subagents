@@ -27,11 +27,9 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 
 import {
   DEFAULT_SETTINGS,
-  applySettings,
   loadSettings,
   saveSetting,
   type EditableSettingKey,
-  type SettingsAppliers,
 } from "../src/core/settings.js";
 
 describe("settings", () => {
@@ -299,35 +297,5 @@ describe("settings", () => {
       await saveSetting(projectDir, "global", "maxConcurrent", 6),
     ).toBe(true);
     expect(readFileSync(legacyPath, "utf8")).toBe(before);
-  });
-
-  test("applySettings applies every primitive runtime field", () => {
-    const appliers: SettingsAppliers = {
-      setMaxConcurrent: vi.fn(),
-      setMaxDepth: vi.fn(),
-      setDefaultJoinMode: vi.fn(),
-      setWidgetMode: vi.fn(),
-      setFleetView: vi.fn(),
-      setMaxSpawnsPerSession: vi.fn(),
-    };
-    applySettings(
-      {
-        ...DEFAULT_SETTINGS,
-        maxConcurrent: 7,
-        maxRecursiveLevel: 6,
-        defaultJoinMode: "group",
-        maxSpawnsPerSession: 0,
-        widgetMode: "off",
-        fleetView: false,
-      },
-      appliers,
-    );
-
-    expect(appliers.setMaxConcurrent).toHaveBeenCalledWith(7);
-    expect(appliers.setMaxDepth).toHaveBeenCalledWith(6);
-    expect(appliers.setDefaultJoinMode).toHaveBeenCalledWith("group");
-    expect(appliers.setMaxSpawnsPerSession).toHaveBeenCalledWith(0);
-    expect(appliers.setWidgetMode).toHaveBeenCalledWith("off");
-    expect(appliers.setFleetView).toHaveBeenCalledWith(false);
   });
 });
