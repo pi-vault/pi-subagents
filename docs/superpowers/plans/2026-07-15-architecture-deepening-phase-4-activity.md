@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Upgrade Pi to 0.80.6 and make each `AgentRecord` the single source of live activity for initial and resumed runs.
+**Goal:** With Pi 0.80.10 already installed, make each `AgentRecord` the single source of live activity for initial and resumed runs.
 
 **Architecture:** Pi runners translate session events into internal callbacks, including the single `agent_settled` boundary. `AgentManager` owns and mutates one required `live` object on each record, then adapters render that record directly; the parallel TUI activity map and tracker are deleted.
 
-**Tech Stack:** TypeScript, Vitest, Biome, pnpm, `@earendil-works/pi-*` 0.80.6.
+**Tech Stack:** TypeScript, Vitest, Biome, pnpm, `@earendil-works/pi-*` 0.80.10.
 
 **Design reference:** `docs/superpowers/specs/2026-07-16-agent-live-activity-design.md`
 
@@ -14,7 +14,7 @@
 
 ## Constraints and invariants
 
-- Keep the implementation to the three independently green commits below.
+- Keep the implementation to the two independently green commits below.
 - Do not change commands, notifications, tool wire shapes, persistence, scheduling, turn-limit policy, or TUI wording/timing.
 - Keep `toolUses`, `turnCount`, and `lifetimeUsage` at the top level of `AgentRecord`; do not duplicate them in `live` or replace them with session stats.
 - Preserve duplicate simultaneous tool names. A tool end removes the first matching name when present and increments `toolUses` even when no start remains.
@@ -26,70 +26,12 @@
 
 ## Commit sequence
 
-1. `chore: upgrade pi packages to 0.80.6`
-2. `refactor: add agent live record`
-3. `refactor: migrate tui activity state`
+1. `refactor: add agent live record`
+2. `refactor: migrate tui activity state`
 
-### Task 1: Upgrade the Pi packages in lockstep
+The current Pi 0.80.10 baseline is green: `pnpm typecheck` passes and the full suite passes 56 test files and 1,092 tests.
 
-**Files:**
-
-- Modify: `package.json`
-- Modify: `pnpm-lock.yaml`
-
-- [ ] **Step 1: Confirm the starting versions**
-
-```bash
-node -e 'for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) console.log(name, JSON.parse(require("node:fs").readFileSync(`node_modules/${name}/package.json`, "utf8")).version)'
-```
-
-Expected: all three installed packages report `0.80.3` before the upgrade.
-
-- [ ] **Step 2: Change all three dependency ranges together**
-
-In `package.json`, replace only these ranges:
-
-```json
-"@earendil-works/pi-ai": "^0.80.6",
-"@earendil-works/pi-coding-agent": "^0.80.6",
-"@earendil-works/pi-tui": "^0.80.6"
-```
-
-- [ ] **Step 3: Refresh the lockfile and installed dependencies**
-
-```bash
-pnpm install --ignore-scripts
-```
-
-Expected: installation succeeds and `pnpm-lock.yaml` resolves the three Pi packages to `0.80.6`.
-
-- [ ] **Step 4: Verify the installed versions**
-
-```bash
-node -e 'for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) console.log(name, JSON.parse(require("node:fs").readFileSync(`node_modules/${name}/package.json`, "utf8")).version)'
-```
-
-Expected: all three lines report `0.80.6`.
-
-- [ ] **Step 5: Run the unchanged suite against Pi 0.80.6**
-
-```bash
-env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=false pnpm vitest run
-pnpm tsc --noEmit
-```
-
-Expected: the existing suite passes and typecheck exits zero. The Git configuration override is required because tests create temporary repositories and commits.
-
-- [ ] **Step 6: Review and commit**
-
-```bash
-git diff -- package.json pnpm-lock.yaml
-git diff --check
-git add package.json pnpm-lock.yaml
-git commit -m "chore: upgrade pi packages to 0.80.6"
-```
-
-### Task 2: Make `AgentRecord` own live activity and Pi lifecycle state
+### Task 1: Make `AgentRecord` own live activity and Pi lifecycle state
 
 **Files:**
 
@@ -109,7 +51,7 @@ git commit -m "chore: upgrade pi packages to 0.80.6"
 - Modify: `tests/group-join-manager.test.ts`
 - Modify: `tests/subagent.test.ts`
 
-Keep the old `SpawnOptions` per-field callbacks during this commit so existing TUI adapters remain green. They are removed only in Task 3 after all callers use `onActivity`.
+Keep the old `SpawnOptions` per-field callbacks during this commit so existing TUI adapters remain green. They are removed only in Task 2 after all callers use `onActivity`.
 
 - [ ] **Step 1: Add failing runner lifecycle tests**
 
@@ -127,7 +69,7 @@ it("reports settlement only for agent_settled", async () => {
     }),
     bindExtensions: vi.fn().mockResolvedValue(undefined),
     prompt: vi.fn(async () => {
-      emit({ type: "agent_end", messages: [] } as never);
+      emit({ type: "agent_end", messages: [], willRetry: true } as never);
       expect(onSettled).not.toHaveBeenCalled();
       emit({ type: "agent_settled" } as never);
     }),
@@ -430,7 +372,7 @@ live: {
 },
 ```
 
-Update `tests/types-smoke.test.ts` to assert `AgentLiveState` and `SpawnOptions.onActivity` typecheck. Do not remove the old `SpawnOptions` callbacks until Task 3.
+Update `tests/types-smoke.test.ts` to assert `AgentLiveState` and `SpawnOptions.onActivity` typecheck. Do not remove the old `SpawnOptions` callbacks until Task 2.
 
 - [ ] **Step 10: Run the focused core checks**
 
@@ -460,7 +402,7 @@ git add src/shared/types.ts src/core/agent-runner.ts src/core/agent-manager.ts t
 git commit -m "refactor: add agent live record"
 ```
 
-### Task 3: Migrate every adapter and delete the activity mirror
+### Task 2: Migrate every adapter and delete the activity mirror
 
 **Files:**
 
@@ -693,7 +635,7 @@ git commit -m "refactor: migrate tui activity state"
 
 ## Final acceptance check
 
-- [ ] All three Pi packages are declared and resolved at 0.80.6.
+- [ ] All three Pi packages remain declared and resolved at 0.80.10.
 - [ ] Both runner paths use `agent_settled`; neither treats `agent_end` as terminal.
 - [ ] Resume checks `session.isIdle` and does not add `waitForIdle()`.
 - [ ] Every `AgentRecord` has required `live` state, including queued and external Chain records.
