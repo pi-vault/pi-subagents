@@ -136,20 +136,13 @@ describe("executeChain — sequential", () => {
     const manager = new AgentManager();
     const runId = `append-${Date.now()}`;
     const steps: ChainStep[] = [{ agent: "scout", as: "first" }];
-    manager.registerExternalRecord(runId, {
-      id: runId,
-      type: "(chain)",
-      description: "Chain: append",
-      status: "running",
-      toolUses: 0,
-      turnCount: 0,
-      live: { activeTools: [], responseText: "" },
-      startedAt: Date.now(),
-      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
-      isBackground: true,
-      chainDefinition: [...steps],
-      acceptsChainAppends: true,
-    });
+    manager.fireAndForgetChain(
+      runId,
+      "append",
+      steps,
+      "/tmp",
+      () => new Promise(() => {}),
+    );
     enqueueChainAppendRequest(
       manager,
       runId,

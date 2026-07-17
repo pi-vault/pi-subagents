@@ -241,20 +241,13 @@ describe("chain mode dispatch", () => {
 describe("chain_append dispatch", () => {
   test("enqueues steps and returns success", async () => {
     const manager = new AgentManager();
-    manager.registerExternalRecord("chain-abc", {
-      id: "chain-abc",
-      type: "(chain)",
-      description: "Chain: test",
-      status: "running",
-      toolUses: 0,
-      turnCount: 0,
-      live: { activeTools: [], responseText: "" },
-      startedAt: Date.now(),
-      lifetimeUsage: emptyUsage(),
-      isBackground: true,
-      chainDefinition: [{ agent: "Scout" }],
-      acceptsChainAppends: true,
-    });
+    manager.fireAndForgetChain(
+      "chain-abc",
+      "test",
+      [{ agent: "Scout" }],
+      "/tmp",
+      () => new Promise(() => {}),
+    );
     const deps = createDeps({ manager });
     const result = await executeTool(deps, {
       task: "",
