@@ -19,6 +19,7 @@ describe("package manifest", () => {
       expect.arrayContaining([
         "src",
         "agents",
+        "chains",
         "LICENSE",
         "CHANGELOG.md",
         "README.md",

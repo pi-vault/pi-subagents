@@ -5,7 +5,7 @@
 [![Node >= 24.15.0](https://img.shields.io/badge/node-%3E%3D24.15.0-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
-Delegate focused work to bundled Pi subagents — synchronously in the foreground, asynchronously in the background, or in parallel batches — without leaving your session.
+Delegate focused work to bundled Pi subagents — singly in the foreground, asynchronously in the background, or as multi-agent chains — without leaving your session.
 
 ## Install
 
@@ -21,31 +21,6 @@ Reload Pi after install or upgrade:
 
 ## Quick Start
 
-Run a bundled agent in the foreground:
-
-```text
-/agent scout trace where auth state is loaded
-```
-
-Run the same agent in the background and continue working:
-
-```text
-/agent worker refactor auth flow  --run_in_background
-```
-
-Open the interactive agent manager:
-
-```text
-/agents
-```
-
-`/agents` lets you:
-
-- browse, create, edit, export, disable, or delete bundled agents and user overrides
-- tune runtime settings: `maxConcurrency`, `defaultMaxTurns`, `graceTurns`, `defaultJoinMode`, `widgetMode`, `fleetView`
-
-## Bundled Agents
-
 | Agent        | Use it for                                                       |
 | ------------ | ---------------------------------------------------------------- |
 | `scout`      | Map a workspace, locate entry points, surface change surfaces.   |
@@ -54,30 +29,57 @@ Open the interactive agent manager:
 | `worker`     | Make focused, contained code changes and verify them.            |
 | `reviewer`   | Review a diff for defects, regressions, and missing tests.       |
 
-## Foreground, Background, And Parallel
-
-**Foreground** runs block the slash command until the agent finishes; its result is delivered as a slash card.
+Run one inline to see it work:
 
 ```text
-/agent scout find the rate limiter
-/agent planner plan caching for the API client
+/agent scout map the repository structure
+```
+
+---
+
+## Single Agent: `/agent`
+
+The slash command runs an agent synchronously in the foreground. The result is delivered as a slash card with live tool activity, turn count, and thinking level while it runs.
+
+```text
+/agent planner design a caching strategy for the API client
 /agent worker add retry with exponential backoff
 /agent reviewer review the staged diff
 ```
 
-**Background** runs return immediately with an agent ID, stream live progress into the widget/fleet, and notify you on completion:
+### Background Execution
+
+Pass `--run_in_background` to the `subagent` tool (from chat or from another agent) to launch an agent and continue working:
 
 ```text
-/agent worker refactor auth flow --run_in_background
+subagent {
+  agent: "worker",
+  task: "refactor the auth flow",
+  run_in_background: true
+}
 ```
 
-Use `get_subagent_result` and `steer_subagent` from any agent (or in chat) to interact with a running background agent.
+You get an agent ID immediately and are notified on completion. While it runs:
 
-**Parallel batches** are detected automatically. Fire several background agents from the same turn and, with `defaultJoinMode: smart` (the default), one grouped completion notification arrives instead of N nudges.
+- Use `get_subagent_result(agent_id)` to check status and retrieve the result.
+- Use `steer_subagent(agent_id, message)` to redirect a running agent.
+- Use `wait({ id: "..." })` to block until a specific agent finishes, `wait({ all: true })` for all, or `wait()` for the next one to complete.
 
-## Subagent Tool
+Background completion notifications are deduplicated: retrieving a result with `get_subagent_result` automatically suppresses the queued nudge.
 
-Agents and the slash command both invoke the same `subagent` tool. All parameters are optional except `agent` and `task`:
+### Parallel Batches
+
+Fire several background agents in the same turn and, with `defaultJoinMode: smart` (the default), one grouped notification replaces N individual nudges:
+
+```text
+/agent scout map the auth surface  --run_in_background
+/agent researcher document the OAuth scopes  --run_in_background
+/agent reviewer check the open PR for regressions  --run_in_background
+```
+
+### Subagent Tool Parameters
+
+Agents and chat both invoke the same `subagent` tool:
 
 | Parameter           | Type    | Notes                                                     |
 | ------------------- | ------- | --------------------------------------------------------- |
@@ -92,42 +94,70 @@ Agents and the slash command both invoke the same `subagent` tool. All parameter
 | `run_in_background` | boolean | Return an agent ID and stream progress as the agent runs. |
 | `resume`            | string  | Agent ID to resume with new instructions.                 |
 | `isolation`         | string  | `worktree` to run in a temporary git worktree.            |
+| `tool_budget`       | object  | Soft/hard limits for this invocation.                     |
+| `chain`             | array   | Multi-step pipeline (see below).                          |
+| `chain_append`      | object  | Append steps to a running chain.                          |
+| `clarify`           | boolean | Show step-editor TUI before chain execution.              |
 
-## Background Tools
+---
 
-These tools are registered when the extension loads and can be called from any agent or from chat:
+## Chains: Multi-Agent Pipelines
 
-- `get_subagent_result(agent_id, wait?, verbose?)` — fetch status and result for a background agent; pass `wait: true` to block until it finishes.
-- `steer_subagent(agent_id, message)` — redirect a running or queued background agent without restarting it.
+Chains let you sequence agents so later steps consume the output of earlier ones.
 
-Background completion notifications are deduplicated against `get_subagent_result` calls, so retrieving a result suppresses the queued nudge for that agent.
+### Inline `/chain`
 
-## `/agents` Menu
+```text
+/chain scout "find the rate limiter" -> planner -> worker --bg
+```
 
-`/agents` opens an interactive menu with three top-level sections:
+Arrow-separates steps; task text goes in quotes. Trailing flags:
 
-**Agents**
+- `--bg` — run in background.
+- `--yes` — skip the step-confirmation TUI.
 
-- list bundled agents and user overrides
-- create a new agent (writes a markdown override file)
-- edit, export to global scope, disable, or delete a user override
+### Parallel Groups
 
-**Settings**
+Wrap sibling steps in parentheses separated by `|`:
 
-| Setting           | Default      | Purpose                                                                  |
-| ----------------- | ------------ | ------------------------------------------------------------------------ |
-| `maxConcurrency`  | `3`          | Max background agents running at once.                                   |
-| `defaultMaxTurns` | —            | Default per-run turn cap when an agent does not set `max_turns`.         |
-| `graceTurns`      | —            | Extra turns allowed after `max_turns` to let an agent wrap up cleanly.   |
-| `defaultJoinMode` | `smart`      | `async`, `group`, or `smart` (default; batched for parallel agents).     |
-| `widgetMode`      | `background` | `all`, `background`, or `off` — controls the activity widget visibility. |
-| `fleetView`       | on           | Show the below-editor fleet list of in-flight agents.                    |
+```text
+/chain (scout "audit error handling" | researcher "find error patterns") -> worker --bg
+```
 
-**Back** returns to the parent menu.
+Configure concurrency or isolation after the group with `[concurrency=2, worktree]`.
 
-## User Agent Overrides
+### Saved Chains
 
-User overrides live in `~/.pi/agent/agents/<slug>.md` (or your global agent dir). Each file has frontmatter plus a prompt body. Example:
+Bundled chains ship in the `chains/` directory. Run one with `/run-chain`:
+
+```text
+/run-chain implement -- <your task description>
+```
+
+Project chains go in `.pi/chains/`; user chains in your global agent dir. Chain files use `.chain.md` or `.chain.json` format.
+
+### Chain Status and Cancellation
+
+```text
+/chain status          # list all running chains
+/chain status <id>     # detail for one chain
+/chain cancel <id>     # stop a running chain
+```
+
+### Template Variables
+
+Within a chain step, these variables are expanded automatically:
+
+- `{task}` — the original task passed to the chain.
+- `{previous}` — the output of the immediately preceding step.
+- `{outputs.<name>}` — the output of a step named with `as:`.
+- `{chain_dir}` — the temporary directory of the current chain run.
+
+---
+
+## User Agents
+
+User overrides live in `~/.pi/agent/agents/<slug>.md`. Each file has frontmatter plus a prompt body.
 
 ```md
 ---
@@ -153,13 +183,18 @@ extensions: true
 subagent_agents:
   - scout
   - reviewer
+memory:
+  scope: user
+  path: my-worker
+tool_budget: { "soft": 15, "hard": 25 }
+intercom: true
 disallowed_tools:
 skills:
 ---
 
 You are My Worker.
 
-Make the smallest safe change that completes the task, then verify the narrowest meaningful checks.
+Make the smallest safe change that completes the task, then verify.
 ```
 
 ### Supported Frontmatter Fields
@@ -175,82 +210,184 @@ Make the smallest safe change that completes the task, then verify the narrowest
 | `skills`            | list / `all` / `none`     | `all`, `none`, or a comma-separated/YAML list of skill names.                    |
 | `prompt_mode`       | `replace` \| `append`     | Default `replace`. `append` layers the agent prompt on top of the parent prompt. |
 | `max_turns`         | integer                   | Maximum turns before the agent is steered to wrap up. `0` means unlimited.       |
+| `max_depth`         | integer                   | Maximum recursion depth for child-agent spawning. `0` means unlimited.           |
 | `inherit_context`   | boolean                   | If `true`, fork the parent conversation into the agent.                          |
 | `run_in_background` | boolean                   | If `true`, return immediately and run in background.                             |
 | `isolated`          | boolean                   | If `true`, the agent gets no extension/MCP tools, only built-ins.                |
 | `isolation`         | `worktree`                | Run the agent in a temporary git worktree.                                       |
 | `extensions`        | `true` \| `false` \| list | `true` keeps all, `false`/`none` drops all, list is an allowlist.                |
 | `disallowed_tools`  | list                      | Tools to remove from the agent's allowlist after extension filtering.            |
+| `tool_budget`       | JSON object               | `{"soft": N, "hard": M, "block": ["tool1", ...]}`.                               |
+| `memory`            | object                    | `{"scope": "user"\|"project"\|"local", "path": "dir-name"}`.                     |
+| `intercom`          | boolean                   | If `true`, child agents get the `contact_supervisor` tool.                       |
 | `enabled`           | boolean                   | `false` keeps the agent registered but suppresses invocation.                    |
 
 > `timeout_ms` is no longer supported. Use `max_turns`.
 
+---
+
+## `/agents` Menu
+
+`/agents` opens an interactive menu with three sections:
+
+**Agents** — list bundled agents and user overrides; create, edit, export, disable, or delete.
+
+**Settings:**
+
+| Setting               | Default      | Notes                                                                |
+| --------------------- | ------------ | -------------------------------------------------------------------- |
+| `maxConcurrency`      | `3`          | Max background agents running at once.                               |
+| `defaultMaxTurns`     | —            | Default per-run turn cap when an agent does not set `max_turns`.     |
+| `graceTurns`          | `5`          | Extra turns after `max_turns` to let the agent wrap up cleanly.      |
+| `defaultJoinMode`     | `smart`      | `async`, `group`, or `smart` (default; batched for parallel agents). |
+| `widgetMode`          | `background` | `all`, `background`, or `off` — controls the activity widget.        |
+| `fleetView`           | on           | Show the below-editor fleet list of in-flight agents.                |
+| `maxSpawnsPerSession` | `40`         | Total spawned agents before the session is blocked.                  |
+
+**Back** returns to the parent menu.
+
+---
+
 ## UI: Widget, Fleet, And Conversation Viewer
 
-When the extension is loaded, three optional TUI surfaces stay in sync with running agents:
+Three optional TUI surfaces sync with running agents:
 
 - **AgentWidget** — activity sidebar above the editor; respects `widgetMode`.
 - **FleetList** — below-editor navigator listing every in-flight agent; toggle with `fleetView`.
 - **ConversationViewer** — overlay (Ctrl/Cmd+O) for reading the full transcript of any agent.
 
-All three are wired to live tool activity, turn count, and steered status.
+All three show live tool activity, turn count, and steered status.
+
+---
 
 ## Settings File
 
-Settings persist under both locations, with project overriding global:
+Settings merge from two locations (project overrides global):
 
 - Global: `~/.pi/agent/subagents.json`
 - Project: `.pi/subagents.json`
-
-Example project file:
 
 ```json
 {
   "maxConcurrent": 5,
   "defaultJoinMode": "smart",
   "widgetMode": "all",
-  "fleetView": true
+  "fleetView": true,
+  "maxSpawnsPerSession": 50,
+  "toolBudget": { "soft": 30, "hard": 50 },
+  "modelScope": {
+    "enforce": true,
+    "allow": ["anthropic/claude-sonnet-*", "openai/*"]
+  },
+  "watchdog": {
+    "enabled": true,
+    "model": "anthropic/claude-sonnet-4-20250514",
+    "thinking": "medium",
+    "reviewChangesOnly": true,
+    "children": { "enabled": false },
+    "autoFollow": { "blockers": true, "concerns": false, "maxAttempts": 2 }
+  }
 }
 ```
 
-## Common Examples
+---
 
-Find the file to change before opening an editor:
+## Watchdog
+
+The watchdog is an optional post-review step that inspects an agent's changes (or its turn-by-turn conversation) after it finishes. Findings are surfaced as severity-categorized warnings in the TUI.
+
+```text
+/watchdog                    # show current status
+/watchdog off                # disable for this session
+/watchdog recommend-model    # suggest a model for watchdog use
+```
+
+Configure via the `watchdog` key in settings (see example above). When `autoFollow.blockers` is `true`, the watchdog automatically steers the finished agent to fix issues found during review.
+
+---
+
+## Prompt Workflows
+
+Markdown templates with frontmatter that expand to agent tasks. Place them in `~/.pi/agent/prompts/` or `.pi/prompts/`:
+
+```md
+---
+description: Summarise the current diff
+subagent: worker
+---
+
+Analyse the staged git diff and write a concise summary covering the purpose of each change.
+```
+
+```text
+/prompt-workflow summarize          # run with no arguments
+/prompt-workflow review -- --scope auth   # pass arguments ($1, $@)
+```
+
+Chain multiple workflows:
+
+```text
+/chain-prompts analyze -> fix -- scope auth
+```
+
+---
+
+## Intercom (Child↔Parent Communication)
+
+When an agent has `intercom: true` in its frontmatter, it receives a `contact_supervisor` tool. The parent session gets an `intercom` tool to reply:
+
+```text
+intercom { action: "list" }
+intercom { action: "reply", replyTo: "...", message: "Proceed with your best judgment." }
+```
+
+---
+
+## Common Workflows
+
+**Find and fix a bug:**
 
 ```text
 /agent scout trace where the cache TTL is computed
-```
-
-Plan before touching code:
-
-```text
-/agent planner design a retry policy for outbound HTTP
-```
-
-Implement behind a worker, then review before shipping:
-
-```text
-/agent worker add retry with exponential backoff
+/agent worker fix the cache expiry bug
 /agent reviewer review the staged diff
 ```
 
-Fan out three investigations in parallel:
+**Chain the same sequence as a pipeline:**
 
 ```text
-/agent scout map the auth surface  --run_in_background
-/agent researcher document the OAuth scopes  --run_in_background
-/agent reviewer check the open PR for regressions  --run_in_background
+/chain scout "trace where the cache TTL is computed" -> worker -> reviewer
 ```
 
-The extension detects the parallel batch and emits one grouped completion notification.
+**Research, then implement, in background:**
+
+```text
+/agent researcher analyse all error boundaries --run_in_background
+/agent worker add error boundaries to the API layer --run_in_background
+```
+
+**Iterate with a persisted agent override:**
+
+Create a custom agent via `/agents`, then run it with the same refined prompt every time.
+
+---
 
 ## Development And Verification
 
 ```bash
 pnpm install
-pnpm check
-pnpm release:check
+pnpm check          # lint + typecheck + test
+pnpm release:check  # check + pack dry-run
 ```
+
+## Acknowledgement
+
+`@pi-vault/pi-subagents` was inspired by and builds on ideas from
+
+- [nicobailon/pi-subagents](https://github.com/nicobailon/pi-subagents)
+- [tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents)
+
+Thank you for laying the groundwork.
 
 ## Changelog
 
@@ -258,4 +395,4 @@ See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT. see [`LICENSE`](LICENSE).
