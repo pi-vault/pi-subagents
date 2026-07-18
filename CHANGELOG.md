@@ -2,61 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.0] - 2026-07-05
+## [0.4.0] - 2026-07-17
 
 ### Added
 
-- In-process `AgentManager` and `AgentRunner` that own agent lifecycle, concurrency, and execution policy; replaces the previous child-process spawning model.
-- Background execution: agents can run asynchronously via `run_in_background`, return an agent ID immediately, and report completion through a queued follow-up notification.
-- New `get_subagent_result` tool: check the status of a background agent and retrieve its result (with optional `wait` and `verbose` flags).
-- New `steer_subagent` tool: redirect a running background agent with a follow-up message.
-- `resume` parameter on the `subagent` tool: re-enter a previously completed or steered agent with new instructions.
-- Concurrency queue with `maxConcurrent` setting; queued agents wait for an open slot instead of spawning unbounded children.
-- Git worktree isolation via `isolation: worktree`; the agent runs in a temporary worktree and the resulting branch/diff is recorded on the agent record.
-- `GroupJoinManager` and `smart` join mode: detect parallel agents fired in the same batch and emit a single grouped completion notification instead of N individual nudges.
-- Per-agent JSONL output streaming for background agents; conversation is appended incrementally to a session file referenced in the completion notification.
-- Persistent settings module with project + global merge: `~/.pi/agent/subagents.json` and `.pi/subagents.json`.
-- New `defaultJoinMode` setting (`async`, `group`, or `smart`) for the agents menu and subagent tool.
-- `AgentWidget`: live activity sidebar rendered above the editor while foreground or background agents are running.
-- `FleetList`: below-editor navigator listing all in-flight agents with status, tool activity, and turn count.
-- `ConversationViewer` overlay (Ctrl/Cmd+O) for inspecting the full transcript of any agent record.
-- `widgetMode` (`all`, `background`, `off`) and `fleetView` settings exposed in the `/agents` menu.
-- `prompt_mode` frontmatter field (`replace` default, or `append` to layer on top of the parent prompt).
-- `max_turns` frontmatter field: turn-based limit that replaces the deprecated `timeout_ms`.
-- `inherit_context`, `run_in_background`, `isolated`, `isolation: worktree`, `extensions` (true/false/list), and `disallowed_tools` frontmatter fields.
-- `extensions` policy in the subagent tool: pass `true` to keep all, `false`/`none` to drop extension/MCP tools, or a comma-separated allowlist.
-- Model resolver with exact `provider/id` matching and fuzzy matching on common names (e.g. `haiku`, `sonnet`).
-- Bundled `agents/` now declare explicit `tools`, `subagent_agents`, and bounded `max_turns`.
+- **Chains.** Multi-agent execution: sequential/parallel steps via `/chain`, run saved chains with `/run-chain`, append steps to running chains with `chain_append` on the `subagent` tool. Background chains with `--bg`; live chain status via `/chain status` and `/chain cancel`.
+- **Nested delegation.** Child agents can spawn further child agents through `subagent` tool injection with bounded recursion and `max_depth` frontmatter.
+- **Intercom.** Bidirectional child↔parent communication: children use `contact_supervisor` to request decisions or report progress; parents reply with the `intercom` tool.
+- **Wait tool.** Block the calling agent (or tool call) until one, any, or all background agents finish.
+- **Agent memory.** Persistent, scope-aware memory via `memory:` frontmatter with user, project, and local scopes, read-write and read-only modes, and a `.gitignore` warning for local scope.
+- **Model scope enforcement.** `modelScope` setting with glob-based allowlist; violations are an error for explicit overrides or a warning for inherited models.
+- **Tool budgets.** Soft/hard tool-use limits with configurable blocked tools, enforced per agent. Set via `tool_budget` frontmatter or the `toolBudget` setting.
+- **Spawn limits.** `maxSpawnsPerSession` caps total spawned agents per session; `max_depth` limits recursion depth. Budget checked before parallel chain steps.
+- **Watchdog.** Optional adversarial reviewer at agent-end boundaries. Reviews git diffs or turn deltas, emits severity-categorized warnings, supports auto-follow steering with stalemate detection, child-agent override, LSP diagnostics, and model recommendation via `/watchdog recommend-model`.
+- **Prompt workflows.** Markdown templates with arg substitution (`$1`, `$@`), executed via `/prompt-workflow <name> [args]`. Chain workflows together with `/chain-prompts workflow-a -> workflow-b -- args`.
+- **Cross-extension RPC.** Event-bus handlers (`subagents:rpc:ping`, `spawn`, `stop`, `status`, `steer`) so other Pi extensions can control subagents without importing the package.
+- **Safe-fs discovery.** Symlink rejection, unsafe-name checks, and path-containment validation for agent and chain discovery.
+- **Live activity recording.** `AgentRecord.live` tracks active tools and response text in real time, consumed by the widget, fleet, and conversation viewer.
+- **Chain definition consolidation.** Output binding validation, field rejection for misplaced chain fields, `ChainStepConfig` normalization, and `.chain.md`/`.chain.json` serializer.
+- **Worktree improvements.** Per-task cwd conflict detection, `node_modules` linking, setup hooks, synthetic paths, and conflict detection.
 
 ### Changed
 
-- Foreground `/agent` runs now stream live tool activity into the editor and surface turn count, thinking level, and steered status in the result card.
-- `/agents` menu reorganised: agent rows show status, model, and tools; settings rows expose concurrency, default join mode, widget mode, and fleet view.
-- `subagent` tool schema now exposes all the new parameters listed above; previously-stubbed parameters (`run_in_background`, `resume`, `isolation`) are fully wired.
-- Notifications deduplicated via `sendNudge`; `get_subagent_result` cancels a pending nudge to avoid duplicate delivery.
-- Updated bundled `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `@earendil-works/pi-ai` to `^0.80.3`.
-- Updated `typebox` to `^1.3.3`.
-
-### Removed
-
-- Deprecated `timeout_ms` frontmatter field; use `max_turns` instead.
-- Deprecated `defaultTimeoutMs` config field; replaced by `defaultMaxTurns` + `graceTurns`.
-- Removed child-process spawn path and the env-variable protocol used to carry nested execution context between processes.
+- Upgraded `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `@earendil-works/pi-ai` to `^0.80.10`.
+- Upgraded `typebox` to `^1.3.6` and `vitest` to `^4.1.10`.
+- Settings consolidation: `modelScope`, `watchdog`, `maxSpawnsPerSession` added to settings JSON; project-scoped settings now correctly override global defaults.
+- `/agents` menu extended: diagnostics display, agent catalog entries, full frontmatter editing (memory, tool budgets, intercom, etc.).
+- Chain expression parser ported to quote/paren-aware tokenizer; `,` inline config extended with `count`, `phase`, `label`, `reads`, `outputMode`, `skills`, `acceptance`.
+- Agent frontmatter parsing and serialization extended for `max_depth`, `memory`, `intercom`, `tool_budget`.
+- Slash `/chain` enhanced with `--yes` auto-confirm, `--bg` background execution, and subcommands for `status`/`cancel`.
+- `maxConcurrent` backfilled from legacy `maxConcurrency` key; `timeout_ms` now fully ignored (removed since 0.3.0).
 
 ### Fixed
 
-- Reject `resume()` for running or queued agents to prevent double-prompting.
-- Clear pending batch state on dispose so a stopped tracker cannot leak into the next session.
-- Track background agent activity so the widget/fleet reflect running background work, not only foreground runs.
-- Deduplicate `extensions` allowlist when serialising agent definitions.
-- Addressed code review findings from the in-process runner migration (input sanitisation, error propagation, record cleanup on abort).
+- Agent lifecycle: centralised transitions close gaps for background-chain lifecycle, activity-state cleanup, and TUI tracking.
+- Watchdog: auto-follow re-review uses fresh diff and local dedup set; LSP client uses `path.delimiter` for cross-platform PATH resolution; shell injection guards in `computeChangeSignature`.
+- Intercom: widened `execute` parameter type for tool-def compatibility.
+- Safe-fs: TOCTOU limitation documented; unused `readFileSync` import removed; skill-loader migrated to shared safe-fs helpers.
+- Memory: handle JSON-string frontmatter values; add `checkLocalMemoryGitignore` warning.
+- Model scope: optional chaining guard; enforcement wired into chain execution path.
+- Tool budget: severity default; `tool_call` testability; duplicate test file removed.
+- Chain execution: floor concurrency limits to one; guard cleanup in dynamic parallel; background chain dispatch invokes `registerExternalRecord`.
+- Top-level agents no longer self-restrict `allowedAgents` when spawning children.
 
 ### Compatibility
 
-- Node.js requirement is `>=24.15.0`.
-- User agents that still set `timeout_ms` are accepted on load but the value is ignored; migrate to `max_turns`.
+- Node.js requirement remains `>=24.15.0`.
+- `timeout_ms` frontmatter (deprecated since 0.3.0) is now fully ignored; migrate to `max_turns`.
 
-## [0.2.1] - 2026-06-14
+## [0.3.0] - 2026-07-05 - 2026-06-14
 
 ### Changed
 
