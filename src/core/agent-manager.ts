@@ -1,11 +1,14 @@
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { RuntimeDeps } from "../shared/runtime-deps.js";
-import type { AgentDefinition, AgentRecord, ChainStep, SpawnOptions, ToolActivity } from "../shared/types.js";
+import type {
+  AgentDefinition,
+  AgentRecord,
+  ChainStep,
+  SpawnOptions,
+  ToolActivity,
+} from "../shared/types.js";
 import { resumeAgent, runAgent } from "./agent-runner.js";
-import { createChildGetResultTool, createChildSubagentTool } from "./child-subagent-tool.js";
-import { createContactSupervisorTool } from "./intercom.js";
 import { clearChainAppendRequests } from "./chain-append.js";
 import {
   checkSpawnLimit,
@@ -19,10 +22,7 @@ function generateId(): string {
   return `agent-${Date.now().toString(36)}-${(idCounter++).toString(36)}`;
 }
 
-function notifyActivity(
-  record: AgentRecord,
-  observer?: (record: AgentRecord) => void,
-): void {
+function notifyActivity(record: AgentRecord, observer?: (record: AgentRecord) => void): void {
   try {
     observer?.(record);
   } catch {
@@ -54,7 +54,8 @@ export class AgentManager {
   private maxDepth: number;
   private maxConcurrent: number;
   private queue: { id: string; args: SpawnArgs }[] = [];
-  private runningBackground = 0;
+  private readonly finalizedRuns = new Set<string>();
+  private readonly runningBackgroundIds = new Set<string>();
   private cleanupInterval: ReturnType<typeof setInterval>;
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
@@ -121,7 +122,7 @@ export class AgentManager {
       id,
       type: agentDef.name,
       description: options.description ?? options.prompt.slice(0, 80),
-      status: isBackground && this.runningBackground >= this.maxConcurrent ? "queued" : "running",
+      status: "queued",
       toolUses: 0,
       turnCount: 0,
       live: { activeTools: [], responseText: "", maxTurns: options.maxTurns },
@@ -145,30 +146,57 @@ export class AgentManager {
 
     const args: SpawnArgs = { ctx, agentDef, options };
 
-    if (record.status === "queued") {
+    if (isBackground && this.runningBackgroundIds.size >= this.maxConcurrent) {
       this.queue.push({ id, args });
     } else {
-      this.startAgent(id, record, args);
+      try {
+        this.startAgent(id, record, args);
+      } catch (error) {
+        this.agents.delete(id);
+        this.spawnCount--;
+        throw error;
+      }
     }
 
     return id;
   }
 
-  /**
-   * Register an externally-managed record (e.g. a background chain execution).
-   * The caller is responsible for updating the record's lifecycle fields.
-   */
-  registerExternalRecord(id: string, record: AgentRecord): void {
-    this.agents.set(id, record);
-  }
-
-  /**
-   * Trigger completion notification for an externally-managed record.
-   * Call this after updating the record's status/result fields.
-   */
-  notifyComplete(id: string): void {
+  private finalizeRun(
+    id: string,
+    outcome: {
+      status: Exclude<AgentRecord["status"], "queued" | "running">;
+      result?: string;
+      error?: string;
+      session?: unknown;
+    },
+    options: { notify: boolean; cleanup?: () => void },
+  ): void {
+    if (this.finalizedRuns.has(id)) return;
     const record = this.agents.get(id);
-    if (record) this.onComplete?.(record);
+    if (!record) return;
+
+    this.finalizedRuns.add(id);
+    if (record.status !== "stopped") record.status = outcome.status;
+    if ("result" in outcome) record.result = outcome.result;
+    if ("error" in outcome) record.error = outcome.error;
+    if ("session" in outcome) record.session = outcome.session;
+    record.completedAt ??= Date.now();
+    record.durationMs = record.completedAt - record.startedAt;
+    record.live.activeTools = [];
+
+    try {
+      options.cleanup?.();
+    } catch {
+      // Cleanup is best-effort and cannot change the terminal outcome.
+    }
+    if (this.runningBackgroundIds.delete(id)) this.drainQueue();
+    if (options.notify) {
+      try {
+        this.onComplete?.(record);
+      } catch {
+        // Rendering must not change the terminal outcome.
+      }
+    }
   }
 
   /**
@@ -204,7 +232,8 @@ export class AgentManager {
       acceptsChainAppends: true,
       abortController,
     };
-    this.registerExternalRecord(id, record);
+    this.finalizedRuns.delete(id);
+    this.agents.set(id, record);
     const closeAppendAdmission = () => closeChainAppendAdmission(record);
     abortController.signal.addEventListener("abort", closeAppendAdmission, {
       once: true,
@@ -217,29 +246,43 @@ export class AgentManager {
     }
     record.promise = promise.then(
       (result) => {
-        closeAppendAdmission();
         const aborted = abortController.signal.aborted;
-        record.status = aborted ? "aborted" : result.isError ? "error" : "completed";
-        record.result = result.content;
-        record.error = !aborted && result.isError ? result.content : undefined;
-        record.completedAt = Date.now();
-        record.durationMs = record.completedAt - record.startedAt;
-        onClear?.();
-        this.notifyComplete(id);
+        this.finalizeRun(
+          id,
+          {
+            status: aborted ? "aborted" : result.isError ? "error" : "completed",
+            result: result.content,
+            error: !aborted && result.isError ? result.content : undefined,
+          },
+          {
+            notify: true,
+            cleanup: () => {
+              closeAppendAdmission();
+              onClear?.();
+            },
+          },
+        );
         return result.content;
       },
       (error) => {
-        closeAppendAdmission();
         const aborted = abortController.signal.aborted;
-        record.status = aborted ? "aborted" : "error";
-        record.error = aborted ? undefined : error instanceof Error ? error.message : String(error);
-        record.completedAt = Date.now();
-        record.durationMs = record.completedAt - record.startedAt;
-        onClear?.();
-        this.notifyComplete(id);
+        this.finalizeRun(
+          id,
+          {
+            status: aborted ? "aborted" : "error",
+            error: aborted ? undefined : error instanceof Error ? error.message : String(error),
+          },
+          {
+            notify: true,
+            cleanup: () => {
+              closeAppendAdmission();
+              onClear?.();
+            },
+          },
+        );
         return "";
       },
-    ).catch(() => "");
+    );
     return record;
   }
 
@@ -270,184 +313,173 @@ export class AgentManager {
   private startAgent(id: string, record: AgentRecord, args: SpawnArgs): void {
     const { ctx, agentDef, options } = args;
     const isBackground = options.isBackground ?? false;
-
-    if (isBackground) {
-      record.status = "running";
-      this.runningBackground++;
-    }
-    this.onStart?.(record);
+    this.finalizedRuns.delete(id);
+    record.startedAt = Date.now();
 
     // Create worktree if requested
     let worktreeInfo:
       | { path: string; branch: string; baseSha: string; workPath: string }
       | undefined;
-    if (options.isolation === "worktree") {
-      worktreeInfo = createWorktree(options.cwd, id);
-      if (worktreeInfo) record.worktree = worktreeInfo;
-    }
-    const effectiveCwd = worktreeInfo?.workPath ?? options.cwd;
-
-    // Create AbortController
-    const abortController = new AbortController();
-    record.abortController = abortController;
-    if (options.parentSignal) {
-      if (options.parentSignal.aborted) {
-        abortController.abort();
-      } else {
-        options.parentSignal.addEventListener("abort", () => abortController.abort(), {
-          once: true,
-        });
+    let abortController: AbortController;
+    let effectiveCwd: string;
+    let customTools: unknown[];
+    try {
+      if (options.isolation === "worktree") {
+        worktreeInfo = createWorktree(options.cwd, id);
+        if (worktreeInfo) record.worktree = worktreeInfo;
       }
-    }
+      effectiveCwd = worktreeInfo?.workPath ?? options.cwd;
 
-    const effectiveMaxDepth =
-      agentDef.maxDepth !== undefined ? Math.min(agentDef.maxDepth, this.maxDepth) : this.maxDepth;
-    const allowRecursion =
-      agentDef.subagentAgents.length > 0 && (options.currentDepth ?? 0) + 1 < effectiveMaxDepth;
-
-    // Build custom tools for child sessions that allow recursion
-    let customTools: unknown[] = [];
-    if (allowRecursion) {
-      const deps = (options as { _deps?: RuntimeDeps })._deps;
-      const paths = deps?.resolvePaths?.();
-      if (deps && paths) {
-        const discovery = deps.discoverAgents(paths);
-        customTools = [
-          createChildSubagentTool({
-            manager: this,
-            discovery,
-            allowedAgents: agentDef.subagentAgents,
-            currentDepth: (options.currentDepth ?? 0) + 1,
-            parentCwd: effectiveCwd,
-            parentAgentId: id,
-            deps,
-          }),
-          createChildGetResultTool(this, id),
-        ];
+      abortController = new AbortController();
+      record.abortController = abortController;
+      if (options.parentSignal) {
+        if (options.parentSignal.aborted) {
+          abortController.abort();
+        } else {
+          options.parentSignal.addEventListener("abort", () => abortController.abort(), {
+            once: true,
+          });
+        }
       }
-    }
 
-    // Inject contact_supervisor tool for intercom-enabled agents
-    if (agentDef.intercom) {
-      const deps = (options as { _deps?: RuntimeDeps })._deps;
-      if (deps?.intercom) {
-        customTools.push(createContactSupervisorTool(deps.intercom, id, agentDef.name));
+      const effectiveMaxDepth =
+        agentDef.maxDepth !== undefined
+          ? Math.min(agentDef.maxDepth, this.maxDepth)
+          : this.maxDepth;
+      const allowRecursion =
+        agentDef.subagentAgents.length > 0 && (options.currentDepth ?? 0) + 1 < effectiveMaxDepth;
+
+      customTools =
+        options.createCustomTools?.({
+          id,
+          cwd: effectiveCwd,
+          allowRecursion,
+        }) ?? [];
+
+      record.status = "running";
+      if (isBackground) this.runningBackgroundIds.add(id);
+      try {
+        this.onStart?.(record);
+      } catch {
+        // Rendering must not fail an agent run.
       }
-    }
 
-    const promise = runAgent(
-      agentDef,
-      {
-        prompt: options.prompt,
-        cwd: effectiveCwd,
-        agentId: id,
-        model: options.model,
-        thinking: options.thinking,
-        maxTurns: options.maxTurns,
-        graceTurns: options.graceTurns,
-        inheritContext: options.inheritContext,
-        parentSystemPrompt: options.parentSystemPrompt,
-        allowRecursion,
-        signal: abortController.signal,
-        onToolActivity: (activity: ToolActivity) => {
-          if (activity.type === "start") {
-            record.live.activeTools.push(activity.toolName);
-          } else {
-            const index = record.live.activeTools.indexOf(activity.toolName);
-            if (index !== -1) record.live.activeTools.splice(index, 1);
-            record.toolUses++;
-          }
-          notifyActivity(record, options.onActivity);
-        },
-        onTurnEnd: (count: number) => {
-          record.turnCount = count;
-          notifyActivity(record, options.onActivity);
-        },
-        onUsage: (usage) => {
-          record.lifetimeUsage.inputTokens += usage.input;
-          record.lifetimeUsage.outputTokens += usage.output;
-          record.lifetimeUsage.cacheWriteTokens += usage.cacheWrite;
-          notifyActivity(record, options.onActivity);
-        },
-        onSessionCreated: (session) => {
-          record.session = session;
-          options.onSessionCreated?.(session);
-          // Flush any pending steers
-          if (record.pendingSteers && record.pendingSteers.length > 0) {
-            for (const msg of record.pendingSteers) {
-              (session as AgentSession).steer(msg).catch(() => {});
+      const promise = runAgent(
+        agentDef,
+        {
+          prompt: options.prompt,
+          cwd: effectiveCwd,
+          agentId: id,
+          model: options.model,
+          thinking: options.thinking,
+          maxTurns: options.maxTurns,
+          graceTurns: options.graceTurns,
+          inheritContext: options.inheritContext,
+          parentSystemPrompt: options.parentSystemPrompt,
+          allowRecursion,
+          signal: abortController.signal,
+          onToolActivity: (activity: ToolActivity) => {
+            if (activity.type === "start") {
+              record.live.activeTools.push(activity.toolName);
+            } else {
+              const index = record.live.activeTools.indexOf(activity.toolName);
+              if (index !== -1) record.live.activeTools.splice(index, 1);
+              record.toolUses++;
             }
-            record.pendingSteers = [];
-          }
+            notifyActivity(record, options.onActivity);
+          },
+          onTurnEnd: (count: number) => {
+            record.turnCount = count;
+            notifyActivity(record, options.onActivity);
+          },
+          onUsage: (usage) => {
+            record.lifetimeUsage.inputTokens += usage.input;
+            record.lifetimeUsage.outputTokens += usage.output;
+            record.lifetimeUsage.cacheWriteTokens += usage.cacheWrite;
+            notifyActivity(record, options.onActivity);
+          },
+          onSessionCreated: (session) => {
+            record.session = session;
+            options.onSessionCreated?.(session);
+            // Flush any pending steers
+            if (record.pendingSteers && record.pendingSteers.length > 0) {
+              for (const msg of record.pendingSteers) {
+                (session as AgentSession).steer(msg).catch(() => {});
+              }
+              record.pendingSteers = [];
+            }
+          },
+          onTextDelta: (_delta, fullText) => {
+            record.live.responseText = fullText;
+            notifyActivity(record, options.onActivity);
+          },
+          onSettled: () => {
+            record.live.activeTools = [];
+            notifyActivity(record, options.onActivity);
+          },
+          toolBudget: options.toolBudget,
+          customTools,
         },
-        onTextDelta: (_delta, fullText) => {
-          record.live.responseText = fullText;
-          notifyActivity(record, options.onActivity);
-        },
-        onSettled: () => {
-          record.live.activeTools = [];
-          notifyActivity(record, options.onActivity);
-        },
-        toolBudget: options.toolBudget,
-        customTools,
-      },
-      ctx as { model?: unknown; modelRegistry?: unknown },
-    )
-      .then((result) => {
-        record.status = result.steered ? "steered" : result.aborted ? "aborted" : "completed";
-        record.result = result.responseText;
-        record.session = result.session;
-        record.completedAt = Date.now();
-        record.durationMs = record.completedAt - record.startedAt;
-        record.live.activeTools = [];
-        notifyActivity(record, options.onActivity);
-        // Cleanup worktree
-        if (record.worktree) {
-          try {
-            record.worktreeResult = cleanupWorktree(
-              options.cwd,
-              record.worktree,
-              record.invocation?.task ?? "",
-            );
-          } catch {
-            // ignore
-          }
-        }
-        record.outputCleanup?.();
-        record.outputCleanup = undefined;
-        if (isBackground) this.runningBackground = Math.max(0, this.runningBackground - 1);
-        this.onComplete?.(record);
-        this.drainQueue();
-        return record.result ?? "";
-      })
-      .catch((error) => {
-        record.status = "error";
-        record.error = error instanceof Error ? error.message : String(error);
-        record.completedAt = Date.now();
-        record.durationMs = record.completedAt - record.startedAt;
-        record.live.activeTools = [];
-        notifyActivity(record, options.onActivity);
-        if (record.worktree) {
-          try {
-            cleanupWorktree(options.cwd, record.worktree, "error");
-          } catch {
-            // ignore
-          }
-        }
-        record.outputCleanup?.();
-        record.outputCleanup = undefined;
-        if (isBackground) this.runningBackground = Math.max(0, this.runningBackground - 1);
-        this.onComplete?.(record);
-        this.drainQueue();
-        return "";
-      });
+        ctx as { model?: unknown; modelRegistry?: unknown },
+      )
+        .then((result) => {
+          this.finalizeRun(
+            id,
+            {
+              status: result.steered ? "steered" : result.aborted ? "aborted" : "completed",
+              result: result.responseText,
+              session: result.session,
+            },
+            { notify: true, cleanup: () => this.cleanupAgentRun(record, options) },
+          );
+          return record.result ?? "";
+        })
+        .catch((error) => {
+          this.finalizeRun(
+            id,
+            { status: "error", error: error instanceof Error ? error.message : String(error) },
+            { notify: true, cleanup: () => this.cleanupAgentRun(record, options) },
+          );
+          return "";
+        });
 
-    // Store promise (resolves to response text string)
-    record.promise = promise;
+      record.promise = promise;
+    } catch (error) {
+      if (record.worktree) {
+        try {
+          cleanupWorktree(options.cwd, record.worktree, record.invocation?.task ?? "");
+        } catch {
+          // Setup cleanup is best-effort.
+        }
+      }
+      throw error;
+    }
+  }
+
+  private cleanupAgentRun(record: AgentRecord, options: SpawnArgs["options"]): void {
+    try {
+      record.outputCleanup?.();
+    } catch {
+      // Output flush is best-effort.
+    } finally {
+      record.outputCleanup = undefined;
+    }
+    if (record.worktree) {
+      try {
+        record.worktreeResult = cleanupWorktree(
+          options.cwd,
+          record.worktree,
+          record.invocation?.task ?? "",
+        );
+      } catch {
+        // Worktree cleanup is best-effort.
+      }
+    }
+    notifyActivity(record, options.onActivity);
   }
 
   private drainQueue(): void {
-    while (this.queue.length > 0 && this.runningBackground < this.maxConcurrent) {
+    while (this.queue.length > 0 && this.runningBackgroundIds.size < this.maxConcurrent) {
       const next = this.queue.shift();
       if (!next) break;
       const record = this.agents.get(next.id);
@@ -455,10 +487,11 @@ export class AgentManager {
       try {
         this.startAgent(next.id, record, next.args);
       } catch (err) {
-        record.status = "error";
-        record.error = err instanceof Error ? err.message : String(err);
-        record.completedAt = Date.now();
-        this.onComplete?.(record);
+        this.finalizeRun(
+          next.id,
+          { status: "error", error: err instanceof Error ? err.message : String(err) },
+          { notify: true },
+        );
       }
     }
   }
@@ -480,43 +513,63 @@ export class AgentManager {
     record.error = undefined;
     record.turnCount = 0;
     record.live = { activeTools: [], responseText: "" };
-
-    try {
-      const responseText = await resumeAgent(record.session as AgentSession, prompt, {
-        onToolActivity: (activity) => {
-          if (activity.type === "start") {
-            record.live.activeTools.push(activity.toolName);
-          } else {
-            const index = record.live.activeTools.indexOf(activity.toolName);
-            if (index !== -1) record.live.activeTools.splice(index, 1);
-            record.toolUses++;
-          }
-        },
-        onTextDelta: (_delta, fullText) => {
-          record.live.responseText = fullText;
-        },
-        onTurnEnd: () => {
-          record.turnCount++;
-        },
-        onSettled: () => {
-          record.live.activeTools = [];
-        },
-        onAssistantUsage: (usage) => {
-          record.lifetimeUsage.inputTokens += usage.input;
-          record.lifetimeUsage.outputTokens += usage.output;
-          record.lifetimeUsage.cacheWriteTokens += usage.cacheWrite;
-        },
-        signal,
-      });
-      record.status = "completed";
-      record.result = responseText;
-      record.completedAt = Date.now();
-    } catch (err) {
-      record.status = "error";
-      record.error = err instanceof Error ? err.message : String(err);
-      record.completedAt = Date.now();
-      record.live.activeTools = [];
+    this.finalizedRuns.delete(id);
+    const abortController = new AbortController();
+    record.abortController = abortController;
+    const forwardAbort = () => abortController.abort();
+    if (signal) {
+      if (signal.aborted) abortController.abort();
+      else signal.addEventListener("abort", forwardAbort, { once: true });
     }
+
+    const promise = resumeAgent(record.session as AgentSession, prompt, {
+      onToolActivity: (activity) => {
+        if (activity.type === "start") {
+          record.live.activeTools.push(activity.toolName);
+        } else {
+          const index = record.live.activeTools.indexOf(activity.toolName);
+          if (index !== -1) record.live.activeTools.splice(index, 1);
+          record.toolUses++;
+        }
+      },
+      onTextDelta: (_delta, fullText) => {
+        record.live.responseText = fullText;
+      },
+      onTurnEnd: () => {
+        record.turnCount++;
+      },
+      onSettled: () => {
+        record.live.activeTools = [];
+      },
+      onAssistantUsage: (usage) => {
+        record.lifetimeUsage.inputTokens += usage.input;
+        record.lifetimeUsage.outputTokens += usage.output;
+        record.lifetimeUsage.cacheWriteTokens += usage.cacheWrite;
+      },
+      signal: abortController.signal,
+    })
+      .then((responseText) => {
+        this.finalizeRun(id, { status: "completed", result: responseText }, { notify: false });
+        return responseText;
+      })
+      .catch((err) => {
+        this.finalizeRun(
+          id,
+          {
+            status: abortController.signal.aborted ? "aborted" : "error",
+            error: abortController.signal.aborted
+              ? undefined
+              : err instanceof Error
+                ? err.message
+                : String(err),
+          },
+          { notify: false },
+        );
+        return "";
+      })
+      .finally(() => signal?.removeEventListener("abort", forwardAbort));
+    record.promise = promise;
+    await promise;
 
     return record;
   }
@@ -557,15 +610,18 @@ export class AgentManager {
     if (record.status === "queued") {
       // Remove from queue
       this.queue = this.queue.filter((q) => q.id !== id);
-      record.status = "stopped";
-      record.completedAt = Date.now();
-      record.live.activeTools = [];
+      this.finalizeRun(id, { status: "stopped" }, { notify: false });
       return true;
     }
     if (record.status !== "running") return false;
     closeChainAppendAdmission(record);
     record.abortController?.abort();
-    record.live.activeTools = [];
+    if (record.type !== "(chain)") {
+      record.status = "stopped";
+      record.completedAt ??= Date.now();
+      record.durationMs = record.completedAt - record.startedAt;
+      record.live.activeTools = [];
+    }
     return true;
   }
 
@@ -576,11 +632,7 @@ export class AgentManager {
     // Clear queue first
     for (const q of this.queue) {
       const record = this.agents.get(q.id);
-      if (record) {
-        record.status = "stopped";
-        record.completedAt = Date.now();
-        record.live.activeTools = [];
-      }
+      if (record) this.finalizeRun(q.id, { status: "stopped" }, { notify: false });
     }
     this.queue = [];
     // Abort running
@@ -588,7 +640,12 @@ export class AgentManager {
       if (record.status === "running") {
         closeChainAppendAdmission(record);
         record.abortController?.abort();
-        record.live.activeTools = [];
+        if (record.type !== "(chain)") {
+          record.status = "stopped";
+          record.completedAt ??= Date.now();
+          record.durationMs = record.completedAt - record.startedAt;
+          record.live.activeTools = [];
+        }
       }
     }
   }
@@ -600,7 +657,7 @@ export class AgentManager {
     for (;;) {
       this.drainQueue();
       const promises = [...this.agents.values()]
-        .filter((r) => r.promise && (r.status === "running" || r.status === "queued"))
+        .filter((r) => r.promise && !this.finalizedRuns.has(r.id))
         .map((r) => r.promise as Promise<string>);
       if (promises.length === 0) break;
       await Promise.allSettled(promises);
@@ -617,8 +674,13 @@ export class AgentManager {
 
   clearCompleted(): void {
     for (const [id, record] of this.agents) {
-      if (record.status !== "running" && record.status !== "queued") {
+      if (
+        this.finalizedRuns.has(id) &&
+        record.status !== "running" &&
+        record.status !== "queued"
+      ) {
         this.agents.delete(id);
+        this.finalizedRuns.delete(id);
       }
     }
   }
@@ -658,9 +720,11 @@ export class AgentManager {
   private cleanup(): void {
     const now = Date.now();
     for (const [id, record] of this.agents) {
+      if (!this.finalizedRuns.has(id)) continue;
       if (record.status === "running" || record.status === "queued") continue;
       if (record.completedAt && now - record.completedAt > CLEANUP_MAX_AGE_MS) {
         this.agents.delete(id);
+        this.finalizedRuns.delete(id);
       }
     }
   }
@@ -676,6 +740,8 @@ export class AgentManager {
     }
     this.queue = [];
     this.agents.clear();
+    this.finalizedRuns.clear();
+    this.runningBackgroundIds.clear();
     this.spawnCount = 0;
     // Prune worktrees for crash recovery
     try {

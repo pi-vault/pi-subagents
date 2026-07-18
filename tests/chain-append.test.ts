@@ -36,22 +36,14 @@ describe("chain append queue", () => {
     id = "chain-1",
     overrides: Partial<AgentRecord> = {},
   ): AgentRecord {
-    const record: AgentRecord = {
+    const record = manager.fireAndForgetChain(
       id,
-      type: "(chain)",
-      description: "Chain: test",
-      status: "running",
-      toolUses: 0,
-      turnCount: 0,
-      live: { activeTools: [], responseText: "" },
-      startedAt: Date.now(),
-      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
-      isBackground: true,
-      chainDefinition: [{ agent: "a", task: "first", as: "first" }],
-      acceptsChainAppends: true,
-      ...overrides,
-    };
-    manager.registerExternalRecord(id, record);
+      "test",
+      [{ agent: "a", task: "first", as: "first" }],
+      "/tmp",
+      () => new Promise(() => {}),
+    );
+    Object.assign(record, overrides);
     return record;
   }
 

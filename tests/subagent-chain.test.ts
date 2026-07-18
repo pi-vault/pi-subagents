@@ -114,7 +114,7 @@ describe("chain mode dispatch", () => {
 
   test("dispatches to executeChain and returns success", async () => {
     const manager = new AgentManager();
-    vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
       id: "step-1",
       record: {
         id: "step-1",
@@ -141,6 +141,7 @@ describe("chain mode dispatch", () => {
     expect(result.isError).toBe(false);
     expect(result.details.agent).toBe("(chain)");
     expect(result.details.status).toBe("success");
+    expect(spawn.mock.calls[0]?.[2]?.createCustomTools).toBeTypeOf("function");
   });
 
   test("returns error details when executeChain throws", async () => {
@@ -240,20 +241,13 @@ describe("chain mode dispatch", () => {
 describe("chain_append dispatch", () => {
   test("enqueues steps and returns success", async () => {
     const manager = new AgentManager();
-    manager.registerExternalRecord("chain-abc", {
-      id: "chain-abc",
-      type: "(chain)",
-      description: "Chain: test",
-      status: "running",
-      toolUses: 0,
-      turnCount: 0,
-      live: { activeTools: [], responseText: "" },
-      startedAt: Date.now(),
-      lifetimeUsage: emptyUsage(),
-      isBackground: true,
-      chainDefinition: [{ agent: "Scout" }],
-      acceptsChainAppends: true,
-    });
+    manager.fireAndForgetChain(
+      "chain-abc",
+      "test",
+      [{ agent: "Scout" }],
+      "/tmp",
+      () => new Promise(() => {}),
+    );
     const deps = createDeps({ manager });
     const result = await executeTool(deps, {
       task: "",

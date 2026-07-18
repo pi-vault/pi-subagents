@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
-import { createDeps } from "./_test-helpers.js";
-import type { AgentDefinition } from "../src/shared/types.js";
+import type { AgentDefinition, AgentRecord } from "../src/shared/types.js";
+import { cleanupWorktree, createWorktree } from "../src/core/worktree.js";
 
 const tmpDir = "/tmp";
 
@@ -16,9 +16,13 @@ vi.mock("../src/core/agent-runner.js", () => ({
   resumeAgent: vi.fn().mockResolvedValue("resumed"),
 }));
 
-function makeAgentDef(
-  overrides: Partial<AgentDefinition> = {},
-): AgentDefinition {
+vi.mock("../src/core/worktree.js", () => ({
+  createWorktree: vi.fn().mockReturnValue(undefined),
+  cleanupWorktree: vi.fn(),
+  pruneWorktrees: vi.fn(),
+}));
+
+function makeAgentDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition {
   return {
     name: "test-agent",
     description: "A test agent",
@@ -28,6 +32,23 @@ function makeAgentDef(
     sourcePath: "/fake/path/test-agent.md",
     ...overrides,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function expectTerminal(record: ReturnType<AgentManager["getRecord"]>, status: string) {
+  expect(record?.status).toBe(status);
+  expect(record?.completedAt).toBeTypeOf("number");
+  expect(record?.durationMs).toBe((record?.completedAt ?? 0) - (record?.startedAt ?? 0));
+  expect(record?.live.activeTools).toEqual([]);
 }
 
 describe("AgentManager", () => {
@@ -151,12 +172,13 @@ describe("AgentManager", () => {
     const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
       prompt: "test",
       cwd: "/tmp",
-      onActivity: (record) => snapshots.push({
-        tools: [...record.live.activeTools],
-        text: record.live.responseText,
-        turns: record.turnCount,
-        input: record.lifetimeUsage.inputTokens,
-      }),
+      onActivity: (record) =>
+        snapshots.push({
+          tools: [...record.live.activeTools],
+          text: record.live.responseText,
+          turns: record.turnCount,
+          input: record.lifetimeUsage.inputTokens,
+        }),
     });
 
     expect(snapshots).toEqual([
@@ -179,12 +201,13 @@ describe("AgentManager", () => {
     vi.mocked(runAgent).mockImplementationOnce((_agent, options) => {
       options.onToolActivity?.({ type: "start", toolName: "bash" });
       return new Promise((resolve) => {
-        release = () => resolve({
-          responseText: "done",
-          session: { isIdle: true },
-          aborted: false,
-          steered: false,
-        });
+        release = () =>
+          resolve({
+            responseText: "done",
+            session: { isIdle: true },
+            aborted: false,
+            steered: false,
+          });
       });
     });
     const id = manager.spawn({}, makeAgentDef(), { prompt: "test", cwd: "/tmp" });
@@ -302,30 +325,31 @@ describe("AgentManager", () => {
     );
   });
 
-  it("constructs customTools when _deps and subagentAgents are present", async () => {
+  it("creates customTools once with the generated id, cwd, and recursion flag", async () => {
     const { runAgent } = await import("../src/core/agent-runner.js");
-    const deps = createDeps({ manager });
     const agentDef = makeAgentDef({ subagentAgents: ["helper"] });
+    const tools = [{ name: "factory-tool" }];
+    const createCustomTools = vi.fn().mockReturnValue(tools);
     await manager.spawnAndWait({}, agentDef, {
       prompt: "test",
       cwd: "/tmp",
       currentDepth: 0,
-      _deps: deps,
+      createCustomTools,
     });
+    const id = manager.listAgents()[0]?.id;
+    expect(createCustomTools).toHaveBeenCalledOnce();
+    expect(createCustomTools).toHaveBeenCalledWith({ id, cwd: "/tmp", allowRecursion: true });
     expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
       agentDef,
       expect.objectContaining({
         allowRecursion: true,
-        customTools: expect.arrayContaining([
-          expect.objectContaining({ name: "subagent" }),
-          expect.objectContaining({ name: "get_subagent_result" }),
-        ]),
+        customTools: tools,
       }),
       expect.anything(),
     );
   });
 
-  it("passes empty customTools when _deps is absent", async () => {
+  it("passes empty customTools when no factory is supplied", async () => {
     const { runAgent } = await import("../src/core/agent-runner.js");
     const agentDef = makeAgentDef({ subagentAgents: ["helper"] });
     await manager.spawnAndWait({}, agentDef, {
@@ -340,6 +364,41 @@ describe("AgentManager", () => {
         customTools: [],
       }),
       expect.anything(),
+    );
+  });
+
+  it("creates tools with the worktree cwd", async () => {
+    vi.mocked(createWorktree).mockReturnValueOnce({
+      path: "/tmp/repo/.git/worktrees/agent",
+      branch: "agent/test",
+      baseSha: "abc123",
+      workPath: "/tmp/worktree",
+    });
+    const createCustomTools = vi.fn().mockReturnValue([]);
+
+    await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+      isolation: "worktree",
+      createCustomTools,
+    });
+
+    expect(createCustomTools).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/worktree" }),
+    );
+  });
+
+  it("tells the factory when recursion is blocked at the depth limit", async () => {
+    const createCustomTools = vi.fn().mockReturnValue([]);
+    await manager.spawnAndWait({}, makeAgentDef({ subagentAgents: ["helper"] }), {
+      prompt: "test",
+      cwd: "/tmp",
+      currentDepth: 2,
+      createCustomTools,
+    });
+
+    expect(createCustomTools).toHaveBeenCalledWith(
+      expect.objectContaining({ allowRecursion: false }),
     );
   });
 
@@ -473,10 +532,7 @@ describe("maxTurns and graceTurns passthrough", () => {
 describe("steered status", () => {
   it("maps steered result to 'steered' record status", async () => {
     const manager = new AgentManager(3);
-    vi.spyOn(
-      await import("../src/core/agent-runner.js"),
-      "runAgent",
-    ).mockResolvedValue({
+    vi.spyOn(await import("../src/core/agent-runner.js"), "runAgent").mockResolvedValue({
       responseText: "wrapped up",
       session: { isIdle: true },
       aborted: false,
@@ -641,7 +697,7 @@ describe("waitForAll", () => {
     manager.spawn({}, makeAgentDef(), { prompt: "task", cwd: "/tmp", isBackground: true });
     await manager.waitForAll();
     const agents = manager.listAgents();
-    expect(agents.every(r => r.status !== "running" && r.status !== "queued")).toBe(true);
+    expect(agents.every((r) => r.status !== "running" && r.status !== "queued")).toBe(true);
     manager.dispose();
   });
 });
@@ -823,7 +879,7 @@ describe("spawn limits", () => {
   });
 });
 
-describe("registerExternalRecord / notifyComplete", () => {
+describe("external chain lifecycle", () => {
   it("initializes external chain records with empty live state", () => {
     const manager = new AgentManager();
     const record = manager.fireAndForgetChain(
@@ -865,7 +921,10 @@ describe("registerExternalRecord / notifyComplete", () => {
       "test",
       [{ agent: "Scout" }],
       "/tmp",
-      () => new Promise((resolve) => { finish = resolve; }),
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
     );
     enqueueChainAppendRequest(manager, "chain-cleanup", [{ agent: "Scout" }], () => makeAgentDef());
 
@@ -904,53 +963,576 @@ describe("registerExternalRecord / notifyComplete", () => {
     expect(countPendingChainAppendRequests("chain-abort-cleanup")).toBe(0);
     manager.dispose();
   });
+});
 
-  it("registerExternalRecord makes record visible via getRecord", () => {
-    const manager = new AgentManager();
-    const record = {
-      id: "chain-abc",
-      type: "(chain)",
-      description: "Chain: test",
-      status: "running" as const,
-      startedAt: Date.now(),
-      toolUses: 0,
-      turnCount: 0,
-      live: { activeTools: [], responseText: "" },
-      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+describe("centralized lifecycle finalization", () => {
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    const { runAgent, resumeAgent } = await import("../src/core/agent-runner.js");
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "done",
+      session: { isIdle: true },
+      aborted: false,
+      steered: false,
+    });
+    vi.mocked(resumeAgent).mockResolvedValue("resumed");
+    vi.mocked(createWorktree).mockReturnValue(undefined);
+    vi.mocked(cleanupWorktree).mockReturnValue({ hasChanges: false });
+  });
+
+  it.each([
+    { name: "success", reject: undefined, status: "completed", result: "done" },
+    {
+      name: "runner rejection",
+      reject: new Error("runner failed"),
+      status: "error",
+      result: undefined,
+    },
+    {
+      name: "output cleanup failure",
+      reject: undefined,
+      status: "completed",
+      result: "done",
+      outputFailure: true,
+    },
+    {
+      name: "worktree cleanup failure",
+      reject: undefined,
+      status: "completed",
+      result: "done",
+      worktreeFailure: true,
+    },
+  ])(
+    "finalizes a normal agent once after $name",
+    async ({ reject, status, result, outputFailure, worktreeFailure }) => {
+      const { runAgent } = await import("../src/core/agent-runner.js");
+      const run = deferred<{
+        responseText: string;
+        session: { isIdle: boolean };
+        aborted: boolean;
+        steered: boolean;
+      }>();
+      vi.mocked(runAgent).mockReturnValueOnce(run.promise);
+      if (worktreeFailure) {
+        vi.mocked(createWorktree).mockReturnValueOnce({
+          path: "/tmp/worktree-meta",
+          branch: "agent/test",
+          baseSha: "base",
+          workPath: "/tmp/worktree",
+        });
+        vi.mocked(cleanupWorktree).mockImplementationOnce(() => {
+          throw new Error("cleanup failed");
+        });
+      }
+      const onComplete = vi.fn();
+      const manager = new AgentManager(3, onComplete, 1);
+      const id = manager.spawn({}, makeAgentDef(), {
+        prompt: "first",
+        cwd: "/tmp",
+        isBackground: true,
+        isolation: worktreeFailure ? "worktree" : undefined,
+      });
+      const record = manager.getRecord(id);
+      if (!record) throw new Error("spawned record missing");
+      record.live.activeTools = ["bash"];
+      if (outputFailure)
+        record.outputCleanup = () => {
+          throw new Error("flush failed");
+        };
+
+      if (reject) run.reject(reject);
+      else
+        run.resolve({
+          responseText: "done",
+          session: { isIdle: true },
+          aborted: false,
+          steered: false,
+        });
+      await record?.promise;
+
+      expectTerminal(record, status);
+      expect(record?.result).toBe(result);
+      expect(record?.error).toBe(reject?.message);
+      expect(record?.outputCleanup).toBeUndefined();
+      expect(onComplete).toHaveBeenCalledOnce();
+      const next = manager.spawn({}, makeAgentDef(), {
+        prompt: "next",
+        cwd: "/tmp",
+        isBackground: true,
+      });
+      expect(manager.getRecord(next)?.status).toBe("running");
+      manager.dispose();
+    },
+  );
+
+  it("removes an immediate setup failure and restores the spawn budget", () => {
+    vi.mocked(createWorktree).mockReturnValueOnce({
+      path: "/tmp/worktree-meta",
+      branch: "agent/test",
+      baseSha: "base",
+      workPath: "/tmp/worktree",
+    });
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete, 1);
+
+    expect(() =>
+      manager.spawn({}, makeAgentDef(), {
+        prompt: "fail setup",
+        cwd: "/tmp",
+        isBackground: true,
+        isolation: "worktree",
+        createCustomTools: () => {
+          throw new Error("tool factory failed");
+        },
+      }),
+    ).toThrow("tool factory failed");
+
+    expect(manager.listAgents()).toEqual([]);
+    expect(manager.getSpawnCount()).toBe(0);
+    expect(cleanupWorktree).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+    const next = manager.spawn({}, makeAgentDef(), {
+      prompt: "next",
+      cwd: "/tmp",
       isBackground: true,
-    };
-    manager.registerExternalRecord("chain-abc", record);
-    expect(manager.getRecord("chain-abc")).toBe(record);
+    });
+    expect(manager.getRecord(next)?.status).toBe("running");
     manager.dispose();
   });
 
-  it("notifyComplete triggers onComplete callback with the record", () => {
+  it("finalizes a queued setup failure and continues draining", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const first = deferred<{
+      responseText: string;
+      session: { isIdle: boolean };
+      aborted: boolean;
+      steered: boolean;
+    }>();
+    vi.mocked(runAgent).mockReturnValueOnce(first.promise);
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete, 1);
+    const firstId = manager.spawn({}, makeAgentDef(), {
+      prompt: "first",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    const failedId = manager.spawn({}, makeAgentDef(), {
+      prompt: "fail setup",
+      cwd: "/tmp",
+      isBackground: true,
+      createCustomTools: () => {
+        throw new Error("queued setup failed");
+      },
+    });
+    const thirdId = manager.spawn({}, makeAgentDef(), {
+      prompt: "third",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    const queuedRecord = manager.getRecord(failedId);
+    if (!queuedRecord) throw new Error("queued record missing");
+    const queuedStartedAt = queuedRecord.startedAt;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+
+    first.resolve({
+      responseText: "done",
+      session: { isIdle: true },
+      aborted: false,
+      steered: false,
+    });
+    await manager.getRecord(firstId)?.promise;
+    await vi.waitFor(() => expect(manager.getRecord(thirdId)?.status).not.toBe("queued"));
+
+    const failed = manager.getRecord(failedId);
+    expect(failed?.startedAt).toBeGreaterThan(queuedStartedAt);
+    expectTerminal(failed, "error");
+    expect(failed?.error).toBe("queued setup failed");
+    expect(onComplete.mock.calls.filter(([completed]) => completed.id === failedId)).toHaveLength(
+      1,
+    );
+    manager.dispose();
+  });
+
+  it("stops a queued agent without notifying or consuming a slot", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const first = deferred<{
+      responseText: string;
+      session: { isIdle: boolean };
+      aborted: boolean;
+      steered: boolean;
+    }>();
+    vi.mocked(runAgent).mockReturnValueOnce(first.promise);
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete, 1);
+    const firstId = manager.spawn({}, makeAgentDef(), {
+      prompt: "first",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    const stoppedId = manager.spawn({}, makeAgentDef(), {
+      prompt: "stop",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+
+    expect(manager.abort(stoppedId)).toBe(true);
+    expectTerminal(manager.getRecord(stoppedId), "stopped");
+    expect(onComplete).not.toHaveBeenCalled();
+
+    first.resolve({
+      responseText: "done",
+      session: { isIdle: true },
+      aborted: false,
+      steered: false,
+    });
+    await manager.getRecord(firstId)?.promise;
+    const next = manager.spawn({}, makeAgentDef(), {
+      prompt: "next",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    expect(manager.getRecord(next)?.status).toBe("running");
+    manager.dispose();
+  });
+
+  it("immediately stops a running normal agent but retains its slot and status until settlement", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const run = deferred<{
+      responseText: string;
+      session: { isIdle: boolean };
+      aborted: boolean;
+      steered: boolean;
+    }>();
+    vi.mocked(runAgent).mockReturnValueOnce(run.promise);
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete, 1);
+    const id = manager.spawn({}, makeAgentDef(), {
+      prompt: "first",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    const queuedId = manager.spawn({}, makeAgentDef(), {
+      prompt: "queued",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    const runningRecord = manager.getRecord(id);
+    if (!runningRecord) throw new Error("running record missing");
+    runningRecord.live.activeTools = ["bash"];
+
+    expect(manager.abort(id)).toBe(true);
+    expectTerminal(manager.getRecord(id), "stopped");
+    expect(manager.getRecord(queuedId)?.status).toBe("queued");
+    expect(onComplete).not.toHaveBeenCalled();
+    let waited = false;
+    const waiting = manager.waitForAll().then(() => {
+      waited = true;
+    });
+    await Promise.resolve();
+    expect(waited).toBe(false);
+
+    run.resolve({
+      responseText: "late result",
+      session: { isIdle: true },
+      aborted: true,
+      steered: false,
+    });
+    await manager.getRecord(id)?.promise;
+    expectTerminal(manager.getRecord(id), "stopped");
+    expect(manager.getRecord(id)?.result).toBe("late result");
+    expect(manager.getRecord(id)?.error).toBeUndefined();
+    expect(onComplete.mock.calls.filter(([completed]) => completed.id === id)).toHaveLength(1);
+    await waiting;
+    manager.dispose();
+  });
+
+  it("retains a stopped unsettled agent until finalization releases its slot", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const run = deferred<{
+      responseText: string;
+      session: { isIdle: boolean };
+      aborted: boolean;
+      steered: boolean;
+    }>();
+    vi.mocked(runAgent).mockReturnValueOnce(run.promise);
+    const manager = new AgentManager(3, undefined, 1);
+    const firstId = manager.spawn({}, makeAgentDef(), {
+      prompt: "first",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    const secondId = manager.spawn({}, makeAgentDef(), {
+      prompt: "second",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+
+    expect(manager.abort(firstId)).toBe(true);
+    manager.clearCompleted();
+    expect(manager.getRecord(firstId)?.status).toBe("stopped");
+    expect(manager.getRecord(secondId)?.status).toBe("queued");
+
+    run.resolve({
+      responseText: "late",
+      session: { isIdle: true },
+      aborted: true,
+      steered: false,
+    });
+    await manager.getRecord(firstId)?.promise;
+    await vi.waitFor(() => expect(manager.getRecord(secondId)?.status).not.toBe("queued"));
+    manager.clearCompleted();
+    expect(manager.getRecord(firstId)).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("releases capacity before notifying completion observers", async () => {
+    const { runAgent } = await import("../src/core/agent-runner.js");
+    const run = deferred<{
+      responseText: string;
+      session: { isIdle: boolean };
+      aborted: boolean;
+      steered: boolean;
+    }>();
+    vi.mocked(runAgent).mockReturnValueOnce(run.promise);
+    let firstId = "";
+    let secondId = "";
+    let secondStatusAtCallback: string | undefined;
+    const manager = new AgentManager(3, (record) => {
+      if (record.id === firstId) secondStatusAtCallback = manager.getRecord(secondId)?.status;
+    }, 1);
+    firstId = manager.spawn({}, makeAgentDef(), {
+      prompt: "first",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+    secondId = manager.spawn({}, makeAgentDef(), {
+      prompt: "second",
+      cwd: "/tmp",
+      isBackground: true,
+    });
+
+    run.resolve({
+      responseText: "done",
+      session: { isIdle: true },
+      aborted: false,
+      steered: false,
+    });
+    await manager.getRecord(firstId)?.promise;
+
+    expect(secondStatusAtCallback).not.toBe("queued");
+    manager.dispose();
+  });
+
+  it("keeps terminal state and exact-once notification when onComplete throws", async () => {
+    const onComplete = vi.fn((_record: AgentRecord) => {
+      throw new Error("renderer failed");
+    });
+    const manager = new AgentManager(3, onComplete);
+    const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+
+    expectTerminal(record, "completed");
+    expect(onComplete.mock.calls.filter(([completed]) => completed.id === record.id)).toHaveLength(
+      1,
+    );
+    manager.dispose();
+  });
+
+  it("does not let onStart prevent execution", async () => {
+    const onStart = vi.fn(() => {
+      throw new Error("renderer failed");
+    });
+    const manager = new AgentManager(3, undefined, 4, onStart);
+    const { record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    expectTerminal(record, "completed");
+    expect(onStart).toHaveBeenCalledOnce();
+    manager.dispose();
+  });
+
+  it.each([
+    {
+      name: "completion",
+      value: { content: "done", isError: false },
+      reject: undefined,
+      status: "completed",
+    },
+    {
+      name: "error result",
+      value: { content: "bad", isError: true },
+      reject: undefined,
+      status: "error",
+    },
+    { name: "rejection", value: undefined, reject: new Error("chain failed"), status: "error" },
+  ])(
+    "finalizes Chain $name once without consuming a normal background slot",
+    async ({ value, reject, status }) => {
+      const chain = deferred<{ content: string; isError: boolean }>();
+      const onComplete = vi.fn();
+      const manager = new AgentManager(3, onComplete, 1);
+      const record = manager.fireAndForgetChain("chain", "test", [], "/tmp", () => chain.promise);
+      const normalId = manager.spawn({}, makeAgentDef(), {
+        prompt: "normal",
+        cwd: "/tmp",
+        isBackground: true,
+      });
+      expect(manager.getRecord(normalId)?.status).toBe("running");
+      record.live.activeTools = ["chain-tool"];
+
+      if (reject) chain.reject(reject);
+      else if (value) chain.resolve(value);
+      else throw new Error("Chain test outcome missing");
+      await record.promise;
+
+      expectTerminal(record, status);
+      expect(record.result).toBe(value?.content);
+      expect(record.error).toBe(reject?.message ?? (value?.isError ? value.content : undefined));
+      expect(
+        onComplete.mock.calls.filter(([completed]) => completed.id === record.id),
+      ).toHaveLength(1);
+      manager.dispose();
+    },
+  );
+
+  it("finalizes an aborted Chain after settlement", async () => {
+    const chain = deferred<{ content: string; isError: boolean }>();
     const onComplete = vi.fn();
     const manager = new AgentManager(3, onComplete);
-    const record = {
-      id: "chain-xyz",
-      type: "(chain)",
-      description: "Chain: bg test",
-      status: "completed" as const,
-      startedAt: Date.now(),
-      completedAt: Date.now(),
-      toolUses: 0,
-      turnCount: 0,
-      live: { activeTools: [], responseText: "" },
-      lifetimeUsage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 },
+    const record = manager.fireAndForgetChain(
+      "chain-abort",
+      "test",
+      [],
+      "/tmp",
+      () => chain.promise,
+    );
+    const normalId = manager.spawn({}, makeAgentDef(), {
+      prompt: "normal",
+      cwd: "/tmp",
       isBackground: true,
-    };
-    manager.registerExternalRecord("chain-xyz", record);
-    manager.notifyComplete("chain-xyz");
+    });
+    expect(manager.getRecord(normalId)?.status).toBe("running");
+
+    expect(manager.abort(record.id)).toBe(true);
+    expect(record.status).toBe("running");
+    chain.resolve({ content: "aborted output", isError: false });
+    await record.promise;
+
+    expectTerminal(record, "aborted");
+    expect(record.result).toBe("aborted output");
+    expect(record.error).toBeUndefined();
+    expect(onComplete.mock.calls.filter(([completed]) => completed.id === record.id)).toHaveLength(1);
+    manager.dispose();
+  });
+
+  it("keeps Chain status and exact-once notification when onClear throws", async () => {
+    const onComplete = vi.fn();
+    const manager = new AgentManager(3, onComplete);
+    const record = manager.fireAndForgetChain(
+      "chain-clear",
+      "test",
+      [],
+      "/tmp",
+      async () => ({ content: "done", isError: false }),
+      () => {
+        throw new Error("clear failed");
+      },
+    );
+    await record.promise;
+
+    expectTerminal(record, "completed");
     expect(onComplete).toHaveBeenCalledOnce();
-    expect(onComplete.mock.calls[0][0]).toBe(record);
     manager.dispose();
   });
 
-  it("notifyComplete is a no-op for unknown id", () => {
+  it.each([
+    { name: "completion", reject: undefined, abort: false, status: "completed" },
+    { name: "error", reject: new Error("resume failed"), abort: false, status: "error" },
+    { name: "abort", reject: new Error("aborted"), abort: true, status: "aborted" },
+  ])(
+    "finalizes resume $name with current promise and duration",
+    async ({ reject, abort, status }) => {
+      const { resumeAgent } = await import("../src/core/agent-runner.js");
+      const onComplete = vi.fn();
+      const manager = new AgentManager(3, onComplete);
+      const { id, record } = await manager.spawnAndWait({}, makeAgentDef(), {
+        prompt: "test",
+        cwd: "/tmp",
+      });
+      const resumed = deferred<string>();
+      onComplete.mockClear();
+      vi.mocked(resumeAgent).mockReturnValueOnce(resumed.promise);
+      const externalAbort = new AbortController();
+      const resume = manager.resume(id, "continue", externalAbort.signal);
+      const currentPromise = record.promise;
+      record.live.activeTools = ["read"];
+      if (abort) externalAbort.abort();
+      if (reject) resumed.reject(reject);
+      else resumed.resolve("resumed output");
+      await resume;
+
+      expect(record.promise).toBe(currentPromise);
+      expectTerminal(record, status);
+      expect(record.result).toBe(abort || reject ? undefined : "resumed output");
+      expect(record.error).toBe(abort ? undefined : reject?.message);
+      expect(onComplete).not.toHaveBeenCalled();
+      manager.dispose();
+    },
+  );
+
+  it.each([
+    { name: "completion", reject: undefined, abort: false },
+    { name: "error", reject: new Error("resume failed"), abort: false },
+    { name: "abort", reject: new Error("aborted"), abort: true },
+  ])("removes the forwarded resume abort listener after $name", async ({ reject, abort }) => {
+    const { resumeAgent } = await import("../src/core/agent-runner.js");
+    const manager = new AgentManager();
+    const { id } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    const resumed = deferred<string>();
+    vi.mocked(resumeAgent).mockReturnValueOnce(resumed.promise);
+    const externalAbort = new AbortController();
+    const add = vi.spyOn(externalAbort.signal, "addEventListener");
+    const remove = vi.spyOn(externalAbort.signal, "removeEventListener");
+
+    const resume = manager.resume(id, "continue", externalAbort.signal);
+    const abortRegistration = add.mock.calls.find(([type]) => type === "abort");
+    if (!abortRegistration) throw new Error("resume abort listener missing");
+    if (abort) externalAbort.abort();
+    if (reject) resumed.reject(reject);
+    else resumed.resolve("resumed");
+    await resume;
+
+    expect(remove).toHaveBeenCalledWith("abort", abortRegistration[1]);
+    manager.dispose();
+  });
+
+  it("manager abort immediately stops a resumed agent without late replacement", async () => {
+    const { resumeAgent } = await import("../src/core/agent-runner.js");
     const onComplete = vi.fn();
     const manager = new AgentManager(3, onComplete);
-    manager.notifyComplete("nonexistent");
+    const { id, record } = await manager.spawnAndWait({}, makeAgentDef(), {
+      prompt: "test",
+      cwd: "/tmp",
+    });
+    const resumed = deferred<string>();
+    onComplete.mockClear();
+    vi.mocked(resumeAgent).mockReturnValueOnce(resumed.promise);
+    const resume = manager.resume(id, "continue");
+
+    expect(manager.abort(id)).toBe(true);
+    expectTerminal(record, "stopped");
+    resumed.reject(new Error("aborted"));
+    await resume;
+
+    expectTerminal(record, "stopped");
+    expect(record.error).toBeUndefined();
     expect(onComplete).not.toHaveBeenCalled();
     manager.dispose();
   });

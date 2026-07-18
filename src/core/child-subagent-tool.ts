@@ -1,9 +1,40 @@
 import { Type } from "typebox";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "./agent-manager.js";
-import type { AgentDiscoveryResult } from "../shared/types.js";
+import type { AgentDefinition, AgentDiscoveryResult, SpawnOptions } from "../shared/types.js";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
+import { createContactSupervisorTool } from "./intercom.js";
+
+export function createAgentCustomToolsFactory(
+  manager: AgentManager,
+  deps: RuntimeDeps,
+  agentDef: AgentDefinition,
+  currentDepth: number,
+): NonNullable<SpawnOptions["createCustomTools"]> {
+  return (context) => {
+    const discovery = deps.discoverAgents(deps.resolvePaths());
+    const tools: unknown[] = [];
+    if (context.allowRecursion) {
+      tools.push(
+        createChildSubagentTool({
+          manager,
+          discovery,
+          allowedAgents: agentDef.subagentAgents,
+          currentDepth: currentDepth + 1,
+          parentCwd: context.cwd,
+          parentAgentId: context.id,
+          deps,
+        }),
+        createChildGetResultTool(manager, context.id),
+      );
+    }
+    if (agentDef.intercom && deps.intercom) {
+      tools.push(createContactSupervisorTool(deps.intercom, context.id, agentDef.name));
+    }
+    return tools;
+  };
+}
 
 const err = (text: string) => ({
   content: [{ type: "text" as const, text }],
@@ -97,6 +128,7 @@ export function createChildSubagentTool(opts: {
           currentDepth,
           isBackground: true,
           spawnedBy: parentAgentId,
+          createCustomTools: createAgentCustomToolsFactory(manager, deps, agentDef, currentDepth),
           ...(params.thinking ? { thinking: params.thinking } : {}),
         });
 

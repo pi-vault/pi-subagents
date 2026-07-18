@@ -84,6 +84,14 @@ describe("RPC handlers", () => {
 
   describe("spawn", () => {
     it("spawns a background agent and returns id", () => {
+      dispose();
+      events = createMockEvents();
+      const deps = createDeps({
+        manager,
+        discoverAgents: () => createDiscovery([createAgent({ subagentAgents: ["Scout"] })]),
+      });
+      dispose = registerRpcHandlers(createMockPi(events), manager, deps).dispose;
+      const spawn = vi.spyOn(manager, "spawn");
       let reply: unknown;
       events.on("subagents:rpc:spawn:reply:r1", (data) => {
         reply = data;
@@ -96,6 +104,12 @@ describe("RPC handlers", () => {
       const r = reply as { success: boolean; data?: { id: string } };
       expect(r.success).toBe(true);
       expect(r.data?.id).toMatch(/^agent-/);
+      expect(spawn.mock.calls[0]?.[2]?.createCustomTools?.({
+        id: r.data?.id ?? "missing",
+        cwd: process.cwd(),
+        allowRecursion: true,
+      }).map((tool) => (tool as { name: string }).name))
+        .toEqual(["subagent", "get_subagent_result"]);
     });
 
     it("returns error for unknown agent", () => {

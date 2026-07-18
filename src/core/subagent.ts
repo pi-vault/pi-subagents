@@ -24,6 +24,7 @@ import { getStepAgents } from "./chain-settings.js";
 import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 import { validateToolBudget } from "./tool-budget.js";
+import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
 
 const CHAIN_OBJECT_SCHEMA = Type.Object({}, { additionalProperties: true });
 const CHAIN_ACCEPTANCE = Type.Object({
@@ -356,6 +357,12 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               toolBudget: options?.toolBudget,
               isolation: options?.isolation,
               parentSignal: options?.parentSignal,
+              createCustomTools: createAgentCustomToolsFactory(
+                deps.manager,
+                deps,
+                effectiveAgentDef,
+                0,
+              ),
             });
           };
 
@@ -678,7 +685,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           parentSignal: signal,
           currentDepth: 0,
           toolBudget: resolvedBudget,
-          _deps: deps,
+          createCustomTools: createAgentCustomToolsFactory(deps.manager, deps, agentDef, 0),
         };
 
         // Resume path
@@ -895,6 +902,7 @@ export function registerAgentCommand(pi: ExtensionAPI, deps: RuntimeDeps): void 
           cwd: ctx.cwd,
           maxTurns,
           currentDepth: 0,
+          createCustomTools: createAgentCustomToolsFactory(deps.manager, deps, agentDef, 0),
         });
 
         pi.sendMessage({
