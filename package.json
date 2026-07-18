@@ -1,8 +1,8 @@
 {
   "name": "@pi-vault/pi-subagents",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
-  "description": "Pi extension for delegating tasks to isolated and specialized subagents",
+  "description": "Pi extension for delegating focused work to specialized subagents - foreground, background, and multi-agent chains.",
   "author": "Lanh Hoang <lanhhoang@users.noreply.github.com>",
   "license": "MIT",
   "homepage": "https://github.com/pi-vault/pi-subagents#readme",
@@ -20,7 +20,9 @@
     "pi-extension",
     "pi-subagents",
     "subagents",
-    "agents"
+    "agents",
+    "chains",
+    "orchestration"
   ],
   "scripts": {
     "format": "biome format --write .",
@@ -42,6 +44,7 @@
   "files": [
     "src",
     "agents",
+    "chains",
     "LICENSE",
     "CHANGELOG.md",
     "README.md"
