@@ -1,4 +1,7 @@
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { normalizeThinkingLevel } from "../shared/thinking.js";
+import type { ChainThinkingLevel } from "../shared/thinking.js";
 
 export interface ModelInfo {
   id: string;
@@ -108,6 +111,24 @@ export function resolveModelSelection(
   if (!model) throw new Error(`Configured model not found: ${canonical}`);
 
   return { requested: requested.trim(), canonical, model };
+}
+
+export function validateModelThinking(
+  model: Model<Api>,
+  canonical: string,
+  requested: unknown,
+): ChainThinkingLevel | undefined {
+  if (requested === undefined) return undefined;
+
+  const level = normalizeThinkingLevel(requested, "model " + canonical);
+  const supported = getSupportedThinkingLevels(model);
+  if (!supported.includes(level)) {
+    throw new Error(
+      `Thinking level "${requested}" is not supported by model ${canonical}; supported levels: ${supported.join(", ")}`,
+    );
+  }
+
+  return level;
 }
 
 export function resolveModel(

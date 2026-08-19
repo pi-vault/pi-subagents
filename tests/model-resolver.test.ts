@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { resolveModel, resolveModelSelection } from "../src/core/model-resolver.js";
+import {
+  resolveModel,
+  resolveModelSelection,
+  validateModelThinking,
+} from "../src/core/model-resolver.js";
 import type { ModelInfo } from "../src/core/model-resolver.js";
 
 const mockModels: ModelInfo[] = [
@@ -21,6 +25,14 @@ const sentinelModel = {
   id: "gpt-5.6-luna",
   provider: "openai-codex",
 } as Model<Api>;
+
+const reasoningModelWithMax = {
+  reasoning: true,
+  thinkingLevelMap: { max: "max" },
+} as Model<Api>;
+
+const reasoningModelWithoutMax = { reasoning: true } as Model<Api>;
+const nonReasoningModel = { reasoning: false } as Model<Api>;
 
 function createRegistry(models: ModelInfo[], available = models) {
   return {
@@ -117,6 +129,44 @@ describe("resolveModel", () => {
     const result = resolveModel("claude sonnet", mockModels);
     expect(result).toBeTruthy();
     expect(result?.id).toBe("claude-sonnet-4-20250514");
+  });
+});
+
+describe("validateModelThinking", () => {
+  it("preserves an omitted request", () => {
+    expect(
+      validateModelThinking(reasoningModelWithMax, "test/reasoning-max", undefined),
+    ).toBeUndefined();
+  });
+
+  it("normalizes supported requested levels", () => {
+    expect(
+      validateModelThinking(reasoningModelWithMax, "test/reasoning-max", " HIGH "),
+    ).toBe("high");
+    expect(
+      validateModelThinking(nonReasoningModel, "test/non-reasoning", "off"),
+    ).toBe("off");
+  });
+
+  it("accepts max only when Pi reports it as supported", () => {
+    expect(
+      validateModelThinking(reasoningModelWithMax, "test/reasoning-max", "max"),
+    ).toBe("max");
+    expect(() =>
+      validateModelThinking(reasoningModelWithoutMax, "test/reasoning", "max"),
+    ).toThrow(/max.*test\/reasoning.*off, minimal, low, medium, high/i);
+  });
+
+  it("rejects unsupported levels without fallback", () => {
+    expect(() =>
+      validateModelThinking(reasoningModelWithoutMax, "test/reasoning", "xhigh"),
+    ).toThrow(/xhigh.*test\/reasoning.*off, minimal, low, medium, high/i);
+  });
+
+  it("keeps normalizeThinkingLevel's lexical validation", () => {
+    expect(() =>
+      validateModelThinking(reasoningModelWithMax, "test/reasoning-max", "extra"),
+    ).toThrow(/accepted levels: off, minimal, low, medium, high, xhigh, max/i);
   });
 });
 
