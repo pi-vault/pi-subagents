@@ -1,11 +1,13 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
+import type { ChainThinkingLevel } from "../shared/thinking.js";
 import type { AgentDefinition, ChainStep, SequentialStep } from "../shared/types.js";
 import { discoverChains } from "./agents.js";
 import { materializeSavedChainSteps, normalizeChainSteps } from "./chain-serializer.js";
 import { getStepAgents } from "./chain-settings.js";
 import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
 import { findAgentByName } from "./subagent.js";
+import { normalizeThinkingLevel, ChainThinkingLevelError } from "../shared/thinking.js";
 
 export class SlashParseError extends Error {}
 
@@ -14,6 +16,7 @@ export interface InlineConfig {
   outputMode?: "inline" | "file-only";
   reads?: string[] | false;
   model?: string;
+  thinking?: ChainThinkingLevel;
   skills?: string[] | false;
   progress?: boolean;
   as?: string;
@@ -77,7 +80,7 @@ export function stripExecutionFlags(rawArgs: string): ExecutionFlags {
 // Inline config parser
 // ---------------------------------------------------------------------------
 
-const parseInlineConfig = (raw: string): InlineConfig => {
+const parseInlineConfig = (raw: string, source = "agent token"): InlineConfig => {
   const config: InlineConfig = {};
   for (const part of raw.split(",")) {
     const trimmed = part.trim();
@@ -101,6 +104,16 @@ const parseInlineConfig = (raw: string): InlineConfig => {
         break;
       case "model":
         config.model = val || undefined;
+        break;
+      case "thinking":
+        try {
+          config.thinking = normalizeThinkingLevel(val, source);
+        } catch (error) {
+          if (error instanceof ChainThinkingLevelError) {
+            throw new SlashParseError(error.message);
+          }
+          throw error;
+        }
         break;
       case "skill":
       case "skills":
@@ -135,9 +148,13 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
   const bracket = token.indexOf("[");
   if (bracket === -1) return { name: token, config: {} };
   const end = token.lastIndexOf("]");
+  const name = token.slice(0, bracket);
   return {
-    name: token.slice(0, bracket),
-    config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)),
+    name,
+    config: parseInlineConfig(
+      token.slice(bracket + 1, end !== -1 ? end : undefined),
+      `agent token '${name}'`,
+    ),
   };
 };
 
@@ -429,7 +446,12 @@ export function buildChainSteps(
   // Parse into steps — single-step (no arrow) or multi-step expression
   let parsedSteps: ParsedGroupStep[];
   if (!trimmed.includes(" -> ")) {
-    parsedSteps = [parseSingleTaskToken(trimmed)];
+    try {
+      parsedSteps = [parseSingleTaskToken(trimmed)];
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error));
+      return null;
+    }
   } else {
     try {
       parsedSteps = parseChainExpression(trimmed).steps;

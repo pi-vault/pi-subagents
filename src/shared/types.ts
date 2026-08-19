@@ -1,5 +1,7 @@
 export type JoinMode = "async" | "group" | "smart";
 
+import type { ChainThinkingLevel } from "./thinking.js";
+
 export interface ToolBudgetConfig {
   soft?: number;
   hard: number;
@@ -350,6 +352,7 @@ export interface SequentialStep {
   outputMode?: "inline" | "file-only";
   reads?: string[] | false;
   model?: string;
+  thinking?: ChainThinkingLevel;
   skills?: string[] | false;
   progress?: boolean;
   cwd?: string;
@@ -369,6 +372,7 @@ export interface ParallelTaskItem {
   outputMode?: "inline" | "file-only";
   reads?: string[] | false;
   model?: string;
+  thinking?: ChainThinkingLevel;
   skills?: string[] | false;
   progress?: boolean;
   cwd?: string;
@@ -437,6 +441,7 @@ export interface ChainStepConfig {
   outputMode?: "inline" | "file-only";
   reads?: string[] | false;
   model?: string;
+  thinking?: ChainThinkingLevel;
   skills?: string[] | false;
   progress?: boolean;
   cwd?: string;

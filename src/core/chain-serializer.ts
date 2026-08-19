@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { normalizeThinkingLevel } from "../shared/thinking.js";
+import type { ChainConfig, ChainStep, ChainStepConfig, JsonSchemaObject } from "../shared/types.js";
+import { ChainThinkingLevelError } from "../shared/thinking.js";
 import {
   ChainOutputValidationError,
   type ChainOutputValidationContext,
   validateChainOutputBindings,
 } from "./chain-outputs.js";
 import { validateToolBudget } from "./tool-budget.js";
-import type { ChainConfig, ChainStep, ChainStepConfig, JsonSchemaObject } from "../shared/types.js";
 
 export class ChainDefinitionError extends Error {
   readonly name = "ChainDefinitionError";
@@ -30,6 +32,7 @@ const SEQUENTIAL_STEP_FIELDS = new Set([
   "outputMode",
   "reads",
   "model",
+  "thinking",
   "skills",
   "progress",
   "cwd",
@@ -172,6 +175,25 @@ function validateOutputSchema(
   }
 }
 
+function validateThinking(
+  task: UnknownRecord,
+  source: string,
+  label: string,
+): void {
+  if (task.thinking === undefined) return;
+  try {
+    task.thinking = normalizeThinkingLevel(task.thinking, source);
+  } catch (error) {
+    if (error instanceof ChainThinkingLevelError) {
+      const message = error.message.startsWith(`${source}: `)
+        ? error.message.slice(source.length + 2)
+        : error.message;
+      definitionError(source, `${label}.${message}`);
+    }
+    throw error;
+  }
+}
+
 function validateTaskFields(
   task: UnknownRecord,
   mode: DefinitionMode,
@@ -211,6 +233,7 @@ function validateTaskFields(
     }
     validatePositiveInteger(task, "count", source, label);
   }
+  validateThinking(task, source, label);
 }
 
 function normalizeDefinitions(
@@ -501,6 +524,9 @@ function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
       case "model":
         if (val) step.model = val;
         break;
+      case "thinking":
+        step.thinking = val as ChainStepConfig["thinking"];
+        break;
       case "skills":
         if (val === "false") {
           step.skills = false;
@@ -678,6 +704,7 @@ export function serializeChain(config: ChainConfig): string {
     else if (Array.isArray(step.reads) && step.reads.length > 0)
       lines.push(`reads: ${step.reads.join(", ")}`);
     if (step.model) lines.push(`model: ${step.model}`);
+    if (step.thinking) lines.push(`thinking: ${step.thinking}`);
     if (step.skills === false) lines.push("skills: false");
     else if (Array.isArray(step.skills) && step.skills.length > 0)
       lines.push(`skills: ${step.skills.join(", ")}`);
@@ -692,10 +719,11 @@ export function serializeChain(config: ChainConfig): string {
 }
 
 export function serializeJsonChain(config: ChainConfig): string {
+  const normalizedSteps = normalizeSavedChainSteps(config.steps, config.filePath);
   const root: Record<string, unknown> = {
     name: config.name,
     description: config.description,
-    chain: config.steps,
+    chain: normalizedSteps,
   };
   if (config.packageName) root.package = config.packageName;
   if (config.extraFields) Object.assign(root, config.extraFields);
