@@ -626,6 +626,7 @@ describe("inline thinking config", () => {
     );
     expect(result).toBeNull();
     expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatch(/scout/);
     expect(notifications[0]).toMatch(/thinking/i);
     expect(notifications[0]).toMatch(/off.*minimal.*low/);
   });

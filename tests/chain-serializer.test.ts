@@ -783,13 +783,13 @@ describe("thinking contract", () => {
   test("rejects non-string thinking values", () => {
     expect(() =>
       normalizeChainSteps([{ agent: "scout", task: "scan", thinking: 5 }], "tool chain"),
-    ).toThrow(/string/);
+    ).toThrow(/string.*off.*minimal.*low.*medium.*high.*xhigh.*max/);
   });
 
   test("rejects null thinking values", () => {
     expect(() =>
       normalizeChainSteps([{ agent: "scout", task: "scan", thinking: null }], "tool chain"),
-    ).toThrow(/string/);
+    ).toThrow(/string.*off.*minimal.*low.*medium.*high.*xhigh.*max/);
   });
 
   test("rejects invalid thinking on static parallel tasks with task label", () => {

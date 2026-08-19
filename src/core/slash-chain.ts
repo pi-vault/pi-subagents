@@ -80,7 +80,7 @@ export function stripExecutionFlags(rawArgs: string): ExecutionFlags {
 // Inline config parser
 // ---------------------------------------------------------------------------
 
-const parseInlineConfig = (raw: string): InlineConfig => {
+const parseInlineConfig = (raw: string, source = "agent token"): InlineConfig => {
   const config: InlineConfig = {};
   for (const part of raw.split(",")) {
     const trimmed = part.trim();
@@ -107,7 +107,7 @@ const parseInlineConfig = (raw: string): InlineConfig => {
         break;
       case "thinking":
         try {
-          config.thinking = normalizeThinkingLevel(val, `agent token '${key}'`);
+          config.thinking = normalizeThinkingLevel(val, source);
         } catch (error) {
           if (error instanceof ChainThinkingLevelError) {
             throw new SlashParseError(error.message);
@@ -148,9 +148,13 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
   const bracket = token.indexOf("[");
   if (bracket === -1) return { name: token, config: {} };
   const end = token.lastIndexOf("]");
+  const name = token.slice(0, bracket);
   return {
-    name: token.slice(0, bracket),
-    config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)),
+    name,
+    config: parseInlineConfig(
+      token.slice(bracket + 1, end !== -1 ? end : undefined),
+      `agent token '${name}'`,
+    ),
   };
 };
 

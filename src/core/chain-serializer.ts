@@ -181,9 +181,6 @@ function validateThinking(
   label: string,
 ): void {
   if (task.thinking === undefined) return;
-  if (typeof task.thinking !== "string") {
-    definitionError(source, `${label}.thinking must be a string`);
-  }
   try {
     task.thinking = normalizeThinkingLevel(task.thinking, source);
   } catch (error) {
