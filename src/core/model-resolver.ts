@@ -120,7 +120,7 @@ export function validateModelThinking(
 ): ChainThinkingLevel | undefined {
   if (requested === undefined) return undefined;
 
-  const level = normalizeThinkingLevel(requested, "model " + canonical);
+  const level = normalizeThinkingLevel(requested, `model ${canonical}`);
   const supported = getSupportedThinkingLevels(model);
   if (!supported.includes(level)) {
     throw new Error(
