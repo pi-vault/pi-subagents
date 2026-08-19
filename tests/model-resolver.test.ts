@@ -153,6 +153,12 @@ describe("resolveModelSelection", () => {
     );
   });
 
+  it("rejects a known provider with an empty model ID", () => {
+    expect(() => resolveModelSelection("openai/", registry)).toThrow(
+      /non-empty/i,
+    );
+  });
+
   it("rejects unknown and blank requests", () => {
     expect(() => resolveModelSelection("missing", registry)).toThrow(/unknown/i);
     expect(() => resolveModelSelection("   ", registry)).toThrow(/non-empty/i);

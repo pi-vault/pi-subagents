@@ -61,6 +61,9 @@ export function resolveModelSelection(
     ? candidates.filter((candidate) => candidate.provider.toLowerCase() === provider)
     : candidates;
   const modelQuery = providerIsRegistered ? query.slice(slashIndex + 1) : query;
+  if (providerIsRegistered && !modelQuery) {
+    throw new Error("Model ID must be non-empty");
+  }
 
   const choose = (matches: ModelCandidate[]): ModelCandidate | undefined => {
     if (matches.length > 1) {
