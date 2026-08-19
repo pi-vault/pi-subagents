@@ -568,3 +568,101 @@ describe("buildChainSteps", () => {
     expect(notifications[0]).toMatch(/at least two/i);
   });
 });
+
+describe("inline thinking config", () => {
+  test("parseSingleTaskToken normalizes thinking=MAX", () => {
+    const parsed = parseSingleTaskToken("scout[thinking=MAX] \"scan\"");
+    expect(parsed.config.thinking).toBe("max");
+    expect(parsed.task).toBe("scan");
+  });
+
+  test("parseSingleTaskToken normalizes thinking=High", () => {
+    const parsed = parseSingleTaskToken("scout[thinking=High] \"scan\"");
+    expect(parsed.config.thinking).toBe("high");
+  });
+
+  test("parseSingleTaskToken leaves existing inline metadata intact", () => {
+    const parsed = parseSingleTaskToken(
+      "scout[thinking=High,as=ctx,label=Scan] \"scan\"",
+    );
+    expect(parsed.config.thinking).toBe("high");
+    expect(parsed.config.as).toBe("ctx");
+    expect(parsed.config.label).toBe("Scan");
+  });
+
+  test("buildChainSteps propagates thinking onto sequential steps", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout[thinking=MAX] "scan" -> reviewer "review"',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).not.toBeNull();
+    expect(notifications).toEqual([]);
+    const first = result!.chain[0] as unknown as Record<string, unknown>;
+    expect(first.thinking).toBe("max");
+  });
+
+  test("buildChainSteps propagates thinking onto parallel-group tasks", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout "scan" -> (reviewer[thinking=High] "A" | writer[thinking=low] "B")',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).not.toBeNull();
+    expect(notifications).toEqual([]);
+    const group = result!.chain[1] as unknown as { parallel: Array<Record<string, unknown>> };
+    expect(group.parallel[0]?.thinking).toBe("high");
+    expect(group.parallel[1]?.thinking).toBe("low");
+  });
+
+  test("buildChainSteps rejects invalid thinking with token context", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout[thinking=extreme] "scan" -> reviewer "review"',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).toBeNull();
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatch(/thinking/i);
+    expect(notifications[0]).toMatch(/off.*minimal.*low/);
+  });
+
+  test("buildChainSteps rejects empty thinking", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout[thinking=] "scan" -> reviewer "review"',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).toBeNull();
+    expect(notifications[0]).toMatch(/thinking/i);
+  });
+
+  test("buildChainSteps rejects thinking=1 (non-string)", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout[thinking=1] "scan" -> reviewer "review"',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).toBeNull();
+    expect(notifications[0]).toMatch(/thinking/i);
+  });
+
+  test("group-level options remain group-only (no thinking on group suffix)", () => {
+    const notifications: string[] = [];
+    const result = buildChainSteps(
+      'scout "scan" -> (reviewer "A" | writer "B")[concurrency=2]',
+      AGENTS,
+      (msg) => notifications.push(msg),
+    );
+    expect(result).not.toBeNull();
+    expect(notifications).toEqual([]);
+    const group = result!.chain[1] as unknown as Record<string, unknown>;
+    expect(group.thinking).toBeUndefined();
+    expect(group.concurrency).toBe(2);
+  });
+});

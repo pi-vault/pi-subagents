@@ -47,6 +47,7 @@ const CHAIN_TASK_FIELDS = {
   outputMode: Type.Optional(Type.String()),
   reads: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal(false)])),
   model: Type.Optional(Type.String()),
+  thinking: Type.Optional(Type.String({ description: "Thinking level: off, minimal, low, medium, high, xhigh, max" })),
   skills: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Literal(false)])),
   progress: Type.Optional(Type.Boolean()),
   cwd: Type.Optional(Type.String()),

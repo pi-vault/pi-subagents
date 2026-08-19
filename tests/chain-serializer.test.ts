@@ -696,3 +696,329 @@ describe("serializeJsonChain", () => {
     expect(parsed.version).toBe("2");
   });
 });
+
+describe("thinking contract", () => {
+  test("normalizes a valid uppercase thinking level on a sequential step", () => {
+    const steps = normalizeChainSteps(
+      [{ agent: "scout", task: "scan", thinking: "MAX" }],
+      "tool chain",
+    );
+    expect((steps[0] as { thinking?: string }).thinking).toBe("max");
+  });
+
+  test("normalizes mixed-case thinking and preserves explicit off", () => {
+    const steps = normalizeChainSteps(
+      [
+        { agent: "scout", task: "scan", thinking: "High" },
+        { agent: "worker", task: "build", thinking: "off" },
+      ],
+      "tool chain",
+    );
+    expect((steps[0] as { thinking?: string }).thinking).toBe("high");
+    expect((steps[1] as { thinking?: string }).thinking).toBe("off");
+  });
+
+  test("preserves omission when thinking is absent", () => {
+    const steps = normalizeChainSteps(
+      [{ agent: "scout", task: "scan" }, { agent: "worker", task: "build" }],
+      "tool chain",
+    );
+    expect((steps[0] as { thinking?: string }).thinking).toBeUndefined();
+    expect((steps[1] as { thinking?: string }).thinking).toBeUndefined();
+  });
+
+  test("trims surrounding whitespace before normalization", () => {
+    const steps = normalizeChainSteps(
+      [{ agent: "scout", task: "scan", thinking: "  medium  " }],
+      "tool chain",
+    );
+    expect((steps[0] as { thinking?: string }).thinking).toBe("medium");
+  });
+
+  test("normalizes thinking on static parallel tasks", () => {
+    const steps = normalizeChainSteps(
+      [
+        {
+          parallel: [
+            { agent: "worker", task: "build", thinking: "MAX" },
+            { agent: "reviewer", task: "review", thinking: "low" },
+          ],
+        },
+      ],
+      "tool chain",
+    );
+    const parallel = (steps[0] as { parallel: Array<{ thinking?: string }> }).parallel;
+    expect(parallel[0]?.thinking).toBe("max");
+    expect(parallel[1]?.thinking).toBe("low");
+  });
+
+  test("normalizes thinking on the dynamic parallel template", () => {
+    const steps = normalizeChainSteps(
+      [
+        {
+          expand: { from: { output: "targets", path: "/items" } },
+          parallel: { agent: "reviewer", task: "review", thinking: "XHIGH" },
+          collect: { as: "reviews" },
+        },
+      ],
+      "tool chain",
+      { priorOutputNames: ["targets"] },
+    );
+    const template = (steps[0] as { parallel: { thinking?: string } }).parallel;
+    expect(template.thinking).toBe("xhigh");
+  });
+
+  test("rejects empty thinking string with step and source context", () => {
+    expect(() =>
+      normalizeChainSteps([{ agent: "scout", task: "scan", thinking: "" }], "tool chain"),
+    ).toThrow(ChainDefinitionError);
+  });
+
+  test("rejects unsupported thinking values and lists accepted levels", () => {
+    expect(() =>
+      normalizeChainSteps([{ agent: "scout", task: "scan", thinking: "extreme" }], "tool chain"),
+    ).toThrow(/off.*minimal.*low.*medium.*high.*xhigh.*max/);
+  });
+
+  test("rejects non-string thinking values", () => {
+    expect(() =>
+      normalizeChainSteps([{ agent: "scout", task: "scan", thinking: 5 }], "tool chain"),
+    ).toThrow(/string/);
+  });
+
+  test("rejects null thinking values", () => {
+    expect(() =>
+      normalizeChainSteps([{ agent: "scout", task: "scan", thinking: null }], "tool chain"),
+    ).toThrow(/string/);
+  });
+
+  test("rejects invalid thinking on static parallel tasks with task label", () => {
+    expect(() =>
+      normalizeChainSteps(
+        [{ parallel: [{ agent: "worker", task: "build", thinking: "extreme" }] }],
+        "tool chain",
+      ),
+    ).toThrow(/parallel task 1/);
+  });
+
+  test("rejects invalid thinking on the dynamic parallel template", () => {
+    expect(() =>
+      normalizeChainSteps(
+        [
+          {
+            expand: { from: { output: "targets", path: "/items" } },
+            parallel: { agent: "reviewer", task: "review", thinking: "extreme" },
+            collect: { as: "reviews" },
+          },
+        ],
+        "tool chain",
+        { priorOutputNames: ["targets"] },
+      ),
+    ).toThrow(/dynamic parallel template/);
+  });
+});
+
+describe("parseChain (.chain.md) thinking", () => {
+  test("parses an uppercase thinking level and normalizes it", () => {
+    const content = [
+      "---",
+      "name: think",
+      "description: thinking chain",
+      "---",
+      "",
+      "## scout",
+      "thinking: MAX",
+      "",
+      "scan the code",
+    ].join("\n");
+
+    const config = parseChain("/tmp/think.chain.md", content);
+    expect(config.steps[0]!.thinking).toBe("max");
+  });
+
+  test("preserves omission when thinking line is absent", () => {
+    const content = [
+      "---",
+      "name: think",
+      "description: thinking chain",
+      "---",
+      "",
+      "## scout",
+      "",
+      "scan the code",
+    ].join("\n");
+
+    const config = parseChain("/tmp/think.chain.md", content);
+    expect(config.steps[0]!.thinking).toBeUndefined();
+  });
+
+  test("rejects empty thinking value with chain path context", () => {
+    const content = [
+      "---",
+      "name: think",
+      "description: thinking chain",
+      "---",
+      "",
+      "## scout",
+      "thinking:",
+      "",
+      "scan the code",
+    ].join("\n");
+
+    expect(() => parseChain("/tmp/think.chain.md", content)).toThrow(/step 1\.thinking/);
+  });
+
+  test("rejects unsupported thinking level with accepted levels", () => {
+    const content = [
+      "---",
+      "name: think",
+      "description: thinking chain",
+      "---",
+      "",
+      "## scout",
+      "thinking: extreme",
+      "",
+      "scan the code",
+    ].join("\n");
+
+    expect(() => parseChain("/tmp/think.chain.md", content)).toThrow(/off.*minimal.*low/);
+  });
+
+  test("roundtrips a thinking value through serializeChain", () => {
+    const original = parseChain(
+      "/tmp/think.chain.md",
+      [
+        "---",
+        "name: think",
+        "description: thinking chain",
+        "---",
+        "",
+        "## scout",
+        "thinking: High",
+        "",
+        "scan the code",
+      ].join("\n"),
+    );
+
+    const serialized = serializeChain(original);
+    const reparsed = parseChain("/tmp/think.chain.md", serialized);
+    expect(reparsed.steps[0]!.thinking).toBe("high");
+  });
+
+  test("serialized chain never emits an uppercase thinking level", () => {
+    const original = parseChain(
+      "/tmp/think.chain.md",
+      [
+        "---",
+        "name: think",
+        "description: thinking chain",
+        "---",
+        "",
+        "## scout",
+        "thinking: High",
+        "",
+        "scan the code",
+      ].join("\n"),
+    );
+
+    expect(serializeChain(original)).not.toMatch(/thinking:\s*High/);
+  });
+});
+
+describe("parseJsonChain (.chain.json) thinking", () => {
+  test("normalizes an uppercase thinking value", () => {
+    const content = JSON.stringify({
+      name: "think",
+      description: "thinking chain",
+      chain: [{ agent: "scout", task: "scan", thinking: "High" }],
+    });
+
+    const config = parseJsonChain("/tmp/think.chain.json", content);
+    expect(config.steps[0]!.thinking).toBe("high");
+  });
+
+  test("preserves explicit off", () => {
+    const content = JSON.stringify({
+      name: "think",
+      description: "thinking chain",
+      chain: [{ agent: "scout", task: "scan", thinking: "off" }],
+    });
+
+    const config = parseJsonChain("/tmp/think.chain.json", content);
+    expect(config.steps[0]!.thinking).toBe("off");
+  });
+
+  test("normalizes thinking on static parallel items", () => {
+    const content = JSON.stringify({
+      name: "think",
+      description: "thinking chain",
+      chain: [
+        {
+          parallel: [
+            { agent: "worker", task: "build", thinking: "MAX" },
+            { agent: "reviewer", task: "review", thinking: "low" },
+          ],
+        },
+      ],
+    });
+
+    const config = parseJsonChain("/tmp/think.chain.json", content);
+    const parallel = config.steps[0]!.parallel as Array<{ thinking?: string }>;
+    expect(parallel[0]?.thinking).toBe("max");
+    expect(parallel[1]?.thinking).toBe("low");
+  });
+
+  test("normalizes thinking on the dynamic parallel template", () => {
+    const content = JSON.stringify({
+      name: "think",
+      description: "thinking chain",
+      chain: [
+        { agent: "scout", task: "scan", as: "targets" },
+        {
+          expand: { from: { output: "targets", path: "/items" } },
+          parallel: { agent: "reviewer", task: "review", thinking: "XHIGH" },
+          collect: { as: "reviews" },
+        },
+      ],
+    });
+
+    const config = parseJsonChain("/tmp/think.chain.json", content);
+    const template = config.steps[1]!.parallel as { thinking?: string };
+    expect(template.thinking).toBe("xhigh");
+  });
+
+  test("rejects invalid thinking values before materialization", () => {
+    const content = JSON.stringify({
+      name: "think",
+      description: "thinking chain",
+      chain: [{ agent: "scout", task: "scan", thinking: "extreme" }],
+    });
+
+    expect(() => parseJsonChain("/tmp/think.chain.json", content)).toThrow(/off.*minimal/);
+  });
+
+  test("rejects non-string thinking values", () => {
+    const content = JSON.stringify({
+      name: "think",
+      description: "thinking chain",
+      chain: [{ agent: "scout", task: "scan", thinking: 5 }],
+    });
+
+    expect(() => parseJsonChain("/tmp/think.chain.json", content)).toThrow(/string/);
+  });
+
+  test("serializeJsonChain emits normalized thinking values", () => {
+    const original = parseJsonChain(
+      "/tmp/think.chain.json",
+      JSON.stringify({
+        name: "think",
+        description: "thinking chain",
+        chain: [{ agent: "scout", task: "scan", thinking: "High" }],
+      }),
+    );
+
+    const serialized = serializeJsonChain(original);
+    const parsed = JSON.parse(serialized);
+    expect(parsed.chain[0].thinking).toBe("high");
+  });
+});
