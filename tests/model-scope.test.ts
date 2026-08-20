@@ -4,6 +4,7 @@ import type { ModelScopeConfig } from "../src/core/model-scope.js";
 import { createAgent, createDeps, createDiscovery } from "./_test-helpers.js";
 import { registerSubagentTool } from "../src/core/subagent.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { AgentManager } from "../src/core/agent-manager.js";
 import { DEFAULT_SETTINGS } from "../src/core/settings.js";
 
@@ -188,6 +189,16 @@ describe("subagent tool: model scope enforcement", () => {
   const testDir = "/tmp";
 
   function setupScopeTest(modelScope: object, agentOverrides?: Partial<Parameters<typeof createAgent>[0]>) {
+    const models = [
+      { provider: "anthropic", id: "claude-sonnet-4-20250514" },
+      { provider: "google", id: "gemini-pro" },
+    ] as Model<Api>[];
+    const modelRegistry = {
+      getAll: () => models,
+      getAvailable: () => models,
+      find: (provider: string, id: string) =>
+        models.find((model) => model.provider === provider && model.id === id),
+    };
     const manager = new AgentManager();
     const sentMessages: Array<{ customType: string; content: string }> = [];
     const deps = createDeps({
@@ -214,7 +225,7 @@ describe("subagent tool: model scope enforcement", () => {
     } as unknown as ExtensionAPI;
 
     registerSubagentTool(pi, deps);
-    const ctx = { cwd: testDir } as unknown as ExtensionContext;
+    const ctx = { cwd: testDir, modelRegistry } as unknown as ExtensionContext;
 
     return {
       execute: (params: Record<string, unknown>) =>
@@ -334,10 +345,7 @@ describe("subagent tool: model scope enforcement", () => {
       chain: [{ agent: "Scout", task: "explore" }],
     });
 
-    expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toContain(
-      'Cannot resolve model "google/gemini-pro": model registry unavailable',
-    );
+    expect(result.isError).toBe(false);
     expect(sentMessages.some((m) => m.customType === "model_scope_warning")).toBe(true);
   });
 });
