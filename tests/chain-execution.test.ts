@@ -171,6 +171,41 @@ describe("executeChain — sequential", () => {
     manager.dispose();
   });
 
+  test("preflights an appended batch before resolving or spawning it", async () => {
+    const manager = new AgentManager();
+    const runId = `append-preflight-${Date.now()}`;
+    const steps: ChainStep[] = [{ agent: "scout", as: "first" }];
+    manager.fireAndForgetChain(
+      runId,
+      "append",
+      steps,
+      "/tmp",
+      () => new Promise(() => {}),
+    );
+    const appended: ChainStep[] = [{ agent: "planner", task: "use {outputs.first}" }];
+    enqueueChainAppendRequest(manager, runId, appended, makeAgentDef);
+    const deps = makeMockDeps([{ result: "one" }]);
+    const preflightChain = vi.fn(() => {
+      throw new Error("appended model rejected");
+    });
+
+    await expect(executeChain({
+      steps,
+      task: "work",
+      spawnAndWait: deps.spawnAndWait,
+      findAgent: deps.findAgent,
+      cwd: "/tmp",
+      runId,
+      isAsync: true,
+      preflightChain,
+    })).rejects.toThrow("appended model rejected");
+
+    expect(preflightChain).toHaveBeenCalledWith(appended);
+    expect(deps.spawnAndWait).toHaveBeenCalledTimes(1);
+    resetAppendQueues();
+    manager.dispose();
+  });
+
   test("closes append admission after the final consumption point", async () => {
     const manager = new AgentManager();
     const runId = `append-close-${Date.now()}`;

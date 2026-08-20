@@ -204,6 +204,83 @@ describe("chain mode dispatch", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
+  test("preflights invalid initial chains before foreground or background dispatch", async () => {
+    const manager = new AgentManager();
+    const background = vi.spyOn(manager, "fireAndForgetChain");
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const deps = createDeps({ manager });
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, deps);
+    const ctx = {
+      ...CTX,
+      modelRegistry: {
+        getAll: () => [{ provider: "test", id: "model" }],
+        getAvailable: () => [{ provider: "test", id: "model" }],
+        find: () => ({ reasoning: true } as Model<Api>),
+      },
+    };
+
+    const foreground = await registeredTool().execute(
+      "tc-foreground",
+      { task: "work", chain: [{ agent: "Scout", model: "unknown/model" }] },
+      undefined,
+      undefined,
+      ctx,
+    ) as { isError: boolean; content: Array<{ text: string }> };
+    const backgroundResult = await registeredTool().execute(
+      "tc-background",
+      { task: "work", chain: [{ agent: "Scout", model: "unknown/model" }], run_in_background: true },
+      undefined,
+      undefined,
+      ctx,
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(foreground.isError).toBe(true);
+    expect(foreground.content[0]?.text).toContain("Unknown model: unknown/model");
+    expect(backgroundResult.isError).toBe(true);
+    expect(backgroundResult.content[0]?.text).toContain("Unknown model: unknown/model");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test("preflights only the final clarification edit", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step-1",
+      record: completedRecord("done"),
+    });
+    const deps = createDeps({ manager });
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, deps);
+    const registry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => ({ reasoning: true } as Model<Api>),
+    };
+
+    const validEdit = await registeredTool().execute(
+      "tc-valid-edit",
+      { task: "work", chain: [{ agent: "Scout", model: "unknown/model" }], clarify: true },
+      undefined,
+      undefined,
+      { ...CTX, modelRegistry: registry, ui: { custom: async () => ({ action: "run", steps: [{ agent: "Scout" }] }) } },
+    ) as { isError: boolean };
+    const invalidEdit = await registeredTool().execute(
+      "tc-invalid-edit",
+      { task: "work", chain: [{ agent: "Scout" }], clarify: true },
+      undefined,
+      undefined,
+      { ...CTX, modelRegistry: registry, ui: { custom: async () => ({ action: "run", steps: [{ agent: "Scout", model: "unknown/model" }] }) } },
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(validEdit.isError).toBe(false);
+    expect(invalidEdit.isError).toBe(true);
+    expect(invalidEdit.content[0]?.text).toContain("Unknown model: unknown/model");
+    expect(spawn).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
   test("returns error details when executeChain throws", async () => {
     const deps = createDeps({
       discoverAgents: () => createDiscovery([]),

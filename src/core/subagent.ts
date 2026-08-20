@@ -10,6 +10,7 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
+  ChainStep,
   ResolvedToolBudget,
   SubagentExecutionDetails,
   SubagentToolInput,
@@ -25,6 +26,7 @@ import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./o
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 import { validateToolBudget } from "./tool-budget.js";
 import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
+import { preflightChainModels } from "./chain-preflight.js";
 
 const CHAIN_OBJECT_SCHEMA = Type.Object({}, { additionalProperties: true });
 const CHAIN_ACCEPTANCE = Type.Object({
@@ -332,23 +334,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               : agentDef;
             if (options?.model !== undefined) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
 
-            // Model scope enforcement for chain steps
             const stepModel = options?.model ?? agentDef.model;
-            if (stepModel !== undefined && settings.modelScope) {
-              const source: ModelSource = options?.modelSource ?? (options?.model !== undefined ? "explicit" : "inherited");
-              const violation = checkModelScope(stepModel, settings.modelScope, source);
-              if (violation && violation.severity === "error") {
-                throw new Error(violation.message);
-              }
-              if (violation && violation.severity === "warn") {
-                pi.sendMessage({
-                  customType: "model_scope_warning",
-                  content: `[chain step] ${violation.message}`,
-                  display: true,
-                });
-              }
-            }
-
             if (stepModel !== undefined && !ctx.modelRegistry) {
               throw new Error(
                 `Cannot resolve model "${stepModel}": model registry unavailable`,
@@ -395,6 +381,17 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             if (!agent) throw new Error(`Unknown agent: "${name}"`);
             return agent;
           };
+          const preflightChain = (steps: ChainStep[]) => preflightChainModels(steps, findAgent, {
+            registry: ctx.modelRegistry,
+            parentModel: ctx.model,
+            modelScope: settings.modelScope,
+            onScopeWarning: (warning) => pi.sendMessage({
+              customType: "model_scope_warning",
+              content: `[chain step] ${warning.message}`,
+              display: true,
+            }),
+          });
+          preflightChain(chainSteps);
 
           // Background chain dispatch — fire and forget
           if (params.run_in_background) {
@@ -413,6 +410,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                 signal: chainSignal,
                 isAsync: true,
                 onAppendClose: closeAppendAdmission,
+                preflightChain,
                 onGraphUpdate: (snapshot) => {
                   deps.chainWidget?.update(snapshot);
                   const record = deps.manager.getRecord(chainRunId);
@@ -449,6 +447,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             cwd: effectiveCwd,
             runId: chainRunId,
             signal,
+            preflightChain,
             onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
             getSpawnBudget: () => deps.manager.getSpawnBudget(),
           });
