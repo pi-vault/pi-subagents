@@ -174,6 +174,44 @@ describe("executeSlashChain validation", () => {
     manager.dispose();
   });
 
+  test("rejects an empty inline model override instead of inheriting the agent model", async () => {
+    const sentinelModel = { reasoning: true } as Model<Api>;
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const messages: Array<{ content: string }> = [];
+    const deps = createDeps({
+      manager,
+      discoverAgents: () => createDiscovery([createAgent({ model: "test/model" })]),
+    });
+    const built = buildChainSteps(
+      'Scout[model=] "work"',
+      [{ name: "Scout" }],
+      vi.fn(),
+    );
+    if (!built) throw new Error("expected inline chain to parse");
+
+    await executeSlashChain(
+      { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI,
+      {
+        cwd: "/tmp",
+        modelRegistry: {
+          getAll: () => [{ provider: "test", id: "model" }],
+          getAvailable: () => [{ provider: "test", id: "model" }],
+          find: () => sentinelModel,
+        },
+      } as unknown as ExtensionCommandContext,
+      deps,
+      built.chain,
+      built.task,
+      false,
+      true,
+    );
+
+    expect(messages[0]?.content).toContain("Model request must be non-empty");
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
   test("aborting a background slash chain cancels its in-flight child", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(246813579);
     const manager = new AgentManager();
