@@ -561,7 +561,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             `Cannot resolve model "${resolved.model}": model registry unavailable`,
           );
         }
-        const selection = resolved.model
+        const selection = resolved.model !== undefined
           ? resolveModelSelection(resolved.model, ctx.modelRegistry)
           : undefined;
         const selectedModel = selection?.model ?? ctx.model;

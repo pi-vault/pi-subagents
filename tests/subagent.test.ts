@@ -274,6 +274,31 @@ describe("registerSubagentTool", () => {
     expect(spawnAndWait).not.toHaveBeenCalled();
   });
 
+  test("rejects an empty explicit model instead of falling back to the parent", async () => {
+    const parentModel = { reasoning: true } as Model<Api>;
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => parentModel,
+    };
+    const { pi, registeredTool } = createPi();
+    const manager = new AgentManager();
+    const spawnAndWait = vi.spyOn(manager, "spawnAndWait");
+    registerSubagentTool(pi, createDeps({ manager }));
+
+    const result = await registeredTool().execute(
+      "tool-call-empty-model",
+      { agent: "Scout", task: "explore", model: "" },
+      undefined,
+      undefined,
+      { cwd: "/repo", model: parentModel, modelRegistry } as unknown as ExtensionContext,
+    ) as unknown as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("Model request must be non-empty");
+    expect(spawnAndWait).not.toHaveBeenCalled();
+  });
+
   test("uses the active settings snapshot when params.cwd differs", async () => {
     const { pi, registeredTool } = createPi();
     const manager = new AgentManager();
