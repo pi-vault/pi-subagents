@@ -356,6 +356,10 @@ describe("parseSingleTaskToken", () => {
     expect(parsed.config.skills).toBe(false);
   });
 
+  test("preserves an empty inline model override", () => {
+    expect(parseSingleTaskToken("scout[model=]").config.model).toBe("");
+  });
+
   test("ignores a non-positive count", () => {
     expect(parseSingleTaskToken("scout[count=0]").config.count).toBeUndefined();
     expect(parseSingleTaskToken("scout[count=x]").config.count).toBeUndefined();

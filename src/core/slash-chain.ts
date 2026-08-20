@@ -104,7 +104,7 @@ const parseInlineConfig = (raw: string, source = "agent token"): InlineConfig =>
         config.reads = val === "false" ? false : val.split("+").filter(Boolean);
         break;
       case "model":
-        config.model = val || undefined;
+        config.model = val;
         break;
       case "thinking":
         try {
