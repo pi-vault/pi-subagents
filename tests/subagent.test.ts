@@ -3,6 +3,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
 import { DEFAULT_SETTINGS } from "../src/core/settings.js";
@@ -176,6 +177,101 @@ describe("registerSubagentTool", () => {
     expect(createCustomTools?.({ id: "run-1", cwd: "/repo", allowRecursion: true })
       .map((tool) => (tool as { name: string }).name))
       .toEqual(["subagent", "get_subagent_result"]);
+  });
+
+  test("forwards the selected registry model and normalized thinking", async () => {
+    const sentinelModel = { reasoning: true } as Model<Api>;
+    const parentModel = { reasoning: true } as Model<Api>;
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => sentinelModel,
+    };
+    const { pi, registeredTool } = createPi();
+    const manager = new AgentManager();
+    const spawnAndWait = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "run-model",
+      record: completedRecord("done"),
+    });
+    registerSubagentTool(
+      pi,
+      createDeps({
+        manager,
+        discoverAgents: () => createDiscovery([createAgent({ model: "test/model", thinking: "HIGH" })]),
+      }),
+    );
+    const ctx = { cwd: "/repo", model: parentModel, modelRegistry } as unknown as ExtensionContext;
+
+    const result = await registeredTool().execute(
+      "tool-call-model",
+      { agent: "Scout", task: "explore" },
+      undefined,
+      undefined,
+      ctx,
+    ) as unknown as { isError: boolean };
+
+    expect(result.isError).toBe(false);
+    expect(spawnAndWait.mock.calls[0]?.[2]).toMatchObject({
+      model: sentinelModel,
+      thinking: "high",
+    });
+    expect(spawnAndWait.mock.calls[0]?.[2]?.model).toBe(sentinelModel);
+  });
+
+  test("preserves parent model fallback when no model or thinking is configured", async () => {
+    const parentModel = { reasoning: true } as Model<Api>;
+    const { pi, registeredTool } = createPi();
+    const manager = new AgentManager();
+    const spawnAndWait = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "run-parent-model",
+      record: completedRecord("done"),
+    });
+    registerSubagentTool(pi, createDeps({ manager }));
+    const ctx = { cwd: "/repo", model: parentModel } as unknown as ExtensionContext;
+
+    const result = await registeredTool().execute(
+      "tool-call-parent-model",
+      { agent: "Scout", task: "explore" },
+      undefined,
+      undefined,
+      ctx,
+    ) as unknown as { isError: boolean };
+
+    expect(result.isError).toBe(false);
+    expect(spawnAndWait.mock.calls[0]?.[0]).toBe(ctx);
+    expect(spawnAndWait.mock.calls[0]?.[2]).not.toHaveProperty("model");
+    expect(spawnAndWait.mock.calls[0]?.[2]).not.toHaveProperty("thinking");
+  });
+
+  test("rejects an explicit unknown model instead of falling back to the parent", async () => {
+    const parentModel = { reasoning: true } as Model<Api>;
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => parentModel,
+    };
+    const { pi, registeredTool } = createPi();
+    const manager = new AgentManager();
+    const spawnAndWait = vi.spyOn(manager, "spawnAndWait");
+    registerSubagentTool(
+      pi,
+      createDeps({
+        manager,
+        discoverAgents: () => createDiscovery([createAgent({ model: "unknown/model" })]),
+      }),
+    );
+
+    const result = await registeredTool().execute(
+      "tool-call-unknown-model",
+      { agent: "Scout", task: "explore" },
+      undefined,
+      undefined,
+      { cwd: "/repo", model: parentModel, modelRegistry } as unknown as ExtensionContext,
+    ) as unknown as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain("Unknown model: unknown/model");
+    expect(spawnAndWait).not.toHaveBeenCalled();
   });
 
   test("uses the active settings snapshot when params.cwd differs", async () => {
