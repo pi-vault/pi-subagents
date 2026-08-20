@@ -144,7 +144,7 @@ describe("preflightChainModels", () => {
       "unavailable",
       [{ agent: "worker", model: "unavailable" }],
       [agent("worker")],
-      {},
+      { registry: registry().value },
       /step 1 \(worker\).*unavailable/i,
     ],
     [
