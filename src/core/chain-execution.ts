@@ -37,6 +37,7 @@ export interface StepSpawnOptions {
   isolation?: "worktree";
   skills?: string[];
   model?: string;
+  modelSource?: "explicit" | "inherited";
   thinking?: string;
   parentSignal?: AbortSignal;
 }
@@ -208,7 +209,10 @@ export async function executeChain(
           if (behavior.skills && behavior.skills.length > 0) {
             parallelOptions.skills = behavior.skills;
           }
-          if (behavior.model !== undefined) parallelOptions.model = behavior.model;
+          if (behavior.model !== undefined) {
+            parallelOptions.model = behavior.model;
+            parallelOptions.modelSource = item.model !== undefined ? "explicit" : "inherited";
+          }
           if (behavior.thinking !== undefined) parallelOptions.thinking = behavior.thinking;
 
           const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, parallelOptions);
@@ -351,7 +355,10 @@ export async function executeChain(
       if (dynBehavior.skills && dynBehavior.skills.length > 0) {
         dynOptions.skills = dynBehavior.skills;
       }
-      if (dynBehavior.model !== undefined) dynOptions.model = dynBehavior.model;
+      if (dynBehavior.model !== undefined) {
+        dynOptions.model = dynBehavior.model;
+        dynOptions.modelSource = step.parallel.model !== undefined ? "explicit" : "inherited";
+      }
       if (dynBehavior.thinking !== undefined) dynOptions.thinking = dynBehavior.thinking;
 
       const dynStepLimit = Math.max(1, step.concurrency ?? dynamicItemsToRun.length);
@@ -457,7 +464,10 @@ export async function executeChain(
       if (behavior.skills && behavior.skills.length > 0) {
         seqOptions.skills = behavior.skills;
       }
-      if (behavior.model !== undefined) seqOptions.model = behavior.model;
+      if (behavior.model !== undefined) {
+        seqOptions.model = behavior.model;
+        seqOptions.modelSource = seqStep.model !== undefined ? "explicit" : "inherited";
+      }
       if (behavior.thinking !== undefined) seqOptions.thinking = behavior.thinking;
 
       const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, seqOptions);
