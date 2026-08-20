@@ -17,7 +17,7 @@
 - Phase 1 already adds `thinking?: ChainThinkingLevel` to sequential steps, static parallel items, and dynamic templates, and normalizes authored values before execution.
 - Phase 2 already provides strict registry model selection and model-capability thinking validation; neither belongs in this phase.
 - `AgentDefinition` already has `model?: string` and `thinking?: string`.
-- `src/core/chain-execution.ts` currently resolves only `skills` defaults and forwards only step model strings. Its three builders are the complete raw behavior boundary for this phase.
+- `src/core/chain-execution.ts` currently resolves only `skills` defaults and forwards only step model strings. Its three builders are the complete raw behavior boundary for this phase; they also provide model provenance to the existing chain scope check.
 - `SpawnOptions` already accepts `model?: unknown` and `thinking?: string`; Phase 4 will map the raw chain options to that runtime contract.
 
 ## Reference Alignment
@@ -29,9 +29,10 @@
 ## Global Constraints
 
 - For this phase, effective raw precedence is step override, then agent definition. If both are omitted, leave the option undefined so Phase 4 can apply the parent-model/session fallback.
+- When an effective model is emitted, set `modelSource` to `"explicit"` only when the step supplies `model`; otherwise set it to `"inherited"` for the agent-definition model. The existing `subagent.ts` chain wrapper consumes this provenance only for model-scope warning/error classification.
 - `StepSpawnOptions.model` remains a requested raw model string, and `StepSpawnOptions.thinking` remains a raw/normalized thinking string. Do not resolve registry objects, validate model capabilities, clamp thinking, or create sessions here.
 - Preserve existing output, progress, tools, budgets, isolation, concurrency, cancellation, and chain-status behavior.
-- Do not modify chain schema/types, serializer/parser code, `/chain` or `subagent` dispatch wrappers, `AgentManager`, `agent-runner`, or model resolution in this phase.
+- Do not modify chain schema/types, serializer/parser code, `/chain` dispatch, `AgentManager`, `agent-runner`, or model resolution in this phase. The only `subagent.ts` change allowed is passing the raw `modelSource` into its existing chain model-scope check.
 - Set `model` and `thinking` when their effective values are defined; do not use truthiness checks that accidentally change the raw contract.
 
 ---
@@ -42,7 +43,9 @@
 
 - Modify: `src/core/chain-settings.ts`
 - Modify: `src/core/chain-execution.ts`
+- Modify: `src/core/subagent.ts` (existing chain model-scope source selection only)
 - Test: `tests/chain-execution.test.ts`
+- Test: `tests/model-scope.test.ts`
 
 **Interfaces:**
 
@@ -52,6 +55,7 @@ export interface StepSpawnOptions {
   isolation?: "worktree";
   skills?: string[];
   model?: string;
+  modelSource?: "explicit" | "inherited";
   thinking?: string;
   parentSignal?: AbortSignal;
 }
@@ -95,9 +99,9 @@ export interface AgentBehaviorDefaults {
   ```
 
   Capture the fourth `spawnAndWait` argument and cover each execution shape:
-  - Sequential: run one step with `model: "step/model"` and `thinking: "high"`, followed by an omitted step. Assert the captured options are respectively `{ model: "step/model", thinking: "high" }` and `{ model: "agent/model", thinking: "medium" }`.
-  - Static parallel: run two items for the same agent, one with both overrides and one omitted. Use `concurrency: 1` so call order is deterministic, then assert the same override/default pair.
-  - Dynamic parallel: seed a named structured output with `{"items":["one"]}` and expand `/items`. Run the dynamic template once with both overrides and once without them; assert the first emits the step values and the second emits the agent defaults.
+  - Sequential: run one step with `model: "step/model"` and `thinking: "high"`, followed by an omitted step. Assert the captured options are respectively `{ model: "step/model", modelSource: "explicit", thinking: "high" }` and `{ model: "agent/model", modelSource: "inherited", thinking: "medium" }`.
+  - Static parallel: run two items for the same agent, one with both overrides and one omitted. Use `concurrency: 1` so call order is deterministic, then assert the same override/default pair and provenance values.
+  - Dynamic parallel: seed a named structured output with `{"items":["one"]}` and expand `/items`. Run the dynamic template once with both overrides and once without them; assert the first emits explicit provenance and step values and the second emits inherited provenance and agent defaults.
 
   Keep existing model-only and unrelated execution tests unchanged. The tests must assert that an omitted step receives agent defaults and that no model/thinking fields are invented when both sources omit them.
 
@@ -128,16 +132,21 @@ export interface AgentBehaviorDefaults {
   Add `thinking?: string` to `StepSpawnOptions`. Pass `thinking: <step>.thinking` into `resolveStepBehavior()` for sequential steps, static parallel items, and dynamic templates. In each branch, set both effective fields without mutating the agent definition:
 
   ```ts
-  if (behavior.model !== undefined) options.model = behavior.model;
+  if (behavior.model !== undefined) {
+    options.model = behavior.model;
+    options.modelSource = step.model !== undefined ? "explicit" : "inherited";
+  }
   if (behavior.thinking !== undefined) options.thinking = behavior.thinking;
   ```
+
+  Use the corresponding raw step field for each builder (`item.model`, `step.parallel.model`, and `seqStep.model`). In `src/core/subagent.ts`, use `options.modelSource` when calling the existing `checkModelScope`; keep its previous fallback classification for non-chain callers.
 
   Retain the current skills, budget, isolation, parent-signal, prompt, result, and status handling exactly as-is.
 
 - [ ] **Step 5: Run focused tests and type verification.**
 
   ```bash
-  pnpm vitest run tests/chain-execution.test.ts
+  pnpm vitest run tests/chain-execution.test.ts tests/model-scope.test.ts
   pnpm typecheck
   git diff --check
   ```
@@ -147,10 +156,10 @@ export interface AgentBehaviorDefaults {
 - [ ] **Step 6: Commit the phase.**
 
   ```bash
-  git add src/core/chain-settings.ts src/core/chain-execution.ts tests/chain-execution.test.ts
+  git add src/core/chain-settings.ts src/core/chain-execution.ts src/core/subagent.ts tests/chain-execution.test.ts tests/model-scope.test.ts
   git commit -m "feat: propagate raw chain model and thinking settings"
   ```
 
 ## Phase Result
 
-Every sequential, static-parallel, and dynamic-parallel execution branch emits the effective raw step/agent model and thinking values. Omitted values remain undefined for Phase 4 to resolve against the parent runtime; no registry, capability, wrapper, or session behavior changes in this phase.
+Every sequential, static-parallel, and dynamic-parallel execution branch emits the effective raw step/agent model and thinking values, plus explicit/inherited model provenance for scope enforcement. Omitted values remain undefined for Phase 4 to resolve against the parent runtime; no registry, capability, or session behavior changes in this phase.

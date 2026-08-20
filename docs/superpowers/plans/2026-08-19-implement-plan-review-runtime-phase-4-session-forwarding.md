@@ -31,8 +31,8 @@
 
 **Interfaces:**
 
-- Chain wrappers consume `StepSpawnOptions.model?: string` and `thinking?: string`.
-- They pass `SpawnOptions.model?: unknown` as the actual object returned by `resolveModelSelection` and pass normalized `SpawnOptions.thinking`.
+- Chain wrappers consume `StepSpawnOptions.model?: string`, `modelSource?: "explicit" | "inherited"`, and `thinking?: string`.
+- They preserve `modelSource` for the existing explicit-versus-inherited scope classification, pass `SpawnOptions.model?: unknown` as the actual object returned by `resolveModelSelection`, and pass normalized `SpawnOptions.thinking`.
 
 - [ ] **Step 1: Add failing wrapper assertions.**
 
@@ -48,7 +48,7 @@
 
 - [ ] **Step 3: Resolve and pass the model object in both wrappers.**
 
-  Resolve the effective raw model before `spawnAndWait`; retain skill overrides and custom-tool creation, but stop relying on a temporary `AgentDefinition.model` string for session selection.
+  Resolve the effective raw model before `spawnAndWait`; retain skill overrides and custom-tool creation, but stop relying on a temporary `AgentDefinition.model` string for session selection. Keep `modelSource` at the wrapper boundary so explicit out-of-scope models still block while inherited ones warn.
 
 - [ ] **Step 4: Run wrapper tests.**
 
