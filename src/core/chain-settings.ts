@@ -64,6 +64,7 @@ export interface StepOverrides {
   progress?: boolean;
   skills?: string[] | false;
   model?: string;
+  thinking?: string;
 }
 
 export interface ResolvedStepBehavior {
@@ -73,6 +74,7 @@ export interface ResolvedStepBehavior {
   progress: boolean;
   skills: string[] | false;
   model?: string;
+  thinking?: string;
 }
 
 export interface AgentBehaviorDefaults {
@@ -81,6 +83,7 @@ export interface AgentBehaviorDefaults {
   progress?: boolean;
   skills?: string[] | false;
   model?: string;
+  thinking?: string;
 }
 
 export function resolveStepBehavior(
@@ -106,6 +109,7 @@ export function resolveStepBehavior(
         ? overrides.skills
         : (agentDefaults.skills ?? false),
     model: overrides.model ?? agentDefaults.model,
+    thinking: overrides.thinking ?? agentDefaults.thinking,
   };
 }
 
