@@ -260,18 +260,23 @@
 - Create: `src/core/chain-preflight.ts`
 - Modify: `src/core/slash-chain.ts`
 - Modify: `src/core/subagent.ts`
+- Modify: `src/core/chain-execution.ts`
 - Test: `tests/chain-preflight.test.ts`
+- Test: `tests/slash-chain.test.ts`
+- Test: `tests/subagent-chain.test.ts`
+- Test: `tests/chain-execution.test.ts`
 
 **Interfaces:**
 
 - Add:
 
   ```ts
+  import type { Api, Model } from "@earendil-works/pi-ai";
   import type { ModelRegistryLike } from "./model-resolver.js";
 
   interface ChainPreflightOptions {
     registry?: ModelRegistryLike;
-    parentModel?: unknown;
+    parentModel?: Model<Api>;
     modelScope?: ModelScopeConfig;
     onScopeWarning?: (warning: ModelScopeViolation) => void;
   }
@@ -285,10 +290,11 @@
 
 - `preflightChainModels` scans sequential steps, static parallel items, and dynamic templates. It resolves `step.model ?? agentDef.model`, validates effective thinking against the selected model, and invokes `checkModelScope` with the canonical model.
 - It throws before any spawn when a configured model needs a missing registry, or for an unresolved/ambiguous model, unsupported thinking, or explicit scope violation. Chains that only inherit the parent model retain the existing parent-model behavior.
+- The entrypoints pass a `preflightChain` callback into `executeChain`; appended batches run it before they are added to the executable sequence. Remove only the duplicate raw chain scope check in `subagent.ts`; keep the single-agent scope path and phase-4 runtime resolution.
 
 - [ ] **Step 1: Add failing no-spawn preflight tests.**
 
-  Create `tests/chain-preflight.test.ts` with one valid chain and invalid cases for unknown, ambiguous, unavailable, unsupported-thinking, and scope-blocked models. Use a `spawned = false` sentinel and assert it remains false when preflight throws.
+  Create `tests/chain-preflight.test.ts` with valid precedence/parent cases and invalid cases for unknown, ambiguous, unavailable, missing registry, unsupported-thinking, and scope-blocked models. Use a `spawned = false` sentinel and assert it remains false when preflight throws. Add wrapper no-spawn coverage and an appended-batch callback regression in the listed tests.
 
 - [ ] **Step 2: Run the new preflight test and confirm it fails.**
 
@@ -300,16 +306,18 @@
 
 - [ ] **Step 3: Implement the shared preflight scan.**
 
-  Traverse every effective task shape, look up its agent, resolve configured models with Task 2's resolver, validate thinking capability, and report step number, agent name, requested model, and canonical model in errors. Do not spawn or mutate the chain.
+  Traverse every effective task shape, look up its agent, resolve configured models with Task 2's resolver, validate thinking capability, and report step number, agent name, requested model, and canonical model in errors. Do not spawn or mutate the chain. Validate dynamic templates once and use the actual parent model only when needed for thinking validation.
 
 - [ ] **Step 4: Invoke preflight after final chain normalization/clarification.**
 
-  Call it in both `/run-chain`/`/chain` execution and `subagent` chain execution immediately before foreground execution or `fireAndForgetChain`. For interactive clarification, run it after the user-edited chain is normalized; for background execution, run it before launching the background callback.
+  Call it in both `/run-chain`/`/chain` execution and `subagent` chain execution immediately before foreground execution or `fireAndForgetChain`. For interactive clarification, run it after the user-edited chain is normalized; for background execution, run it before launching the background callback. Pass the same callback into `executeChain` and invoke it for each consumed append batch before that batch is pushed into execution.
 
 - [ ] **Step 5: Run preflight and regression tests.**
 
   ```bash
-  pnpm vitest run tests/chain-preflight.test.ts tests/subagent-chain.test.ts tests/slash-chain.test.ts
+  pnpm vitest run tests/chain-preflight.test.ts tests/chain-execution.test.ts tests/chain-append.test.ts tests/subagent-chain.test.ts tests/slash-chain.test.ts tests/model-scope.test.ts
+  pnpm typecheck
+  git diff --check
   ```
 
   Expected: invalid chains fail before the first `spawnAndWait`, while valid chains preserve existing clarification and background behavior.
@@ -317,7 +325,7 @@
 - [ ] **Step 6: Commit preflight.**
 
   ```bash
-  git add src/core/chain-preflight.ts src/core/slash-chain.ts src/core/subagent.ts tests/chain-preflight.test.ts
+  git add src/core/chain-preflight.ts src/core/slash-chain.ts src/core/subagent.ts src/core/chain-execution.ts tests/chain-preflight.test.ts tests/slash-chain.test.ts tests/subagent-chain.test.ts tests/chain-execution.test.ts
   git commit -m "feat: preflight chain models before execution"
   ```
 
