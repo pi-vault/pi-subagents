@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { AgentManager } from "../src/core/agent-manager.js";
@@ -142,6 +143,65 @@ describe("chain mode dispatch", () => {
     expect(result.details.agent).toBe("(chain)");
     expect(result.details.status).toBe("success");
     expect(spawn.mock.calls[0]?.[2]?.createCustomTools).toBeTypeOf("function");
+  });
+
+  test("forwards resolved chain models and rejects unknown configured models", async () => {
+    const sentinelModel = { reasoning: true } as Model<Api>;
+    const parentModel = { reasoning: true } as Model<Api>;
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => sentinelModel,
+    };
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step-1",
+      record: completedRecord("done"),
+    });
+    const deps = createDeps({ manager });
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, deps);
+    const tool = registeredTool();
+    const ctx = { ...CTX, model: parentModel, modelRegistry };
+
+    const result = await tool.execute(
+      "tc-1",
+      { task: "work", chain: [{ agent: "Scout", model: "test/model", thinking: "HIGH" }] },
+      undefined,
+      undefined,
+      ctx,
+    ) as { isError: boolean };
+
+    expect(result.isError).toBe(false);
+    expect(spawn.mock.calls[0]?.[2]).toMatchObject({
+      model: sentinelModel,
+      thinking: "high",
+    });
+    expect(spawn.mock.calls[0]?.[2]?.model).toBe(sentinelModel);
+
+    const unknownResult = await tool.execute(
+      "tc-2",
+      { task: "work", chain: [{ agent: "Scout", model: "unknown/model" }] },
+      undefined,
+      undefined,
+      ctx,
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(unknownResult.isError).toBe(true);
+    expect(unknownResult.content[0]?.text).toContain("Unknown model: unknown/model");
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    const emptyResult = await tool.execute(
+      "tc-3",
+      { task: "work", chain: [{ agent: "Scout", model: "" }] },
+      undefined,
+      undefined,
+      ctx,
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(emptyResult.isError).toBe(true);
+    expect(emptyResult.content[0]?.text).toContain("Model request must be non-empty");
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   test("returns error details when executeChain throws", async () => {

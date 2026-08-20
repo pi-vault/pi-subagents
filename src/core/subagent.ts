@@ -17,7 +17,7 @@ import type {
 import { describeActivity } from "../tui/format.js";
 import { renderSubagentCall, renderSubagentResult } from "../tui/render.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
-import { resolveModel } from "./model-resolver.js";
+import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
 import { checkModelScope, type ModelSource } from "./model-scope.js";
 import { normalizeChainSteps } from "./chain-serializer.js";
 import { getStepAgents } from "./chain-settings.js";
@@ -330,14 +330,12 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             let effectiveAgentDef = options?.skills
               ? { ...agentDef, skills: options.skills }
               : agentDef;
-            if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+            if (options?.model !== undefined) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
 
             // Model scope enforcement for chain steps
-            // Note: uses raw model string; chain steps don't canonicalize through
-            // ctx.modelRegistry (registry resolution happens inside spawnAndWait).
             const stepModel = options?.model ?? agentDef.model;
-            if (stepModel && settings.modelScope) {
-              const source: ModelSource = options?.modelSource ?? (options?.model ? "explicit" : "inherited");
+            if (stepModel !== undefined && settings.modelScope) {
+              const source: ModelSource = options?.modelSource ?? (options?.model !== undefined ? "explicit" : "inherited");
               const violation = checkModelScope(stepModel, settings.modelScope, source);
               if (violation && violation.severity === "error") {
                 throw new Error(violation.message);
@@ -351,6 +349,29 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               }
             }
 
+            if (stepModel !== undefined && !ctx.modelRegistry) {
+              throw new Error(
+                `Cannot resolve model "${stepModel}": model registry unavailable`,
+              );
+            }
+            const selection = stepModel !== undefined
+              ? resolveModelSelection(stepModel, ctx.modelRegistry)
+              : undefined;
+            const selectedModel = selection?.model ?? ctx.model;
+            const canonical =
+              selection?.canonical ??
+              (selectedModel
+                ? `${selectedModel.provider}/${selectedModel.id}`
+                : undefined);
+            const thinking =
+              options?.thinking === undefined
+                ? undefined
+                : selectedModel && canonical
+                  ? validateModelThinking(selectedModel, canonical, options.thinking)
+                  : (() => {
+                      throw new Error("Cannot validate thinking without an active model");
+                    })();
+
             return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
               prompt,
               cwd: stepCwd || effectiveCwd,
@@ -358,6 +379,8 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               toolBudget: options?.toolBudget,
               isolation: options?.isolation,
               parentSignal: options?.parentSignal,
+              ...(stepModel !== undefined ? { model: selection?.model } : {}),
+              ...(thinking !== undefined ? { thinking } : {}),
               createCustomTools: createAgentCustomToolsFactory(
                 deps.manager,
                 deps,
@@ -533,96 +556,57 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           },
         );
 
-        // Validate model string against registry (if available)
-        let resolvedModelId = resolved.model;
-        if (resolved.model) {
-          const registry = (
-            ctx as {
-              modelRegistry?: {
-                listModels?: () => Array<{
-                  id: string;
-                  provider: string;
-                  name?: string;
-                }>;
-              };
-            }
-          ).modelRegistry;
-          if (registry?.listModels) {
-            const match = resolveModel(resolved.model, registry.listModels());
-            if (!match) {
-              const available = registry
-                .listModels()
-                .map((m) => `${m.provider}/${m.id}`)
-                .join(", ");
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Unknown model: "${resolved.model}". Available models: ${available}`,
-                  },
-                ],
-                isError: true,
-                details: {
-                  status: "error" as const,
-                  agent: params.agent,
-                  task: params.task,
-                  sourcePath: "",
-                  cwd: effectiveCwd,
-                  maxTurns: 0,
-                  durationMs: 0,
-                  childSessionDir: "",
-                  childSessionPath: "",
-                  model: resolved.model,
-                  stopReason: "error",
-                  exitCode: null,
-                  stderr: `Unknown model: "${resolved.model}". Available models: ${available}`,
-                  usage: {
-                    input: 0,
-                    output: 0,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    contextTokens: 0,
-                    cost: 0,
-                    turns: 0,
-                  },
-                  recentToolActivity: [],
-                },
-              };
-            }
-            resolvedModelId = `${match.provider}/${match.id}`;
-          }
+        if (resolved.model !== undefined && !ctx.modelRegistry) {
+          throw new Error(
+            `Cannot resolve model "${resolved.model}": model registry unavailable`,
+          );
         }
+        const selection = resolved.model !== undefined
+          ? resolveModelSelection(resolved.model, ctx.modelRegistry)
+          : undefined;
+        const selectedModel = selection?.model ?? ctx.model;
+        const canonical =
+          selection?.canonical ??
+          (selectedModel
+            ? `${selectedModel.provider}/${selectedModel.id}`
+            : undefined);
+        const thinking =
+          resolved.thinking === undefined
+            ? undefined
+            : selectedModel && canonical
+              ? validateModelThinking(selectedModel, canonical, resolved.thinking)
+              : (() => {
+                  throw new Error("Cannot validate thinking without an active model");
+                })();
 
         // Model scope enforcement
-        if (resolvedModelId) {
-          if (settings.modelScope) {
-            const source: ModelSource = agentDef.model
-              ? "inherited"
-              : params.model
-                ? "explicit"
-                : "inherited";
-            const violation = checkModelScope(resolvedModelId, settings.modelScope, source);
-            if (violation && violation.severity === "error") {
-              return {
-                content: [{ type: "text", text: violation.message }],
-                isError: true,
-                details: stubDetails({
-                  status: "error",
-                  agent: agentDef.name,
-                  task: params.task,
-                  model: resolved.model,
-                  stopReason: "error",
-                  stderr: violation.message,
-                }),
-              };
-            }
-            if (violation && violation.severity === "warn") {
-              pi.sendMessage({
-                customType: "model_scope_warning",
-                content: violation.message,
-                display: true,
-              });
-            }
+        if (selection?.canonical && settings.modelScope) {
+          const source: ModelSource = agentDef.model
+            ? "inherited"
+            : params.model
+              ? "explicit"
+              : "inherited";
+          const violation = checkModelScope(selection.canonical, settings.modelScope, source);
+          if (violation && violation.severity === "error") {
+            return {
+              content: [{ type: "text", text: violation.message }],
+              isError: true,
+              details: stubDetails({
+                status: "error",
+                agent: agentDef.name,
+                task: params.task,
+                model: resolved.model,
+                stopReason: "error",
+                stderr: violation.message,
+              }),
+            };
+          }
+          if (violation && violation.severity === "warn") {
+            pi.sendMessage({
+              customType: "model_scope_warning",
+              content: violation.message,
+              display: true,
+            });
           }
         }
 
@@ -686,6 +670,8 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
           parentSignal: signal,
           currentDepth: 0,
           toolBudget: resolvedBudget,
+          ...(selection?.model !== undefined ? { model: selection.model } : {}),
+          ...(thinking !== undefined ? { thinking } : {}),
           createCustomTools: createAgentCustomToolsFactory(deps.manager, deps, agentDef, 0),
         };
 

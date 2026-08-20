@@ -6,6 +6,7 @@ import {
   resumeAgent,
   getAgentConversation,
 } from "../src/core/agent-runner.js";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
   AgentDefinition,
   EnvInfo,
@@ -58,6 +59,22 @@ function makeRunOptions(overrides: Partial<RunOptions> = {}): RunOptions {
     cwd: "/tmp/test",
     agentId: "test-123",
     ...overrides,
+  };
+}
+
+function makeModel(provider: string, id: string): Model<Api> {
+  return {
+    provider,
+    id,
+    name: `${provider}/${id}`,
+    api: "openai-responses",
+    baseUrl: "https://example.test",
+    reasoning: true,
+    thinkingLevelMap: { high: "high" },
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4_096,
   };
 }
 
@@ -262,6 +279,107 @@ describe("runAgent", () => {
         tools: ["read", "bash", "write"],
       }),
     );
+  });
+
+  it("resolves explicit model objects and normalizes thinking", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const explicitModel = makeModel("explicit", "model");
+    const parentModel = makeModel("parent", "model");
+
+    await runAgent(
+      makeAgentDef(),
+      makeRunOptions({ model: explicitModel, thinking: "HIGH" }),
+      { model: parentModel },
+    );
+
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0]?.[0];
+    expect(sessionOptions?.model).toBe(explicitModel);
+    expect(sessionOptions?.thinkingLevel).toBe("high");
+  });
+
+  it("resolves configured model strings before falling back to the parent", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const sentinelModel = makeModel("test", "model");
+    const parentModel = makeModel("parent", "model");
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => sentinelModel,
+    };
+
+    await runAgent(
+      makeAgentDef({ model: "test/model", thinking: "high" }),
+      makeRunOptions(),
+      { model: parentModel, modelRegistry },
+    );
+
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0]?.[0];
+    expect(sessionOptions?.model).toBe(sentinelModel);
+    expect(sessionOptions?.thinkingLevel).toBe("high");
+  });
+
+  it("resolves explicit model strings before configured and parent models", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const sentinelModel = makeModel("test", "model");
+    const parentModel = makeModel("parent", "model");
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => sentinelModel,
+    };
+
+    await runAgent(
+      makeAgentDef({ model: "other/model" }),
+      makeRunOptions({ model: "test/model", thinking: "HIGH" }),
+      { model: parentModel, modelRegistry },
+    );
+
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0]?.[0];
+    expect(sessionOptions?.model).toBe(sentinelModel);
+    expect(sessionOptions?.thinkingLevel).toBe("high");
+  });
+
+  it("uses the parent model when no model is configured", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const parentModel = makeModel("parent", "model");
+
+    await runAgent(makeAgentDef(), makeRunOptions(), { model: parentModel });
+
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0]?.[0];
+    expect(sessionOptions?.model).toBe(parentModel);
+  });
+
+  it("rejects malformed explicit and parent models before creating a session", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+
+    for (const model of [null, {}, { provider: "partial", id: "model" }]) {
+      await expect(
+        runAgent(makeAgentDef(), makeRunOptions({ model }), {}),
+      ).rejects.toThrow("Invalid explicit model");
+    }
+    for (const model of [{}, { provider: "partial", id: "model" }]) {
+      await expect(
+        runAgent(makeAgentDef(), makeRunOptions(), { model }),
+      ).rejects.toThrow("Invalid parent model");
+    }
+
+    expect(createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects configured models without a registry before creating a session", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+
+    await expect(
+      runAgent(makeAgentDef({ model: "test/model" }), makeRunOptions(), {}),
+    ).rejects.toThrow('Cannot resolve model "test/model": model registry unavailable');
+
+    expect(createAgentSession).not.toHaveBeenCalled();
   });
 
   it("excludes subagent tool when allowRecursion is false", async () => {

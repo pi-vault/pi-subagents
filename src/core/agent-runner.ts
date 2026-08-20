@@ -7,6 +7,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, AgentSessionEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
   AgentDefinition,
   EnvInfo,
@@ -17,10 +18,41 @@ import type {
 import { preloadSkills } from "./skill-loader.js";
 import { evaluateToolCall } from "./tool-budget.js";
 import { buildMemoryInjection } from "./memory.js";
+import {
+  resolveModelSelection,
+  type ModelRegistryLike,
+  validateModelThinking,
+} from "./model-resolver.js";
 
 interface SkillBlock {
   name: string;
   content: string;
+}
+
+function isModelLike(value: unknown): value is Model<Api> {
+  if (typeof value !== "object" || value === null) return false;
+
+  const model = value as Record<string, unknown>;
+  const cost = model.cost;
+  const input = model.input;
+  return (
+    typeof model.provider === "string" &&
+    typeof model.id === "string" &&
+    typeof model.name === "string" &&
+    typeof model.api === "string" &&
+    typeof model.baseUrl === "string" &&
+    typeof model.reasoning === "boolean" &&
+    Array.isArray(input) &&
+    input.every((kind) => kind === "text" || kind === "image") &&
+    typeof cost === "object" &&
+    cost !== null &&
+    typeof (cost as Record<string, unknown>).input === "number" &&
+    typeof (cost as Record<string, unknown>).output === "number" &&
+    typeof (cost as Record<string, unknown>).cacheRead === "number" &&
+    typeof (cost as Record<string, unknown>).cacheWrite === "number" &&
+    typeof model.contextWindow === "number" &&
+    typeof model.maxTokens === "number"
+  );
 }
 
 /**
@@ -257,13 +289,59 @@ export async function runAgent(
   await loader.reload();
 
   // 4. Resolve model
-  const model = (options.model ?? ctx.model) as never;
+  const runtimeCtx = ctx as {
+    model?: unknown;
+    modelRegistry?: ModelRegistryLike;
+    sessionManager?: { getBranch?: () => unknown[] };
+  };
+  let selectedModel: Model<Api> | undefined;
+  let canonical: string | undefined;
+
+  if (typeof options.model === "string") {
+    if (!runtimeCtx.modelRegistry) {
+      throw new Error(
+        `Cannot resolve model "${options.model}": model registry unavailable`,
+      );
+    }
+    const selection = resolveModelSelection(options.model, runtimeCtx.modelRegistry);
+    selectedModel = selection.model;
+    canonical = selection.canonical;
+  } else if (options.model !== undefined) {
+    if (!isModelLike(options.model)) {
+      throw new Error("Invalid explicit model: expected a complete Pi model object");
+    }
+    selectedModel = options.model;
+  } else if (agentDef.model !== undefined) {
+    if (!runtimeCtx.modelRegistry) {
+      throw new Error(
+        `Cannot resolve model "${agentDef.model}": model registry unavailable`,
+      );
+    }
+    const selection = resolveModelSelection(agentDef.model, runtimeCtx.modelRegistry);
+    selectedModel = selection.model;
+    canonical = selection.canonical;
+  } else if (runtimeCtx.model !== undefined) {
+    if (!isModelLike(runtimeCtx.model)) {
+      throw new Error("Invalid parent model: expected a complete Pi model object");
+    }
+    selectedModel = runtimeCtx.model;
+  }
+
+  const model = selectedModel;
+  canonical ??= model ? `${model.provider}/${model.id}` : undefined;
+  const requestedThinking = options.thinking ?? agentDef.thinking;
+  const thinkingLevel =
+    requestedThinking === undefined
+      ? undefined
+      : model && canonical
+        ? validateModelThinking(model, canonical, requestedThinking)
+        : (() => {
+            throw new Error("Cannot validate thinking without an active model");
+          })();
 
   // 5. Create session
   const settingsManager = SettingsManager.create(options.cwd, agentDir);
   const sessionManager = SessionManager.inMemory(options.cwd);
-
-  const thinkingLevel = options.thinking ?? agentDef.thinking;
 
   const customTools = (options.customTools ?? []) as ToolDefinition[];
   // Custom tool names must be in the allowed tools list, otherwise
@@ -274,10 +352,10 @@ export async function runAgent(
     agentDir,
     sessionManager,
     settingsManager,
-    model,
+    ...(model !== undefined ? { model } : {}),
     tools: effectiveAllowedTools,
     resourceLoader: loader,
-    ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}),
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
     ...(customTools.length > 0 ? { customTools } : {}),
   });
 
