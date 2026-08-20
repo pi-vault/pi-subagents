@@ -334,7 +334,10 @@ describe("subagent tool: model scope enforcement", () => {
       chain: [{ agent: "Scout", task: "explore" }],
     });
 
-    expect(result.isError).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain(
+      'Cannot resolve model "google/gemini-pro": model registry unavailable',
+    );
     expect(sentMessages.some((m) => m.customType === "model_scope_warning")).toBe(true);
   });
 });

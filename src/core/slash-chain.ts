@@ -534,14 +534,14 @@ export async function executeSlashChain(
     options?: import("./chain-execution.js").StepSpawnOptions,
   ) => {
     let effectiveAgentDef = options?.skills ? { ...agentDef, skills: options.skills } : agentDef;
-    if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+    if (options?.model !== undefined) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
     const rawModel = options?.model ?? agentDef.model;
     if (rawModel !== undefined && !ctx.modelRegistry) {
       throw new Error(
         `Cannot resolve model "${rawModel}": model registry unavailable`,
       );
     }
-    const selection = rawModel
+    const selection = rawModel !== undefined
       ? resolveModelSelection(rawModel, ctx.modelRegistry)
       : undefined;
     const selectedModel = selection?.model ?? ctx.model;

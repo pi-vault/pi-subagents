@@ -125,9 +125,10 @@ describe("executeSlashChain validation", () => {
       ]),
     });
     vi.mocked(createAgentCustomToolsFactory).mockClear();
+    const pi = { sendMessage: vi.fn() } as unknown as ExtensionAPI;
 
     await executeSlashChain(
-      { sendMessage: vi.fn() } as unknown as ExtensionAPI,
+      pi,
       { cwd: "/tmp", model: parentModel, modelRegistry } as unknown as ExtensionCommandContext,
       deps,
       [{ agent: "Scout", skills: ["review"], model: "test/model", thinking: "HIGH" as unknown as ChainThinkingLevel }],
@@ -155,6 +156,21 @@ describe("executeSlashChain validation", () => {
       allowRecursion: true,
     }).map((tool) => (tool as { name: string }).name))
       .toEqual(["subagent", "get_subagent_result"]);
+
+    await executeSlashChain(
+      pi,
+      { cwd: "/tmp", model: parentModel, modelRegistry } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout", model: "" }],
+      "work",
+      false,
+      true,
+    );
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(pi.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: expect.stringContaining("Model request must be non-empty"),
+    }));
     manager.dispose();
   });
 

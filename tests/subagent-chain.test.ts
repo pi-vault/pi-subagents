@@ -190,6 +190,18 @@ describe("chain mode dispatch", () => {
     expect(unknownResult.isError).toBe(true);
     expect(unknownResult.content[0]?.text).toContain("Unknown model: unknown/model");
     expect(spawn).toHaveBeenCalledTimes(1);
+
+    const emptyResult = await tool.execute(
+      "tc-3",
+      { task: "work", chain: [{ agent: "Scout", model: "" }] },
+      undefined,
+      undefined,
+      ctx,
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(emptyResult.isError).toBe(true);
+    expect(emptyResult.content[0]?.text).toContain("Model request must be non-empty");
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   test("returns error details when executeChain throws", async () => {

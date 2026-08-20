@@ -330,12 +330,12 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             let effectiveAgentDef = options?.skills
               ? { ...agentDef, skills: options.skills }
               : agentDef;
-            if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+            if (options?.model !== undefined) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
 
             // Model scope enforcement for chain steps
             const stepModel = options?.model ?? agentDef.model;
-            if (stepModel && settings.modelScope) {
-              const source: ModelSource = options?.modelSource ?? (options?.model ? "explicit" : "inherited");
+            if (stepModel !== undefined && settings.modelScope) {
+              const source: ModelSource = options?.modelSource ?? (options?.model !== undefined ? "explicit" : "inherited");
               const violation = checkModelScope(stepModel, settings.modelScope, source);
               if (violation && violation.severity === "error") {
                 throw new Error(violation.message);
@@ -354,7 +354,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                 `Cannot resolve model "${stepModel}": model registry unavailable`,
               );
             }
-            const selection = stepModel
+            const selection = stepModel !== undefined
               ? resolveModelSelection(stepModel, ctx.modelRegistry)
               : undefined;
             const selectedModel = selection?.model ?? ctx.model;
