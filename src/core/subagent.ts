@@ -337,7 +337,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             // ctx.modelRegistry (registry resolution happens inside spawnAndWait).
             const stepModel = options?.model ?? agentDef.model;
             if (stepModel && settings.modelScope) {
-              const source: ModelSource = options?.model ? "explicit" : "inherited";
+              const source: ModelSource = options?.modelSource ?? (options?.model ? "explicit" : "inherited");
               const violation = checkModelScope(stepModel, settings.modelScope, source);
               if (violation && violation.severity === "error") {
                 throw new Error(violation.message);

@@ -196,7 +196,7 @@
 
 **Interfaces:**
 
-- `StepSpawnOptions` continues to carry the requested `model?: string` and gains `thinking?: string`; it is the chain executor's raw behavior contract.
+- `StepSpawnOptions` continues to carry the requested `model?: string`, gains `thinking?: string`, and carries `modelSource?: "explicit" | "inherited"` for the existing chain model-scope classification; it is the chain executor's raw behavior contract.
 - `AgentManager.spawn`/`spawnAndWait` continue receiving `SpawnOptions.model?: unknown`; callers must provide the resolved Pi model object at the runtime boundary.
 - `runAgent` must resolve any configured string fallback before calling `createAgentSession`, so `createAgentSession({ model })` always receives an actual model object.
 

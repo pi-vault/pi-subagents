@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import { executeChain } from "../src/core/chain-execution.js";
+import { executeChain, type StepSpawnOptions } from "../src/core/chain-execution.js";
 import { AgentManager } from "../src/core/agent-manager.js";
 import {
   countPendingChainAppendRequests,
@@ -39,7 +39,10 @@ function makeRecord(status: "completed" | "error", result: string): AgentRecord 
   };
 }
 
-function makeAgentDef(name: string): AgentDefinition {
+function makeAgentDef(
+  name: string,
+  overrides: Partial<AgentDefinition> = {},
+): AgentDefinition {
   return {
     name,
     description: `mock ${name}`,
@@ -47,6 +50,7 @@ function makeAgentDef(name: string): AgentDefinition {
     subagentAgents: [],
     systemPrompt: "You are a test agent.",
     sourcePath: "/mock",
+    ...overrides,
   };
 }
 
@@ -627,6 +631,116 @@ describe("executeChain — model override", () => {
       { model: "anthropic/claude-sonnet-4-5" },
     );
     expect(behavior.model).toBe("anthropic/claude-sonnet-4-5");
+  });
+});
+
+describe("executeChain — raw model and thinking behavior", () => {
+  const agentOverrides = { model: "agent/model", thinking: "medium" };
+
+  test("uses sequential step overrides before agent defaults", async () => {
+    const receivedOptions: StepSpawnOptions[] = [];
+
+    await executeChain({
+      steps: [
+        { agent: "worker", model: "step/model", thinking: "high" },
+        { agent: "worker" },
+      ],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options) => {
+        receivedOptions.push(options ?? {});
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: (name) => makeAgentDef(name, agentOverrides),
+      cwd: "/tmp",
+      runId: "test-raw-sequential",
+    });
+
+    expect(receivedOptions.map(({ model, modelSource, thinking }) => ({ model, modelSource, thinking }))).toEqual([
+      { model: "step/model", modelSource: "explicit", thinking: "high" },
+      { model: "agent/model", modelSource: "inherited", thinking: "medium" },
+    ]);
+  });
+
+  test("uses static parallel item overrides before agent defaults", async () => {
+    const receivedOptions: StepSpawnOptions[] = [];
+
+    await executeChain({
+      steps: [{
+        parallel: [
+          { agent: "worker", model: "step/model", thinking: "high" },
+          { agent: "worker" },
+        ],
+        concurrency: 1,
+      }],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options) => {
+        receivedOptions.push(options ?? {});
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: (name) => makeAgentDef(name, agentOverrides),
+      cwd: "/tmp",
+      runId: "test-raw-static-parallel",
+    });
+
+    expect(receivedOptions.map(({ model, modelSource, thinking }) => ({ model, modelSource, thinking }))).toEqual([
+      { model: "step/model", modelSource: "explicit", thinking: "high" },
+      { model: "agent/model", modelSource: "inherited", thinking: "medium" },
+    ]);
+  });
+
+  test("uses dynamic parallel template overrides before agent defaults", async () => {
+    const receivedOptions: StepSpawnOptions[] = [];
+
+    await executeChain({
+      steps: [
+        { agent: "scout", as: "data", outputSchema: { type: "object" } },
+        {
+          expand: { from: { output: "data", path: "/items" } },
+          parallel: { agent: "worker", model: "step/model", thinking: "high" },
+          collect: { as: "overridden" },
+        },
+        {
+          expand: { from: { output: "data", path: "/items" } },
+          parallel: { agent: "worker" },
+          collect: { as: "defaulted" },
+        },
+      ],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options) => {
+        receivedOptions.push(options ?? {});
+        const result = receivedOptions.length === 1
+          ? JSON.stringify({ items: ["one"] })
+          : "done";
+        return { id: "1", record: makeRecord("completed", result) };
+      },
+      findAgent: (name) => makeAgentDef(name, agentOverrides),
+      cwd: "/tmp",
+      runId: "test-raw-dynamic-parallel",
+    });
+
+    expect(receivedOptions.slice(1).map(({ model, modelSource, thinking }) => ({ model, modelSource, thinking }))).toEqual([
+      { model: "step/model", modelSource: "explicit", thinking: "high" },
+      { model: "agent/model", modelSource: "inherited", thinking: "medium" },
+    ]);
+  });
+
+  test("does not invent model or thinking when both sources omit them", async () => {
+    const receivedOptions: Array<{ model?: string; thinking?: string }> = [];
+
+    await executeChain({
+      steps: [{ agent: "worker" }],
+      task: "test",
+      spawnAndWait: async (_agentDef, _prompt, _cwd, options) => {
+        receivedOptions.push(options ?? {});
+        return { id: "1", record: makeRecord("completed", "done") };
+      },
+      findAgent: makeAgentDef,
+      cwd: "/tmp",
+      runId: "test-raw-omission",
+    });
+
+    expect(receivedOptions[0]).not.toHaveProperty("model");
+    expect(receivedOptions[0]).not.toHaveProperty("thinking");
   });
 });
 

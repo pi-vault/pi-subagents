@@ -37,6 +37,8 @@ export interface StepSpawnOptions {
   isolation?: "worktree";
   skills?: string[];
   model?: string;
+  modelSource?: "explicit" | "inherited";
+  thinking?: string;
   parentSignal?: AbortSignal;
 }
 
@@ -70,6 +72,8 @@ export interface ChainExecutionResult {
 function agentDefaults(agentDef: AgentDefinition): AgentBehaviorDefaults {
   return {
     skills: Array.isArray(agentDef.skills) ? agentDef.skills : undefined,
+    model: agentDef.model,
+    thinking: agentDef.thinking,
   };
 }
 
@@ -180,6 +184,7 @@ export async function executeChain(
             progress: item.progress,
             skills: item.skills,
             model: item.model,
+            thinking: item.thinking,
           });
           const isFirstProgress = behavior.progress && !progressCreated;
           if (isFirstProgress) progressCreated = true;
@@ -204,7 +209,11 @@ export async function executeChain(
           if (behavior.skills && behavior.skills.length > 0) {
             parallelOptions.skills = behavior.skills;
           }
-          if (behavior.model) parallelOptions.model = behavior.model;
+          if (behavior.model !== undefined) {
+            parallelOptions.model = behavior.model;
+            parallelOptions.modelSource = item.model !== undefined ? "explicit" : "inherited";
+          }
+          if (behavior.thinking !== undefined) parallelOptions.thinking = behavior.thinking;
 
           const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, parallelOptions);
           const output = record.result ?? "";
@@ -332,6 +341,7 @@ export async function executeChain(
         progress: step.parallel.progress,
         skills: step.parallel.skills,
         model: step.parallel.model,
+        thinking: step.parallel.thinking,
       });
       if (dynBehavior.progress) progressCreated = true;
       const { prefix: dynPrefix, suffix: dynSuffix } = buildChainInstructions(dynBehavior, chainDir, false);
@@ -345,7 +355,11 @@ export async function executeChain(
       if (dynBehavior.skills && dynBehavior.skills.length > 0) {
         dynOptions.skills = dynBehavior.skills;
       }
-      if (dynBehavior.model) dynOptions.model = dynBehavior.model;
+      if (dynBehavior.model !== undefined) {
+        dynOptions.model = dynBehavior.model;
+        dynOptions.modelSource = step.parallel.model !== undefined ? "explicit" : "inherited";
+      }
+      if (dynBehavior.thinking !== undefined) dynOptions.thinking = dynBehavior.thinking;
 
       const dynStepLimit = Math.max(1, step.concurrency ?? dynamicItemsToRun.length);
       const dynamicResults = await mapConcurrent(
@@ -426,6 +440,7 @@ export async function executeChain(
         progress: seqStep.progress,
         skills: seqStep.skills,
         model: seqStep.model,
+        thinking: seqStep.thinking,
       });
       const isFirstProgress = behavior.progress && !progressCreated;
       if (isFirstProgress) progressCreated = true;
@@ -449,7 +464,11 @@ export async function executeChain(
       if (behavior.skills && behavior.skills.length > 0) {
         seqOptions.skills = behavior.skills;
       }
-      if (behavior.model) seqOptions.model = behavior.model;
+      if (behavior.model !== undefined) {
+        seqOptions.model = behavior.model;
+        seqOptions.modelSource = seqStep.model !== undefined ? "explicit" : "inherited";
+      }
+      if (behavior.thinking !== undefined) seqOptions.thinking = behavior.thinking;
 
       const { record } = await spawnAndWait(agentDef, fullPrompt, cwd, seqOptions);
       const output = record.result ?? "";

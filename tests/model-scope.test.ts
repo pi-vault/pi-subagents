@@ -322,4 +322,19 @@ describe("subagent tool: model scope enforcement", () => {
       expect(result.content[0]?.text).not.toContain("not in the allowed scope");
     }
   });
+
+  it("warns when a chain inherits an out-of-scope agent model", async () => {
+    const { execute, sentMessages } = setupScopeTest(
+      { enforce: true, allow: ["anthropic/*"] },
+      { model: "google/gemini-pro" },
+    );
+
+    const result = await execute({
+      task: "pipeline",
+      chain: [{ agent: "Scout", task: "explore" }],
+    });
+
+    expect(result.isError).toBe(false);
+    expect(sentMessages.some((m) => m.customType === "model_scope_warning")).toBe(true);
+  });
 });
