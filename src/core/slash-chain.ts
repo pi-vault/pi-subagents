@@ -7,6 +7,7 @@ import { materializeSavedChainSteps, normalizeChainSteps } from "./chain-seriali
 import { getStepAgents } from "./chain-settings.js";
 import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
 import { findAgentByName } from "./subagent.js";
+import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
 import { normalizeThinkingLevel, ChainThinkingLevelError } from "../shared/thinking.js";
 
 export class SlashParseError extends Error {}
@@ -534,6 +535,29 @@ export async function executeSlashChain(
   ) => {
     let effectiveAgentDef = options?.skills ? { ...agentDef, skills: options.skills } : agentDef;
     if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
+    const rawModel = options?.model ?? agentDef.model;
+    if (rawModel !== undefined && !ctx.modelRegistry) {
+      throw new Error(
+        `Cannot resolve model "${rawModel}": model registry unavailable`,
+      );
+    }
+    const selection = rawModel
+      ? resolveModelSelection(rawModel, ctx.modelRegistry)
+      : undefined;
+    const selectedModel = selection?.model ?? ctx.model;
+    const canonical =
+      selection?.canonical ??
+      (selectedModel
+        ? `${selectedModel.provider}/${selectedModel.id}`
+        : undefined);
+    const thinking =
+      options?.thinking === undefined
+        ? undefined
+        : selectedModel && canonical
+          ? validateModelThinking(selectedModel, canonical, options.thinking)
+          : (() => {
+              throw new Error("Cannot validate thinking without an active model");
+            })();
     return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
       prompt,
       cwd: stepCwd || ctx.cwd,
@@ -541,6 +565,8 @@ export async function executeSlashChain(
       toolBudget: options?.toolBudget,
       isolation: options?.isolation,
       parentSignal: options?.parentSignal,
+      ...(rawModel !== undefined ? { model: selection?.model } : {}),
+      ...(thinking !== undefined ? { thinking } : {}),
       createCustomTools: createAgentCustomToolsFactory(
         deps.manager,
         deps,

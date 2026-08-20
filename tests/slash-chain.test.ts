@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
 import { enqueueChainAppendRequest } from "../src/core/chain-append.js";
@@ -15,6 +16,7 @@ import {
   SlashParseError,
   registerChainCommands,
 } from "../src/core/slash-chain.js";
+import type { ChainThinkingLevel } from "../src/shared/thinking.js";
 import { completedRecord, createAgent, createDeps, createDiscovery } from "./_test-helpers.js";
 
 vi.mock("../src/core/child-subagent-tool.js", async (importOriginal) => {
@@ -104,6 +106,13 @@ describe("/run-chain definition materialization", () => {
 
 describe("executeSlashChain validation", () => {
   test("supplies the common tool factory for the effective chain-step agent", async () => {
+    const sentinelModel = { reasoning: true } as Model<Api>;
+    const parentModel = { reasoning: true } as Model<Api>;
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => sentinelModel,
+    };
     const manager = new AgentManager();
     const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
       id: "step-1",
@@ -119,9 +128,9 @@ describe("executeSlashChain validation", () => {
 
     await executeSlashChain(
       { sendMessage: vi.fn() } as unknown as ExtensionAPI,
-      { cwd: "/tmp" } as ExtensionCommandContext,
+      { cwd: "/tmp", model: parentModel, modelRegistry } as unknown as ExtensionCommandContext,
       deps,
-      [{ agent: "Scout", skills: ["review"], model: "test/model" }],
+      [{ agent: "Scout", skills: ["review"], model: "test/model", thinking: "HIGH" as unknown as ChainThinkingLevel }],
       "work",
       false,
       true,
@@ -133,6 +142,11 @@ describe("executeSlashChain validation", () => {
       expect.objectContaining({ name: "Scout", skills: ["review"], model: "test/model" }),
       0,
     );
+    expect(spawn.mock.calls[0]?.[2]).toMatchObject({
+      model: sentinelModel,
+      thinking: "high",
+    });
+    expect(spawn.mock.calls[0]?.[2]?.model).toBe(sentinelModel);
     expect(spawn.mock.calls[0]?.[2]?.createCustomTools)
       .toBe(vi.mocked(createAgentCustomToolsFactory).mock.results[0]?.value);
     expect(spawn.mock.calls[0]?.[2]?.createCustomTools?.({

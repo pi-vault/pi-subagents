@@ -17,7 +17,7 @@ import type {
 import { describeActivity } from "../tui/format.js";
 import { renderSubagentCall, renderSubagentResult } from "../tui/render.js";
 import { resolveInvocationConfig } from "./invocation-config.js";
-import { resolveModel } from "./model-resolver.js";
+import { resolveModel, resolveModelSelection, validateModelThinking } from "./model-resolver.js";
 import { checkModelScope, type ModelSource } from "./model-scope.js";
 import { normalizeChainSteps } from "./chain-serializer.js";
 import { getStepAgents } from "./chain-settings.js";
@@ -333,8 +333,6 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             if (options?.model) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
 
             // Model scope enforcement for chain steps
-            // Note: uses raw model string; chain steps don't canonicalize through
-            // ctx.modelRegistry (registry resolution happens inside spawnAndWait).
             const stepModel = options?.model ?? agentDef.model;
             if (stepModel && settings.modelScope) {
               const source: ModelSource = options?.modelSource ?? (options?.model ? "explicit" : "inherited");
@@ -351,6 +349,29 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               }
             }
 
+            if (stepModel !== undefined && !ctx.modelRegistry) {
+              throw new Error(
+                `Cannot resolve model "${stepModel}": model registry unavailable`,
+              );
+            }
+            const selection = stepModel
+              ? resolveModelSelection(stepModel, ctx.modelRegistry)
+              : undefined;
+            const selectedModel = selection?.model ?? ctx.model;
+            const canonical =
+              selection?.canonical ??
+              (selectedModel
+                ? `${selectedModel.provider}/${selectedModel.id}`
+                : undefined);
+            const thinking =
+              options?.thinking === undefined
+                ? undefined
+                : selectedModel && canonical
+                  ? validateModelThinking(selectedModel, canonical, options.thinking)
+                  : (() => {
+                      throw new Error("Cannot validate thinking without an active model");
+                    })();
+
             return deps.manager.spawnAndWait(ctx, effectiveAgentDef, {
               prompt,
               cwd: stepCwd || effectiveCwd,
@@ -358,6 +379,8 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               toolBudget: options?.toolBudget,
               isolation: options?.isolation,
               parentSignal: options?.parentSignal,
+              ...(stepModel !== undefined ? { model: selection?.model } : {}),
+              ...(thinking !== undefined ? { thinking } : {}),
               createCustomTools: createAgentCustomToolsFactory(
                 deps.manager,
                 deps,
