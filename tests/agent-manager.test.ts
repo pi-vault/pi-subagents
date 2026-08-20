@@ -448,8 +448,9 @@ describe("AgentManager", () => {
 });
 
 describe("thinking passthrough", () => {
-  it("passes thinking to runAgent when provided in SpawnOptions", async () => {
+  it("passes model and thinking to runAgent when provided in SpawnOptions", async () => {
     const manager = new AgentManager(3);
+    const sentinelModel = { reasoning: true };
     const spy = vi
       .spyOn(await import("../src/core/agent-runner.js"), "runAgent")
       .mockResolvedValue({
@@ -462,12 +463,13 @@ describe("thinking passthrough", () => {
     await manager.spawnAndWait({}, makeAgentDef(), {
       prompt: "test",
       cwd: tmpDir,
+      model: sentinelModel,
       thinking: "high",
     });
 
     expect(spy).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ thinking: "high" }),
+      expect.objectContaining({ model: sentinelModel, thinking: "high" }),
       expect.anything(),
     );
     spy.mockRestore();

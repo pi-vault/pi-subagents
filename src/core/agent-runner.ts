@@ -7,6 +7,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, AgentSessionEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
   AgentDefinition,
   EnvInfo,
@@ -17,6 +18,11 @@ import type {
 import { preloadSkills } from "./skill-loader.js";
 import { evaluateToolCall } from "./tool-budget.js";
 import { buildMemoryInjection } from "./memory.js";
+import {
+  resolveModelSelection,
+  type ModelRegistryLike,
+  validateModelThinking,
+} from "./model-resolver.js";
 
 interface SkillBlock {
   name: string;
@@ -257,13 +263,51 @@ export async function runAgent(
   await loader.reload();
 
   // 4. Resolve model
-  const model = (options.model ?? ctx.model) as never;
+  const runtimeCtx = ctx as {
+    model?: Model<Api>;
+    modelRegistry?: ModelRegistryLike;
+    sessionManager?: { getBranch?: () => unknown[] };
+  };
+  let selectedModel = options.model;
+  let canonical: string | undefined;
+
+  if (typeof selectedModel === "string") {
+    if (!runtimeCtx.modelRegistry) {
+      throw new Error(
+        `Cannot resolve model "${selectedModel}": model registry unavailable`,
+      );
+    }
+    const selection = resolveModelSelection(selectedModel, runtimeCtx.modelRegistry);
+    selectedModel = selection.model;
+    canonical = selection.canonical;
+  } else if (selectedModel === undefined && agentDef.model !== undefined) {
+    if (!runtimeCtx.modelRegistry) {
+      throw new Error(
+        `Cannot resolve model "${agentDef.model}": model registry unavailable`,
+      );
+    }
+    const selection = resolveModelSelection(agentDef.model, runtimeCtx.modelRegistry);
+    selectedModel = selection.model;
+    canonical = selection.canonical;
+  } else if (selectedModel === undefined) {
+    selectedModel = runtimeCtx.model;
+  }
+
+  const model = selectedModel as Model<Api> | undefined;
+  canonical ??= model ? `${model.provider}/${model.id}` : undefined;
+  const requestedThinking = options.thinking ?? agentDef.thinking;
+  const thinkingLevel =
+    requestedThinking === undefined
+      ? undefined
+      : model && canonical
+        ? validateModelThinking(model, canonical, requestedThinking)
+        : (() => {
+            throw new Error("Cannot validate thinking without an active model");
+          })();
 
   // 5. Create session
   const settingsManager = SettingsManager.create(options.cwd, agentDir);
   const sessionManager = SessionManager.inMemory(options.cwd);
-
-  const thinkingLevel = options.thinking ?? agentDef.thinking;
 
   const customTools = (options.customTools ?? []) as ToolDefinition[];
   // Custom tool names must be in the allowed tools list, otherwise
@@ -274,10 +318,10 @@ export async function runAgent(
     agentDir,
     sessionManager,
     settingsManager,
-    model,
+    ...(model !== undefined ? { model } : {}),
     tools: effectiveAllowedTools,
     resourceLoader: loader,
-    ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}),
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
     ...(customTools.length > 0 ? { customTools } : {}),
   });
 

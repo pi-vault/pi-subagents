@@ -6,6 +6,7 @@ import {
   resumeAgent,
   getAgentConversation,
 } from "../src/core/agent-runner.js";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type {
   AgentDefinition,
   EnvInfo,
@@ -262,6 +263,118 @@ describe("runAgent", () => {
         tools: ["read", "bash", "write"],
       }),
     );
+  });
+
+  it("resolves explicit model objects and normalizes thinking", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const explicitModel = {
+      provider: "explicit",
+      id: "model",
+      reasoning: true,
+    } as Model<Api>;
+    const parentModel = {
+      provider: "parent",
+      id: "model",
+      reasoning: true,
+    } as Model<Api>;
+
+    await runAgent(
+      makeAgentDef(),
+      makeRunOptions({ model: explicitModel, thinking: "HIGH" }),
+      { model: parentModel },
+    );
+
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: explicitModel, thinkingLevel: "high" }),
+    );
+  });
+
+  it("resolves configured model strings before falling back to the parent", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const sentinelModel = {
+      provider: "test",
+      id: "model",
+      reasoning: true,
+    } as Model<Api>;
+    const parentModel = {
+      provider: "parent",
+      id: "model",
+      reasoning: true,
+    } as Model<Api>;
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => sentinelModel,
+    };
+
+    await runAgent(
+      makeAgentDef({ model: "test/model", thinking: "high" }),
+      makeRunOptions(),
+      { model: parentModel, modelRegistry },
+    );
+
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: sentinelModel, thinkingLevel: "high" }),
+    );
+  });
+
+  it("resolves explicit model strings before configured and parent models", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const sentinelModel = {
+      provider: "test",
+      id: "model",
+      reasoning: true,
+    } as Model<Api>;
+    const parentModel = {
+      provider: "parent",
+      id: "model",
+      reasoning: true,
+    } as Model<Api>;
+    const modelRegistry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => sentinelModel,
+    };
+
+    await runAgent(
+      makeAgentDef({ model: "other/model" }),
+      makeRunOptions({ model: "test/model", thinking: "HIGH" }),
+      { model: parentModel, modelRegistry },
+    );
+
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: sentinelModel, thinkingLevel: "high" }),
+    );
+  });
+
+  it("uses the parent model when no model is configured", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+    const parentModel = {
+      provider: "parent",
+      id: "model",
+      reasoning: true,
+    } as Model<Api>;
+
+    await runAgent(makeAgentDef(), makeRunOptions(), { model: parentModel });
+
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: parentModel }),
+    );
+  });
+
+  it("rejects configured models without a registry before creating a session", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+
+    await expect(
+      runAgent(makeAgentDef({ model: "test/model" }), makeRunOptions(), {}),
+    ).rejects.toThrow('Cannot resolve model "test/model": model registry unavailable');
+
+    expect(createAgentSession).not.toHaveBeenCalled();
   });
 
   it("excludes subagent tool when allowRecursion is false", async () => {
