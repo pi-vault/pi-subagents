@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import { executeChain } from "../src/core/chain-execution.js";
+import { executeChain, type StepSpawnOptions } from "../src/core/chain-execution.js";
 import { AgentManager } from "../src/core/agent-manager.js";
 import {
   countPendingChainAppendRequests,
@@ -638,7 +638,7 @@ describe("executeChain — raw model and thinking behavior", () => {
   const agentOverrides = { model: "agent/model", thinking: "medium" };
 
   test("uses sequential step overrides before agent defaults", async () => {
-    const receivedOptions: Array<{ model?: string; thinking?: string }> = [];
+    const receivedOptions: StepSpawnOptions[] = [];
 
     await executeChain({
       steps: [
@@ -655,14 +655,14 @@ describe("executeChain — raw model and thinking behavior", () => {
       runId: "test-raw-sequential",
     });
 
-    expect(receivedOptions.map(({ model, thinking }) => ({ model, thinking }))).toEqual([
-      { model: "step/model", thinking: "high" },
-      { model: "agent/model", thinking: "medium" },
+    expect(receivedOptions.map(({ model, modelSource, thinking }) => ({ model, modelSource, thinking }))).toEqual([
+      { model: "step/model", modelSource: "explicit", thinking: "high" },
+      { model: "agent/model", modelSource: "inherited", thinking: "medium" },
     ]);
   });
 
   test("uses static parallel item overrides before agent defaults", async () => {
-    const receivedOptions: Array<{ model?: string; thinking?: string }> = [];
+    const receivedOptions: StepSpawnOptions[] = [];
 
     await executeChain({
       steps: [{
@@ -682,14 +682,14 @@ describe("executeChain — raw model and thinking behavior", () => {
       runId: "test-raw-static-parallel",
     });
 
-    expect(receivedOptions.map(({ model, thinking }) => ({ model, thinking }))).toEqual([
-      { model: "step/model", thinking: "high" },
-      { model: "agent/model", thinking: "medium" },
+    expect(receivedOptions.map(({ model, modelSource, thinking }) => ({ model, modelSource, thinking }))).toEqual([
+      { model: "step/model", modelSource: "explicit", thinking: "high" },
+      { model: "agent/model", modelSource: "inherited", thinking: "medium" },
     ]);
   });
 
   test("uses dynamic parallel template overrides before agent defaults", async () => {
-    const receivedOptions: Array<{ model?: string; thinking?: string }> = [];
+    const receivedOptions: StepSpawnOptions[] = [];
 
     await executeChain({
       steps: [
@@ -718,9 +718,9 @@ describe("executeChain — raw model and thinking behavior", () => {
       runId: "test-raw-dynamic-parallel",
     });
 
-    expect(receivedOptions.slice(1).map(({ model, thinking }) => ({ model, thinking }))).toEqual([
-      { model: "step/model", thinking: "high" },
-      { model: "agent/model", thinking: "medium" },
+    expect(receivedOptions.slice(1).map(({ model, modelSource, thinking }) => ({ model, modelSource, thinking }))).toEqual([
+      { model: "step/model", modelSource: "explicit", thinking: "high" },
+      { model: "agent/model", modelSource: "inherited", thinking: "medium" },
     ]);
   });
 
