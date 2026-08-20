@@ -377,6 +377,30 @@ describe("executeSlashChain validation", () => {
     now.mockRestore();
   });
 
+  test("reports unknown static parallel agents with their preflight location", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const messages: Array<{ content: string }> = [];
+    const deps = createDeps({
+      discoverAgents: () => createDiscovery([createAgent()]),
+      manager,
+    });
+
+    await executeSlashChain(
+      { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI,
+      { cwd: "/tmp" } as ExtensionCommandContext,
+      deps,
+      [{ parallel: [{ agent: "Scout" }, { agent: "Missing" }] }],
+      "work",
+      false,
+      true,
+    );
+
+    expect(messages[0]?.content).toContain('step 1 parallel item 2 (Missing): Unknown agent: "Missing"');
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
   test("rejects an unknown Agent without spawning", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(123456789);
     const manager = new AgentManager();

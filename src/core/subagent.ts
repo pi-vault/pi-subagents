@@ -21,7 +21,6 @@ import { resolveInvocationConfig } from "./invocation-config.js";
 import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
 import { checkModelScope, type ModelSource } from "./model-scope.js";
 import { normalizeChainSteps } from "./chain-serializer.js";
-import { getStepAgents } from "./chain-settings.js";
 import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 import { validateToolBudget } from "./tool-budget.js";
@@ -265,15 +264,8 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       if (params.chain) {
         try {
           // Clarification TUI — show before execution when clarify=true (interactive only)
-          const normalizeAndPreflight = (value: unknown) => {
-            const steps = normalizeChainSteps(value, "subagent chain");
-            for (const step of steps) {
-              for (const name of getStepAgents(step)) {
-                if (!findAgentByName(discovery, name)) throw new Error(`Unknown agent: "${name}"`);
-              }
-            }
-            return steps;
-          };
+          const normalizeAndPreflight = (value: unknown) =>
+            normalizeChainSteps(value, "subagent chain");
           let chainSteps = normalizeAndPreflight(params.chain);
           if (params.clarify && !params.run_in_background) {
             const customUI = (

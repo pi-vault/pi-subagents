@@ -4,7 +4,6 @@ import type { ChainThinkingLevel } from "../shared/thinking.js";
 import type { AgentDefinition, ChainStep, SequentialStep } from "../shared/types.js";
 import { discoverChains } from "./agents.js";
 import { materializeSavedChainSteps, normalizeChainSteps } from "./chain-serializer.js";
-import { getStepAgents } from "./chain-settings.js";
 import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
 import { findAgentByName } from "./subagent.js";
 import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
@@ -583,13 +582,7 @@ export async function executeSlashChain(
     return agent;
   };
 
-  const normalizeAndPreflight = (value: unknown) => {
-    const steps = normalizeChainSteps(value, "slash chain");
-    for (const step of steps) {
-      for (const name of getStepAgents(step)) findAgent(name);
-    }
-    return steps;
-  };
+  const normalizeAndPreflight = (value: unknown) => normalizeChainSteps(value, "slash chain");
   const preflightChain = (steps: ChainStep[]) => preflightChainModels(steps, findAgent, {
     registry: ctx.modelRegistry,
     parentModel: ctx.model,

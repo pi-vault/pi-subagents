@@ -297,6 +297,32 @@ describe("chain mode dispatch", () => {
     expect(typeof result.content[0]?.text).toBe("string");
   });
 
+  test("reports unknown dynamic template agents with their preflight location", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const deps = createDeps({
+      manager,
+      discoverAgents: () => createDiscovery([createAgent()]),
+    });
+
+    const result = await executeTool(deps, {
+      task: "work",
+      chain: [
+        { agent: "Scout", as: "targets" },
+        {
+          expand: { from: { output: "targets", path: "/items" } },
+          parallel: { agent: "Missing" },
+          collect: { as: "results" },
+        },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('step 2 dynamic template (Missing): Unknown agent: "Missing"');
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
   test("returns error when chain step agent is unknown", async () => {
     const manager = new AgentManager();
     const background = vi.spyOn(manager, "fireAndForgetChain");

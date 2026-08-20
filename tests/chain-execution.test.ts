@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { executeChain, type StepSpawnOptions } from "../src/core/chain-execution.js";
+import { preflightChainModels } from "../src/core/chain-preflight.js";
 import { AgentManager } from "../src/core/agent-manager.js";
 import {
   countPendingChainAppendRequests,
@@ -201,6 +202,38 @@ describe("executeChain — sequential", () => {
     })).rejects.toThrow("appended model rejected");
 
     expect(preflightChain).toHaveBeenCalledWith(appended);
+    expect(deps.spawnAndWait).toHaveBeenCalledTimes(1);
+    resetAppendQueues();
+    manager.dispose();
+  });
+
+  test("reports unknown appended dynamic templates with their preflight location", async () => {
+    const manager = new AgentManager();
+    const runId = `append-unknown-${Date.now()}`;
+    const steps: ChainStep[] = [{ agent: "scout", as: "targets" }];
+    manager.fireAndForgetChain(runId, "append", steps, "/tmp", () => new Promise(() => {}));
+    const appended: ChainStep[] = [{
+      expand: { from: { output: "targets", path: "/items" } },
+      parallel: { agent: "missing" },
+      collect: { as: "results" },
+    }];
+    enqueueChainAppendRequest(manager, runId, appended, makeAgentDef);
+    const deps = makeMockDeps([{ result: "one" }]);
+
+    await expect(executeChain({
+      steps,
+      task: "work",
+      spawnAndWait: deps.spawnAndWait,
+      findAgent: deps.findAgent,
+      cwd: "/tmp",
+      runId,
+      isAsync: true,
+      preflightChain: (batch) => preflightChainModels(batch, (name) => {
+        if (name === "missing") throw new Error('Unknown agent: "missing"');
+        return makeAgentDef(name);
+      }, {}),
+    })).rejects.toThrow('step 1 dynamic template (missing): Unknown agent: "missing"');
+
     expect(deps.spawnAndWait).toHaveBeenCalledTimes(1);
     resetAppendQueues();
     manager.dispose();
