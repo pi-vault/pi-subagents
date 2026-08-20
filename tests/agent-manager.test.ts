@@ -467,11 +467,9 @@ describe("thinking passthrough", () => {
       thinking: "high",
     });
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ model: sentinelModel, thinking: "high" }),
-      expect.anything(),
-    );
+    const forwardedOptions = spy.mock.calls[0]?.[1];
+    expect(forwardedOptions?.model).toBe(sentinelModel);
+    expect(forwardedOptions?.thinking).toBe("high");
     spy.mockRestore();
     manager.dispose();
   });

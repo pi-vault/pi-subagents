@@ -29,6 +29,15 @@ interface SkillBlock {
   content: string;
 }
 
+function isModelLike(value: unknown): value is Model<Api> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { provider?: unknown }).provider === "string" &&
+    typeof (value as { id?: unknown }).id === "string"
+  );
+}
+
 /**
  * Detect environment info for prompt construction.
  */
@@ -264,23 +273,28 @@ export async function runAgent(
 
   // 4. Resolve model
   const runtimeCtx = ctx as {
-    model?: Model<Api>;
+    model?: unknown;
     modelRegistry?: ModelRegistryLike;
     sessionManager?: { getBranch?: () => unknown[] };
   };
-  let selectedModel = options.model;
+  let selectedModel: Model<Api> | undefined;
   let canonical: string | undefined;
 
-  if (typeof selectedModel === "string") {
+  if (typeof options.model === "string") {
     if (!runtimeCtx.modelRegistry) {
       throw new Error(
-        `Cannot resolve model "${selectedModel}": model registry unavailable`,
+        `Cannot resolve model "${options.model}": model registry unavailable`,
       );
     }
-    const selection = resolveModelSelection(selectedModel, runtimeCtx.modelRegistry);
+    const selection = resolveModelSelection(options.model, runtimeCtx.modelRegistry);
     selectedModel = selection.model;
     canonical = selection.canonical;
-  } else if (selectedModel === undefined && agentDef.model !== undefined) {
+  } else if (options.model !== undefined) {
+    if (!isModelLike(options.model)) {
+      throw new Error("Invalid explicit model: expected string provider and id");
+    }
+    selectedModel = options.model;
+  } else if (agentDef.model !== undefined) {
     if (!runtimeCtx.modelRegistry) {
       throw new Error(
         `Cannot resolve model "${agentDef.model}": model registry unavailable`,
@@ -289,11 +303,14 @@ export async function runAgent(
     const selection = resolveModelSelection(agentDef.model, runtimeCtx.modelRegistry);
     selectedModel = selection.model;
     canonical = selection.canonical;
-  } else if (selectedModel === undefined) {
+  } else if (runtimeCtx.model !== undefined) {
+    if (!isModelLike(runtimeCtx.model)) {
+      throw new Error("Invalid parent model: expected string provider and id");
+    }
     selectedModel = runtimeCtx.model;
   }
 
-  const model = selectedModel as Model<Api> | undefined;
+  const model = selectedModel;
   canonical ??= model ? `${model.provider}/${model.id}` : undefined;
   const requestedThinking = options.thinking ?? agentDef.thinking;
   const thinkingLevel =

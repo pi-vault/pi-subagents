@@ -285,9 +285,9 @@ describe("runAgent", () => {
       { model: parentModel },
     );
 
-    expect(createAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: explicitModel, thinkingLevel: "high" }),
-    );
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0]?.[0];
+    expect(sessionOptions?.model).toBe(explicitModel);
+    expect(sessionOptions?.thinkingLevel).toBe("high");
   });
 
   it("resolves configured model strings before falling back to the parent", async () => {
@@ -315,9 +315,9 @@ describe("runAgent", () => {
       { model: parentModel, modelRegistry },
     );
 
-    expect(createAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: sentinelModel, thinkingLevel: "high" }),
-    );
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0]?.[0];
+    expect(sessionOptions?.model).toBe(sentinelModel);
+    expect(sessionOptions?.thinkingLevel).toBe("high");
   });
 
   it("resolves explicit model strings before configured and parent models", async () => {
@@ -345,9 +345,9 @@ describe("runAgent", () => {
       { model: parentModel, modelRegistry },
     );
 
-    expect(createAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: sentinelModel, thinkingLevel: "high" }),
-    );
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0]?.[0];
+    expect(sessionOptions?.model).toBe(sentinelModel);
+    expect(sessionOptions?.thinkingLevel).toBe("high");
   });
 
   it("uses the parent model when no model is configured", async () => {
@@ -361,9 +361,24 @@ describe("runAgent", () => {
 
     await runAgent(makeAgentDef(), makeRunOptions(), { model: parentModel });
 
-    expect(createAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: parentModel }),
-    );
+    const sessionOptions = vi.mocked(createAgentSession).mock.calls[0]?.[0];
+    expect(sessionOptions?.model).toBe(parentModel);
+  });
+
+  it("rejects malformed explicit and parent models before creating a session", async () => {
+    const { createAgentSession } =
+      await import("@earendil-works/pi-coding-agent");
+
+    for (const model of [null, {}]) {
+      await expect(
+        runAgent(makeAgentDef(), makeRunOptions({ model }), {}),
+      ).rejects.toThrow("Invalid explicit model");
+    }
+    await expect(
+      runAgent(makeAgentDef(), makeRunOptions(), { model: {} }),
+    ).rejects.toThrow("Invalid parent model");
+
+    expect(createAgentSession).not.toHaveBeenCalled();
   });
 
   it("rejects configured models without a registry before creating a session", async () => {
