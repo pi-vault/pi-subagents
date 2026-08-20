@@ -79,14 +79,7 @@ export function resolveModelSelection(
     return matches[0];
   };
 
-  let selected = providerIsRegistered
-    ? choose(
-        scopedCandidates.filter(
-          (candidate) => candidate.id.toLowerCase() === modelQuery,
-        ),
-      )
-    : undefined;
-  selected ??= choose(
+  let selected = choose(
     scopedCandidates.filter((candidate) => candidate.id.toLowerCase() === modelQuery),
   );
   selected ??= choose(

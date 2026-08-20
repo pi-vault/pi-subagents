@@ -203,6 +203,17 @@ describe("resolveModelSelection", () => {
     );
   });
 
+  it("rejects an available metadata entry without a runtime model", () => {
+    const registryWithoutRuntimeModel = {
+      ...uniqueIdRegistry,
+      find: () => undefined,
+    };
+
+    expect(() =>
+      resolveModelSelection("gpt-5.6-luna", registryWithoutRuntimeModel),
+    ).toThrow(/configured model not found/i);
+  });
+
   it("rejects a known provider with an empty model ID", () => {
     expect(() => resolveModelSelection("openai/", registry)).toThrow(
       /non-empty/i,
