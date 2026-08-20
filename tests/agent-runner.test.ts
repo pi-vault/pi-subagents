@@ -62,6 +62,22 @@ function makeRunOptions(overrides: Partial<RunOptions> = {}): RunOptions {
   };
 }
 
+function makeModel(provider: string, id: string): Model<Api> {
+  return {
+    provider,
+    id,
+    name: `${provider}/${id}`,
+    api: "openai-responses",
+    baseUrl: "https://example.test",
+    reasoning: true,
+    thinkingLevelMap: { high: "high" },
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4_096,
+  };
+}
+
 const testEnv: EnvInfo = { isGitRepo: false, branch: "", platform: "linux" };
 const testEnvGit: EnvInfo = {
   isGitRepo: true,
@@ -268,16 +284,8 @@ describe("runAgent", () => {
   it("resolves explicit model objects and normalizes thinking", async () => {
     const { createAgentSession } =
       await import("@earendil-works/pi-coding-agent");
-    const explicitModel = {
-      provider: "explicit",
-      id: "model",
-      reasoning: true,
-    } as Model<Api>;
-    const parentModel = {
-      provider: "parent",
-      id: "model",
-      reasoning: true,
-    } as Model<Api>;
+    const explicitModel = makeModel("explicit", "model");
+    const parentModel = makeModel("parent", "model");
 
     await runAgent(
       makeAgentDef(),
@@ -293,16 +301,8 @@ describe("runAgent", () => {
   it("resolves configured model strings before falling back to the parent", async () => {
     const { createAgentSession } =
       await import("@earendil-works/pi-coding-agent");
-    const sentinelModel = {
-      provider: "test",
-      id: "model",
-      reasoning: true,
-    } as Model<Api>;
-    const parentModel = {
-      provider: "parent",
-      id: "model",
-      reasoning: true,
-    } as Model<Api>;
+    const sentinelModel = makeModel("test", "model");
+    const parentModel = makeModel("parent", "model");
     const modelRegistry = {
       getAll: () => [{ provider: "test", id: "model" }],
       getAvailable: () => [{ provider: "test", id: "model" }],
@@ -323,16 +323,8 @@ describe("runAgent", () => {
   it("resolves explicit model strings before configured and parent models", async () => {
     const { createAgentSession } =
       await import("@earendil-works/pi-coding-agent");
-    const sentinelModel = {
-      provider: "test",
-      id: "model",
-      reasoning: true,
-    } as Model<Api>;
-    const parentModel = {
-      provider: "parent",
-      id: "model",
-      reasoning: true,
-    } as Model<Api>;
+    const sentinelModel = makeModel("test", "model");
+    const parentModel = makeModel("parent", "model");
     const modelRegistry = {
       getAll: () => [{ provider: "test", id: "model" }],
       getAvailable: () => [{ provider: "test", id: "model" }],
@@ -353,11 +345,7 @@ describe("runAgent", () => {
   it("uses the parent model when no model is configured", async () => {
     const { createAgentSession } =
       await import("@earendil-works/pi-coding-agent");
-    const parentModel = {
-      provider: "parent",
-      id: "model",
-      reasoning: true,
-    } as Model<Api>;
+    const parentModel = makeModel("parent", "model");
 
     await runAgent(makeAgentDef(), makeRunOptions(), { model: parentModel });
 
@@ -369,14 +357,16 @@ describe("runAgent", () => {
     const { createAgentSession } =
       await import("@earendil-works/pi-coding-agent");
 
-    for (const model of [null, {}]) {
+    for (const model of [null, {}, { provider: "partial", id: "model" }]) {
       await expect(
         runAgent(makeAgentDef(), makeRunOptions({ model }), {}),
       ).rejects.toThrow("Invalid explicit model");
     }
-    await expect(
-      runAgent(makeAgentDef(), makeRunOptions(), { model: {} }),
-    ).rejects.toThrow("Invalid parent model");
+    for (const model of [{}, { provider: "partial", id: "model" }]) {
+      await expect(
+        runAgent(makeAgentDef(), makeRunOptions(), { model }),
+      ).rejects.toThrow("Invalid parent model");
+    }
 
     expect(createAgentSession).not.toHaveBeenCalled();
   });

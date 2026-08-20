@@ -30,11 +30,28 @@ interface SkillBlock {
 }
 
 function isModelLike(value: unknown): value is Model<Api> {
+  if (typeof value !== "object" || value === null) return false;
+
+  const model = value as Record<string, unknown>;
+  const cost = model.cost;
+  const input = model.input;
   return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { provider?: unknown }).provider === "string" &&
-    typeof (value as { id?: unknown }).id === "string"
+    typeof model.provider === "string" &&
+    typeof model.id === "string" &&
+    typeof model.name === "string" &&
+    typeof model.api === "string" &&
+    typeof model.baseUrl === "string" &&
+    typeof model.reasoning === "boolean" &&
+    Array.isArray(input) &&
+    input.every((kind) => kind === "text" || kind === "image") &&
+    typeof cost === "object" &&
+    cost !== null &&
+    typeof (cost as Record<string, unknown>).input === "number" &&
+    typeof (cost as Record<string, unknown>).output === "number" &&
+    typeof (cost as Record<string, unknown>).cacheRead === "number" &&
+    typeof (cost as Record<string, unknown>).cacheWrite === "number" &&
+    typeof model.contextWindow === "number" &&
+    typeof model.maxTokens === "number"
   );
 }
 
@@ -291,7 +308,7 @@ export async function runAgent(
     canonical = selection.canonical;
   } else if (options.model !== undefined) {
     if (!isModelLike(options.model)) {
-      throw new Error("Invalid explicit model: expected string provider and id");
+      throw new Error("Invalid explicit model: expected a complete Pi model object");
     }
     selectedModel = options.model;
   } else if (agentDef.model !== undefined) {
@@ -305,7 +322,7 @@ export async function runAgent(
     canonical = selection.canonical;
   } else if (runtimeCtx.model !== undefined) {
     if (!isModelLike(runtimeCtx.model)) {
-      throw new Error("Invalid parent model: expected string provider and id");
+      throw new Error("Invalid parent model: expected a complete Pi model object");
     }
     selectedModel = runtimeCtx.model;
   }
