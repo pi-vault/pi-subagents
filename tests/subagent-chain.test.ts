@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
@@ -156,10 +157,11 @@ describe("chain mode dispatch", () => {
       join(repoRoot, "chains", "implement-plan-review.chain.md"),
       readFileSync(join(repoRoot, "chains", "implement-plan-review.chain.md"), "utf8"),
     ).steps;
+    const userAgentsDir = mkdtempSync(join(tmpdir(), "pi-subagents-user-agents-"));
     const discovery = discoverAgents({
       agentDir: "/tmp/pi-agent",
       configPath: "/tmp/pi-agent/extensions/subagents.json",
-      userAgentsDir: "/tmp/pi-agent/agents",
+      userAgentsDir,
       bundledAgentsDir: join(repoRoot, "agents"),
       sessionsDir: "/tmp/pi-agent/sessions",
       userChainsDir: "/tmp/pi-agent/chains",
@@ -167,6 +169,9 @@ describe("chain mode dispatch", () => {
       userPromptsDir: "/tmp/pi-agent/prompts",
       bundledPromptsDir: "/tmp/pi-agent/prompts",
     });
+    expect(discovery.agents.find(({ name }) => name === "worker")?.sourcePath).toBe(
+      join(repoRoot, "agents", "worker.md"),
+    );
     const maxModel = { reasoning: true, thinkingLevelMap: { max: "max" } } as Model<Api>;
     const highModel = { reasoning: true, thinkingLevelMap: { high: "high" } } as Model<Api>;
     const models = [
