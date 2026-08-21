@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -88,6 +89,21 @@ describe("agent discovery", () => {
       const parsed = parseAgentContent(filePath, readFileSync(filePath, "utf8"));
       expect(parsed.ok).toBe(true);
     }
+  });
+
+  test("packaged worker can delegate to reviewer", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "pi-subagents-discovery-"));
+    const paths = createPaths(rootDir);
+    const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+    paths.bundledAgentsDir = join(repoRoot, "agents");
+
+    const result = discoverAgents(paths);
+    const worker = result.agents.find((agent) => agent.name === "worker");
+
+    expect(result.diagnostics).toEqual([]);
+    expect(worker?.subagentAgents).toContain("reviewer");
+
+    rmSync(rootDir, { recursive: true, force: true });
   });
 
   test("parses the markdown body as systemPrompt", () => {

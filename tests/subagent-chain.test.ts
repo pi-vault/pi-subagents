@@ -1,8 +1,12 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { parseChain } from "../src/core/chain-serializer.js";
 import { registerSubagentTool } from "../src/core/subagent.js";
 import {
   CTX,
@@ -143,6 +147,61 @@ describe("chain mode dispatch", () => {
     expect(result.details.agent).toBe("(chain)");
     expect(result.details.status).toBe("success");
     expect(spawn.mock.calls[0]?.[2]?.createCustomTools).toBeTypeOf("function");
+  });
+
+  test("executes the packaged implement-plan-review chain with its assigned models and skills", async () => {
+    const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+    const steps = parseChain(
+      join(repoRoot, "chains", "implement-plan-review.chain.md"),
+      readFileSync(join(repoRoot, "chains", "implement-plan-review.chain.md"), "utf8"),
+    ).steps;
+    const maxModel = { reasoning: true, thinkingLevelMap: { max: "max" } } as Model<Api>;
+    const highModel = { reasoning: true, thinkingLevelMap: { high: "high" } } as Model<Api>;
+    const models = [
+      { provider: "openai-codex", id: "gpt-5.6-luna" },
+      { provider: "minimax", id: "MiniMax-M3" },
+    ];
+    const modelRegistry = {
+      getAll: () => models,
+      getAvailable: () => models,
+      find: (provider: string) => provider === "openai-codex" ? maxModel : highModel,
+    };
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step",
+      record: completedRecord("done"),
+    });
+    const deps = createDeps({
+      manager,
+      discoverAgents: () => createDiscovery([createAgent({ name: "worker" })]),
+    });
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, deps);
+
+    const result = await registeredTool().execute(
+      "tc-1",
+      { task: "path/to/plan.md", chain: steps },
+      undefined,
+      undefined,
+      { ...CTX, modelRegistry },
+    ) as { isError: boolean };
+
+    expect(result.isError).toBe(false);
+    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(spawn.mock.calls.map(([, agent, options]) => [
+      agent.skills,
+      options?.model,
+      options?.thinking,
+    ])).toEqual([
+      [["brainstorming"], maxModel, "max"],
+      [["test-driven-development"], highModel, "high"],
+      [["requesting-code-review"], maxModel, "max"],
+      [["ponytail-review"], maxModel, "max"],
+    ]);
+    expect(
+      spawn.mock.calls.every(([, , options]) => options?.prompt.includes("path/to/plan.md")),
+    ).toBe(true);
+    manager.dispose();
   });
 
   test("forwards resolved chain models and rejects unknown configured models", async () => {

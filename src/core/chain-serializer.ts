@@ -469,9 +469,16 @@ function parseFrontmatter(content: string): {
 
 function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
   const lines = sectionBody.split("\n");
-  const blankIndex = lines.findIndex((line) => line.trim() === "");
-  const configLines = blankIndex === -1 ? lines : lines.slice(0, blankIndex);
-  const task = (blankIndex === -1 ? "" : lines.slice(blankIndex + 1).join("\n")).trim();
+  const configStart =
+    lines[0]?.trim() === "" && /^[\w-]+:\s*/.test(lines[1] ?? "") ? 1 : 0;
+  const configLinesInput = lines.slice(configStart);
+  const blankIndex = configLinesInput.findIndex((line) => line.trim() === "");
+  const configLines = blankIndex === -1
+    ? configLinesInput
+    : configLinesInput.slice(0, blankIndex);
+  const task = (blankIndex === -1
+    ? ""
+    : configLinesInput.slice(blankIndex + 1).join("\n")).trim();
 
   const step: ChainStepConfig = { agent, task };
   for (const line of configLines) {

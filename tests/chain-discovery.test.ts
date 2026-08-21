@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { discoverChains } from "../src/core/agents.js";
 import type { ResolvedPaths } from "../src/shared/types.js";
 
@@ -40,6 +41,29 @@ function makeTmpPaths(): ResolvedPaths & { tmpDir: string } {
 }
 
 describe("discoverChains", () => {
+  test("discovers the packaged implement-plan-review chain", () => {
+    const paths = makeTmpPaths();
+    const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+    paths.bundledChainsDir = join(repoRoot, "chains");
+
+    const result = discoverChains(paths);
+    const chain = result.chains.find(({ name }) => name === "implement-plan-review");
+
+    expect(
+      result.diagnostics.filter(({ filePath }) => filePath.includes("implement-plan-review")),
+    ).toEqual([]);
+    expect(chain?.steps).toHaveLength(4);
+    expect(chain?.steps.map((step) => step.agent)).toEqual([
+      "worker",
+      "worker",
+      "worker",
+      "worker",
+    ]);
+    expect(chain?.steps.every((step) => step.task?.includes("{task}"))).toBe(true);
+
+    rmSync(paths.tmpDir, { recursive: true, force: true });
+  });
+
   test("discovers .chain.md files from bundled dir", () => {
     const paths = makeTmpPaths();
     writeFileSync(

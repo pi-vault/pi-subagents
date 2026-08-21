@@ -1,6 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
   ChainDefinitionError,
@@ -163,6 +164,19 @@ describe("materializeSavedChainSteps", () => {
 });
 
 describe("parseChain (.chain.md)", () => {
+  test("parses the packaged implement-plan-review assignments", () => {
+    const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+    const filePath = join(repoRoot, "chains", "implement-plan-review.chain.md");
+    const config = parseChain(filePath, readFileSync(filePath, "utf8"));
+
+    expect(config.steps.map((step) => [step.model, step.thinking, step.skills])).toEqual([
+      ["openai-codex/gpt-5.6-luna", "max", ["brainstorming"]],
+      ["minimax/MiniMax-M3", "high", ["test-driven-development"]],
+      ["openai-codex/gpt-5.6-luna", "max", ["requesting-code-review"]],
+      ["openai-codex/gpt-5.6-luna", "max", ["ponytail-review"]],
+    ]);
+  });
+
   test("parses a simple 2-step chain", () => {
     const content = [
       "---",
