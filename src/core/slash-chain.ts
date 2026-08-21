@@ -4,10 +4,10 @@ import type { ChainThinkingLevel } from "../shared/thinking.js";
 import type { AgentDefinition, ChainStep, SequentialStep } from "../shared/types.js";
 import { discoverChains } from "./agents.js";
 import { materializeSavedChainSteps, normalizeChainSteps } from "./chain-serializer.js";
-import { getStepAgents } from "./chain-settings.js";
 import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
 import { findAgentByName } from "./subagent.js";
 import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
+import { preflightChainModels, validateChainAgents } from "./chain-preflight.js";
 import { normalizeThinkingLevel, ChainThinkingLevelError } from "../shared/thinking.js";
 
 export class SlashParseError extends Error {}
@@ -584,11 +584,19 @@ export async function executeSlashChain(
 
   const normalizeAndPreflight = (value: unknown) => {
     const steps = normalizeChainSteps(value, "slash chain");
-    for (const step of steps) {
-      for (const name of getStepAgents(step)) findAgent(name);
-    }
+    validateChainAgents(steps, findAgent);
     return steps;
   };
+  const preflightChain = (steps: ChainStep[]) => preflightChainModels(steps, findAgent, {
+    registry: ctx.modelRegistry,
+    parentModel: ctx.model,
+    modelScope: settings.modelScope,
+    onScopeWarning: (warning) => pi.sendMessage({
+      customType: "model_scope_warning",
+      content: `[chain step] ${warning.message}`,
+      display: true,
+    }),
+  });
   let chain: ChainStep[];
   try {
     chain = normalizeAndPreflight(inputChain);
@@ -626,6 +634,17 @@ export async function executeSlashChain(
     if (result.action === "bg") bg = true;
   }
 
+  try {
+    preflightChain(chain);
+  } catch (error) {
+    pi.sendMessage({
+      customType: "pi-subagent-result",
+      content: error instanceof Error ? error.message : String(error),
+      display: true,
+    });
+    return;
+  }
+
   // Background chain path
   if (bg) {
     const { executeChain } = await import("./chain-execution.js");
@@ -644,6 +663,7 @@ export async function executeSlashChain(
         signal: chainSignal,
         isAsync: true,
         onAppendClose: closeAppendAdmission,
+        preflightChain,
         onGraphUpdate: (snapshot) => {
           deps.chainWidget?.update(snapshot);
           const record = deps.manager.getRecord(chainRunId);
@@ -674,6 +694,7 @@ export async function executeSlashChain(
       findAgent,
       cwd: ctx.cwd,
       runId: chainRunId,
+      preflightChain,
       onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
       getSpawnBudget: () => deps.manager.getSpawnBudget(),
     });

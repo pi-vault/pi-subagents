@@ -212,6 +212,111 @@ describe("executeSlashChain validation", () => {
     manager.dispose();
   });
 
+  test("preflights invalid initial chains before foreground or background dispatch", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const background = vi.spyOn(manager, "fireAndForgetChain");
+    const messages: Array<{ content: string }> = [];
+    const deps = createDeps({ manager });
+    const ctx = {
+      cwd: "/tmp",
+      modelRegistry: {
+        getAll: () => [{ provider: "test", id: "model" }],
+        getAvailable: () => [{ provider: "test", id: "model" }],
+        find: () => ({ reasoning: true } as Model<Api>),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    await executeSlashChain(
+      { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI,
+      ctx,
+      deps,
+      [{ agent: "Scout", model: "unknown/model" }],
+      "work",
+      false,
+      true,
+    );
+    await executeSlashChain(
+      { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI,
+      ctx,
+      deps,
+      [{ agent: "Scout", model: "unknown/model" }],
+      "work",
+      true,
+      true,
+    );
+
+    expect(messages[0]?.content).toContain("Unknown model: unknown/model");
+    expect(messages[1]?.content).toContain("Unknown model: unknown/model");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test("preflights only the final clarification edit", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step-1",
+      record: completedRecord("done"),
+    });
+    const messages: Array<{ content: string }> = [];
+    const deps = createDeps({ manager });
+    const registry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => ({ reasoning: true } as Model<Api>),
+    };
+    const pi = { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI;
+
+    await executeSlashChain(
+      pi,
+      {
+        cwd: "/tmp",
+        modelRegistry: registry,
+        ui: { custom: async () => ({ action: "run", steps: [{ agent: "Scout" }] }) },
+      } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout", model: "unknown/model" }],
+      "work",
+    );
+    await executeSlashChain(
+      pi,
+      {
+        cwd: "/tmp",
+        modelRegistry: registry,
+        ui: { custom: async () => ({ action: "run", steps: [{ agent: "Scout", model: "unknown/model" }] }) },
+      } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+    );
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(messages.at(-1)?.content).toContain("Unknown model: unknown/model");
+    manager.dispose();
+  });
+
+  test("validates agent names before showing clarification", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const custom = vi.fn(async () => ({ action: "run", steps: [{ agent: "Scout" }] }));
+    const messages: Array<{ content: string }> = [];
+    const deps = createDeps({ manager });
+
+    await executeSlashChain(
+      { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI,
+      { cwd: "/tmp", ui: { custom } } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Missing" }],
+      "work",
+    );
+
+    expect(custom).not.toHaveBeenCalled();
+    expect(messages[0]?.content).toContain('Unknown agent: "Missing"');
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
   test("aborting a background slash chain cancels its in-flight child", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(246813579);
     const manager = new AgentManager();
@@ -291,6 +396,30 @@ describe("executeSlashChain validation", () => {
     expect(spawn).toHaveBeenCalledTimes(2);
     manager.dispose();
     now.mockRestore();
+  });
+
+  test("reports unknown static parallel agents with their preflight location", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const messages: Array<{ content: string }> = [];
+    const deps = createDeps({
+      discoverAgents: () => createDiscovery([createAgent()]),
+      manager,
+    });
+
+    await executeSlashChain(
+      { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI,
+      { cwd: "/tmp" } as ExtensionCommandContext,
+      deps,
+      [{ parallel: [{ agent: "Scout" }, { agent: "Missing" }] }],
+      "work",
+      false,
+      true,
+    );
+
+    expect(messages[0]?.content).toContain('step 1 parallel item 2 (Missing): Unknown agent: "Missing"');
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
   });
 
   test("rejects an unknown Agent without spawning", async () => {

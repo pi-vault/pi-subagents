@@ -10,6 +10,7 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type {
   AgentDefinition,
   AgentDiscoveryResult,
+  ChainStep,
   ResolvedToolBudget,
   SubagentExecutionDetails,
   SubagentToolInput,
@@ -20,11 +21,11 @@ import { resolveInvocationConfig } from "./invocation-config.js";
 import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
 import { checkModelScope, type ModelSource } from "./model-scope.js";
 import { normalizeChainSteps } from "./chain-serializer.js";
-import { getStepAgents } from "./chain-settings.js";
 import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 import { validateToolBudget } from "./tool-budget.js";
 import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
+import { preflightChainModels, validateChainAgents } from "./chain-preflight.js";
 
 const CHAIN_OBJECT_SCHEMA = Type.Object({}, { additionalProperties: true });
 const CHAIN_ACCEPTANCE = Type.Object({
@@ -262,14 +263,15 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       // --- Chain mode dispatch ---
       if (params.chain) {
         try {
+          const findAgent = (name: string) => {
+            const agent = findAgentByName(discovery, name);
+            if (!agent) throw new Error(`Unknown agent: "${name}"`);
+            return agent;
+          };
           // Clarification TUI — show before execution when clarify=true (interactive only)
           const normalizeAndPreflight = (value: unknown) => {
             const steps = normalizeChainSteps(value, "subagent chain");
-            for (const step of steps) {
-              for (const name of getStepAgents(step)) {
-                if (!findAgentByName(discovery, name)) throw new Error(`Unknown agent: "${name}"`);
-              }
-            }
+            validateChainAgents(steps, findAgent);
             return steps;
           };
           let chainSteps = normalizeAndPreflight(params.chain);
@@ -332,23 +334,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
               : agentDef;
             if (options?.model !== undefined) effectiveAgentDef = { ...effectiveAgentDef, model: options.model };
 
-            // Model scope enforcement for chain steps
             const stepModel = options?.model ?? agentDef.model;
-            if (stepModel !== undefined && settings.modelScope) {
-              const source: ModelSource = options?.modelSource ?? (options?.model !== undefined ? "explicit" : "inherited");
-              const violation = checkModelScope(stepModel, settings.modelScope, source);
-              if (violation && violation.severity === "error") {
-                throw new Error(violation.message);
-              }
-              if (violation && violation.severity === "warn") {
-                pi.sendMessage({
-                  customType: "model_scope_warning",
-                  content: `[chain step] ${violation.message}`,
-                  display: true,
-                });
-              }
-            }
-
             if (stepModel !== undefined && !ctx.modelRegistry) {
               throw new Error(
                 `Cannot resolve model "${stepModel}": model registry unavailable`,
@@ -390,11 +376,17 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             });
           };
 
-          const findAgent = (name: string) => {
-            const agent = findAgentByName(discovery, name);
-            if (!agent) throw new Error(`Unknown agent: "${name}"`);
-            return agent;
-          };
+          const preflightChain = (steps: ChainStep[]) => preflightChainModels(steps, findAgent, {
+            registry: ctx.modelRegistry,
+            parentModel: ctx.model,
+            modelScope: settings.modelScope,
+            onScopeWarning: (warning) => pi.sendMessage({
+              customType: "model_scope_warning",
+              content: `[chain step] ${warning.message}`,
+              display: true,
+            }),
+          });
+          preflightChain(chainSteps);
 
           // Background chain dispatch — fire and forget
           if (params.run_in_background) {
@@ -413,6 +405,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
                 signal: chainSignal,
                 isAsync: true,
                 onAppendClose: closeAppendAdmission,
+                preflightChain,
                 onGraphUpdate: (snapshot) => {
                   deps.chainWidget?.update(snapshot);
                   const record = deps.manager.getRecord(chainRunId);
@@ -449,6 +442,7 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             cwd: effectiveCwd,
             runId: chainRunId,
             signal,
+            preflightChain,
             onGraphUpdate: (snapshot) => deps.chainWidget?.update(snapshot),
             getSpawnBudget: () => deps.manager.getSpawnBudget(),
           });

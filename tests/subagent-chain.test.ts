@@ -204,6 +204,105 @@ describe("chain mode dispatch", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
+  test("preflights invalid initial chains before foreground or background dispatch", async () => {
+    const manager = new AgentManager();
+    const background = vi.spyOn(manager, "fireAndForgetChain");
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const deps = createDeps({ manager });
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, deps);
+    const ctx = {
+      ...CTX,
+      modelRegistry: {
+        getAll: () => [{ provider: "test", id: "model" }],
+        getAvailable: () => [{ provider: "test", id: "model" }],
+        find: () => ({ reasoning: true } as Model<Api>),
+      },
+    };
+
+    const foreground = await registeredTool().execute(
+      "tc-foreground",
+      { task: "work", chain: [{ agent: "Scout", model: "unknown/model" }] },
+      undefined,
+      undefined,
+      ctx,
+    ) as { isError: boolean; content: Array<{ text: string }> };
+    const backgroundResult = await registeredTool().execute(
+      "tc-background",
+      { task: "work", chain: [{ agent: "Scout", model: "unknown/model" }], run_in_background: true },
+      undefined,
+      undefined,
+      ctx,
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(foreground.isError).toBe(true);
+    expect(foreground.content[0]?.text).toContain("Unknown model: unknown/model");
+    expect(backgroundResult.isError).toBe(true);
+    expect(backgroundResult.content[0]?.text).toContain("Unknown model: unknown/model");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test("validates agent names before showing clarification", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const custom = vi.fn(async () => ({ action: "run", steps: [{ agent: "Scout" }] }));
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, createDeps({ manager }));
+
+    const result = await registeredTool().execute(
+      "tc-invalid-agent",
+      { task: "work", chain: [{ agent: "Missing" }], clarify: true },
+      undefined,
+      undefined,
+      { ...CTX, ui: { custom } },
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('Unknown agent: "Missing"');
+    expect(custom).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test("preflights only the final clarification edit", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step-1",
+      record: completedRecord("done"),
+    });
+    const deps = createDeps({ manager });
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, deps);
+    const registry = {
+      getAll: () => [{ provider: "test", id: "model" }],
+      getAvailable: () => [{ provider: "test", id: "model" }],
+      find: () => ({ reasoning: true } as Model<Api>),
+    };
+
+    const validEdit = await registeredTool().execute(
+      "tc-valid-edit",
+      { task: "work", chain: [{ agent: "Scout", model: "unknown/model" }], clarify: true },
+      undefined,
+      undefined,
+      { ...CTX, modelRegistry: registry, ui: { custom: async () => ({ action: "run", steps: [{ agent: "Scout" }] }) } },
+    ) as { isError: boolean };
+    const invalidEdit = await registeredTool().execute(
+      "tc-invalid-edit",
+      { task: "work", chain: [{ agent: "Scout" }], clarify: true },
+      undefined,
+      undefined,
+      { ...CTX, modelRegistry: registry, ui: { custom: async () => ({ action: "run", steps: [{ agent: "Scout", model: "unknown/model" }] }) } },
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(validEdit.isError).toBe(false);
+    expect(invalidEdit.isError).toBe(true);
+    expect(invalidEdit.content[0]?.text).toContain("Unknown model: unknown/model");
+    expect(spawn).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
   test("returns error details when executeChain throws", async () => {
     const deps = createDeps({
       discoverAgents: () => createDiscovery([]),
@@ -218,6 +317,32 @@ describe("chain mode dispatch", () => {
     expect(result.details.agent).toBe("(chain)");
     expect(result.details.stopReason).toBe("error");
     expect(typeof result.content[0]?.text).toBe("string");
+  });
+
+  test("reports unknown dynamic template agents with their preflight location", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const deps = createDeps({
+      manager,
+      discoverAgents: () => createDiscovery([createAgent()]),
+    });
+
+    const result = await executeTool(deps, {
+      task: "work",
+      chain: [
+        { agent: "Scout", as: "targets" },
+        {
+          expand: { from: { output: "targets", path: "/items" } },
+          parallel: { agent: "Missing" },
+          collect: { as: "results" },
+        },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('step 2 dynamic template (Missing): Unknown agent: "Missing"');
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
   });
 
   test("returns error when chain step agent is unknown", async () => {

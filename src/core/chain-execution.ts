@@ -59,6 +59,7 @@ export interface ChainExecutionParams {
   onGraphUpdate?: (snapshot: WorkflowGraphSnapshot) => void;
   isAsync?: boolean;
   onAppendClose?: () => void;
+  preflightChain?: (steps: ChainStep[]) => void;
   getSpawnBudget?: () => number;
   globalConcurrencyLimit?: number;
 }
@@ -511,6 +512,7 @@ export async function executeChain(
     if (params.isAsync) {
       const appended = consumeChainAppendRequests(runId);
       if (appended.length > 0) {
+        params.preflightChain?.(appended);
         chainSteps.push(...appended);
         templates.push(...resolveChainTemplates(appended));
       }
