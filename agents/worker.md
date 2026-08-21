@@ -23,6 +23,7 @@ extensions: true
 subagent_agents:
   - scout
   - researcher
+  - reviewer
   - worker
 disallowed_tools:
 skills:

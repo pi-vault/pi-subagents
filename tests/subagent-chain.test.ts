@@ -1,8 +1,14 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { discoverAgents } from "../src/core/agents.js";
+import { parseChain } from "../src/core/chain-serializer.js";
 import { registerSubagentTool } from "../src/core/subagent.js";
 import {
   CTX,
@@ -143,6 +149,93 @@ describe("chain mode dispatch", () => {
     expect(result.details.agent).toBe("(chain)");
     expect(result.details.status).toBe("success");
     expect(spawn.mock.calls[0]?.[2]?.createCustomTools).toBeTypeOf("function");
+  });
+
+  test("executes the packaged implement-plan-review chain sequentially with its assigned models and skills", async () => {
+    const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+    const steps = parseChain(
+      join(repoRoot, "chains", "implement-plan-review.chain.md"),
+      readFileSync(join(repoRoot, "chains", "implement-plan-review.chain.md"), "utf8"),
+    ).steps;
+    const userAgentsDir = mkdtempSync(join(tmpdir(), "pi-subagents-user-agents-"));
+    let manager: AgentManager | undefined;
+    try {
+      const discovery = discoverAgents({
+        agentDir: "/tmp/pi-agent",
+        configPath: "/tmp/pi-agent/extensions/subagents.json",
+        userAgentsDir,
+        bundledAgentsDir: join(repoRoot, "agents"),
+        sessionsDir: "/tmp/pi-agent/sessions",
+        userChainsDir: "/tmp/pi-agent/chains",
+        bundledChainsDir: "/tmp/pi-agent/chains",
+        userPromptsDir: "/tmp/pi-agent/prompts",
+        bundledPromptsDir: "/tmp/pi-agent/prompts",
+      });
+      expect(discovery.agents.find(({ name }) => name === "worker")?.sourcePath).toBe(
+        join(repoRoot, "agents", "worker.md"),
+      );
+      const maxModel = { reasoning: true, thinkingLevelMap: { max: "max" } } as Model<Api>;
+      const highModel = { reasoning: true, thinkingLevelMap: { high: "high" } } as Model<Api>;
+      const models = [
+        { provider: "openai-codex", id: "gpt-5.6-luna" },
+        { provider: "minimax", id: "MiniMax-M3" },
+      ];
+      const modelRegistry = {
+        getAll: () => models,
+        getAvailable: () => models,
+        find: (provider: string) => (provider === "openai-codex" ? maxModel : highModel),
+      };
+      manager = new AgentManager();
+      const releases: Array<() => void> = [];
+      let step = 0;
+      const spawn = vi.spyOn(manager, "spawnAndWait").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            const id = `step-${++step}`;
+            releases.push(() => resolve({ id, record: completedRecord("done") }));
+          }),
+      );
+      const deps = createDeps({ manager, discoverAgents: () => discovery });
+      const { pi, registeredTool } = createPi();
+      registerSubagentTool(pi, deps);
+
+      const execution = registeredTool().execute(
+        "tc-1",
+        { task: "path/to/plan.md", chain: steps },
+        undefined,
+        undefined,
+        { ...CTX, modelRegistry },
+      ) as Promise<{ isError: boolean }>;
+
+      for (let expectedCalls = 1; expectedCalls <= 4; expectedCalls++) {
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(expectedCalls));
+        const release = releases.shift();
+        if (!release) throw new Error("step release missing");
+        release();
+      }
+      const result = await execution;
+
+      expect(result.isError).toBe(false);
+      expect(
+        spawn.mock.calls.map(([, agent, options]) => [
+          agent.skills,
+          agent.subagentAgents,
+          options?.model,
+          options?.thinking,
+        ]),
+      ).toEqual([
+        [["brainstorming"], expect.arrayContaining(["reviewer"]), maxModel, "max"],
+        [["test-driven-development"], expect.arrayContaining(["reviewer"]), highModel, "high"],
+        [["requesting-code-review"], expect.arrayContaining(["reviewer"]), maxModel, "max"],
+        [["ponytail-review"], expect.arrayContaining(["reviewer"]), maxModel, "max"],
+      ]);
+      expect(
+        spawn.mock.calls.every(([, , options]) => options?.prompt.includes("path/to/plan.md")),
+      ).toBe(true);
+    } finally {
+      manager?.dispose();
+      rmSync(userAgentsDir, { recursive: true, force: true });
+    }
   });
 
   test("forwards resolved chain models and rejects unknown configured models", async () => {
