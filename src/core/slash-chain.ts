@@ -7,7 +7,7 @@ import { materializeSavedChainSteps, normalizeChainSteps } from "./chain-seriali
 import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
 import { findAgentByName } from "./subagent.js";
 import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
-import { preflightChainModels } from "./chain-preflight.js";
+import { preflightChainModels, validateChainAgents } from "./chain-preflight.js";
 import { normalizeThinkingLevel, ChainThinkingLevelError } from "../shared/thinking.js";
 
 export class SlashParseError extends Error {}
@@ -582,7 +582,11 @@ export async function executeSlashChain(
     return agent;
   };
 
-  const normalizeAndPreflight = (value: unknown) => normalizeChainSteps(value, "slash chain");
+  const normalizeAndPreflight = (value: unknown) => {
+    const steps = normalizeChainSteps(value, "slash chain");
+    validateChainAgents(steps, findAgent);
+    return steps;
+  };
   const preflightChain = (steps: ChainStep[]) => preflightChainModels(steps, findAgent, {
     registry: ctx.modelRegistry,
     parentModel: ctx.model,

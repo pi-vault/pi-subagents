@@ -244,6 +244,28 @@ describe("chain mode dispatch", () => {
     manager.dispose();
   });
 
+  test("validates agent names before showing clarification", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const custom = vi.fn(async () => ({ action: "run", steps: [{ agent: "Scout" }] }));
+    const { pi, registeredTool } = createPi();
+    registerSubagentTool(pi, createDeps({ manager }));
+
+    const result = await registeredTool().execute(
+      "tc-invalid-agent",
+      { task: "work", chain: [{ agent: "Missing" }], clarify: true },
+      undefined,
+      undefined,
+      { ...CTX, ui: { custom } },
+    ) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('Unknown agent: "Missing"');
+    expect(custom).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
   test("preflights only the final clarification edit", async () => {
     const manager = new AgentManager();
     const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({

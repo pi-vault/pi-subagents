@@ -296,6 +296,27 @@ describe("executeSlashChain validation", () => {
     manager.dispose();
   });
 
+  test("validates agent names before showing clarification", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const custom = vi.fn(async () => ({ action: "run", steps: [{ agent: "Scout" }] }));
+    const messages: Array<{ content: string }> = [];
+    const deps = createDeps({ manager });
+
+    await executeSlashChain(
+      { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI,
+      { cwd: "/tmp", ui: { custom } } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Missing" }],
+      "work",
+    );
+
+    expect(custom).not.toHaveBeenCalled();
+    expect(messages[0]?.content).toContain('Unknown agent: "Missing"');
+    expect(spawn).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
   test("aborting a background slash chain cancels its in-flight child", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(246813579);
     const manager = new AgentManager();

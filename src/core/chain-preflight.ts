@@ -1,4 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { getStepAgents } from "./chain-settings.js";
 import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
 import type { ModelRegistryLike } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
@@ -20,6 +21,26 @@ type ChainTask = {
 
 function withLocation(location: string, error: unknown): Error {
   return new Error(`${location}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+export function validateChainAgents(
+  steps: ChainStep[],
+  findAgent: (name: string) => AgentDefinition,
+): void {
+  for (const [index, step] of steps.entries()) {
+    for (const [itemIndex, agent] of getStepAgents(step).entries()) {
+      const location = "agent" in step
+        ? `step ${index + 1} (${agent})`
+        : Array.isArray(step.parallel)
+          ? `step ${index + 1} parallel item ${itemIndex + 1} (${agent})`
+          : `step ${index + 1} dynamic template (${agent})`;
+      try {
+        findAgent(agent);
+      } catch (error) {
+        throw withLocation(location, error);
+      }
+    }
+  }
 }
 
 function preflightTask(

@@ -25,7 +25,7 @@ import { createOutputFilePath, streamToOutputFile, writeInitialEntry } from "./o
 import { writeExecutionArtifacts } from "./subagent-artifacts.js";
 import { validateToolBudget } from "./tool-budget.js";
 import { createAgentCustomToolsFactory } from "./child-subagent-tool.js";
-import { preflightChainModels } from "./chain-preflight.js";
+import { preflightChainModels, validateChainAgents } from "./chain-preflight.js";
 
 const CHAIN_OBJECT_SCHEMA = Type.Object({}, { additionalProperties: true });
 const CHAIN_ACCEPTANCE = Type.Object({
@@ -263,9 +263,17 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
       // --- Chain mode dispatch ---
       if (params.chain) {
         try {
+          const findAgent = (name: string) => {
+            const agent = findAgentByName(discovery, name);
+            if (!agent) throw new Error(`Unknown agent: "${name}"`);
+            return agent;
+          };
           // Clarification TUI — show before execution when clarify=true (interactive only)
-          const normalizeAndPreflight = (value: unknown) =>
-            normalizeChainSteps(value, "subagent chain");
+          const normalizeAndPreflight = (value: unknown) => {
+            const steps = normalizeChainSteps(value, "subagent chain");
+            validateChainAgents(steps, findAgent);
+            return steps;
+          };
           let chainSteps = normalizeAndPreflight(params.chain);
           if (params.clarify && !params.run_in_background) {
             const customUI = (
@@ -368,11 +376,6 @@ Template variables: {task}, {previous}, {chain_dir}, {outputs.<name>}`,
             });
           };
 
-          const findAgent = (name: string) => {
-            const agent = findAgentByName(discovery, name);
-            if (!agent) throw new Error(`Unknown agent: "${name}"`);
-            return agent;
-          };
           const preflightChain = (steps: ChainStep[]) => preflightChainModels(steps, findAgent, {
             registry: ctx.modelRegistry,
             parentModel: ctx.model,
