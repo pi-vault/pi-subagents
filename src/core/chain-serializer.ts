@@ -484,17 +484,24 @@ const CHAIN_STEP_CONFIG_KEYS = new Set([
 
 function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
   const lines = sectionBody.split("\n");
-  const firstConfigKey = lines[1]?.match(/^([\w-]+):\s*/)?.[1]?.toLowerCase();
-  const configStart =
-    lines[0]?.trim() === "" && firstConfigKey && CHAIN_STEP_CONFIG_KEYS.has(firstConfigKey) ? 1 : 0;
+  const leadingLines = lines.slice(1);
+  const leadingBlankIndex = leadingLines.findIndex((line) => line.trim() === "");
+  const leadingConfigLines =
+    leadingBlankIndex === -1 ? [] : leadingLines.slice(0, leadingBlankIndex);
+  // A blank after the heading is ambiguous with task prose; require a
+  // multi-directive block so a single "model: ..." line remains task text.
+  const hasLeadingConfigBlock =
+    lines[0]?.trim() === "" &&
+    leadingConfigLines.length >= 2 &&
+    leadingConfigLines.every((line) => {
+      const key = line.match(/^([\w-]+):\s*/)?.[1]?.toLowerCase();
+      return key !== undefined && CHAIN_STEP_CONFIG_KEYS.has(key);
+    });
+  const configStart = hasLeadingConfigBlock ? 1 : 0;
   const configLinesInput = lines.slice(configStart);
   const blankIndex = configLinesInput.findIndex((line) => line.trim() === "");
-  const configLines = blankIndex === -1
-    ? configLinesInput
-    : configLinesInput.slice(0, blankIndex);
-  const task = (blankIndex === -1
-    ? ""
-    : configLinesInput.slice(blankIndex + 1).join("\n")).trim();
+  const configLines = blankIndex === -1 ? configLinesInput : configLinesInput.slice(0, blankIndex);
+  const task = (blankIndex === -1 ? "" : configLinesInput.slice(blankIndex + 1).join("\n")).trim();
 
   const step: ChainStepConfig = { agent, task };
   for (const line of configLines) {

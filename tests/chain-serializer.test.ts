@@ -195,6 +195,25 @@ describe("parseChain (.chain.md)", () => {
     );
   });
 
+  test("keeps a recognized key after a blank line in the task body", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test chain",
+      "---",
+      "",
+      "## worker",
+      "",
+      "model: compare the API options",
+      "",
+      "Then summarize the tradeoffs.",
+    ].join("\n");
+
+    expect(parseChain("/tmp/test.chain.md", content).steps[0]?.task).toBe(
+      "model: compare the API options\n\nThen summarize the tradeoffs.",
+    );
+  });
+
   test("parses a simple 2-step chain", () => {
     const content = [
       "---",
