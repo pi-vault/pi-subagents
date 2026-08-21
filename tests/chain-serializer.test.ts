@@ -175,6 +175,24 @@ describe("parseChain (.chain.md)", () => {
       ["openai-codex/gpt-5.6-luna", "max", ["requesting-code-review"]],
       ["openai-codex/gpt-5.6-luna", "max", ["ponytail-review"]],
     ]);
+    expect(config.steps[0]?.task).toMatch(/do not commit/i);
+  });
+
+  test("keeps an unrecognized key after a blank line in the task body", () => {
+    const content = [
+      "---",
+      "name: test",
+      "description: test chain",
+      "---",
+      "",
+      "## worker",
+      "",
+      "Note: inspect edge cases",
+    ].join("\n");
+
+    expect(parseChain("/tmp/test.chain.md", content).steps[0]?.task).toBe(
+      "Note: inspect edge cases",
+    );
   });
 
   test("parses a simple 2-step chain", () => {

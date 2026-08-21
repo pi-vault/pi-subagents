@@ -6,6 +6,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { AgentManager } from "../src/core/agent-manager.js";
+import { discoverAgents } from "../src/core/agents.js";
 import { parseChain } from "../src/core/chain-serializer.js";
 import { registerSubagentTool } from "../src/core/subagent.js";
 import {
@@ -149,12 +150,23 @@ describe("chain mode dispatch", () => {
     expect(spawn.mock.calls[0]?.[2]?.createCustomTools).toBeTypeOf("function");
   });
 
-  test("executes the packaged implement-plan-review chain with its assigned models and skills", async () => {
+  test("executes the packaged implement-plan-review chain sequentially with its assigned models and skills", async () => {
     const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
     const steps = parseChain(
       join(repoRoot, "chains", "implement-plan-review.chain.md"),
       readFileSync(join(repoRoot, "chains", "implement-plan-review.chain.md"), "utf8"),
     ).steps;
+    const discovery = discoverAgents({
+      agentDir: "/tmp/pi-agent",
+      configPath: "/tmp/pi-agent/extensions/subagents.json",
+      userAgentsDir: "/tmp/pi-agent/agents",
+      bundledAgentsDir: join(repoRoot, "agents"),
+      sessionsDir: "/tmp/pi-agent/sessions",
+      userChainsDir: "/tmp/pi-agent/chains",
+      bundledChainsDir: "/tmp/pi-agent/chains",
+      userPromptsDir: "/tmp/pi-agent/prompts",
+      bundledPromptsDir: "/tmp/pi-agent/prompts",
+    });
     const maxModel = { reasoning: true, thinkingLevelMap: { max: "max" } } as Model<Api>;
     const highModel = { reasoning: true, thinkingLevelMap: { high: "high" } } as Model<Api>;
     const models = [
@@ -167,36 +179,45 @@ describe("chain mode dispatch", () => {
       find: (provider: string) => provider === "openai-codex" ? maxModel : highModel,
     };
     const manager = new AgentManager();
-    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
-      id: "step",
-      record: completedRecord("done"),
-    });
-    const deps = createDeps({
-      manager,
-      discoverAgents: () => createDiscovery([createAgent({ name: "worker" })]),
-    });
+    const releases: Array<() => void> = [];
+    let step = 0;
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockImplementation(() =>
+      new Promise((resolve) => {
+        const id = `step-${++step}`;
+        releases.push(() => resolve({ id, record: completedRecord("done") }));
+      }),
+    );
+    const deps = createDeps({ manager, discoverAgents: () => discovery });
     const { pi, registeredTool } = createPi();
     registerSubagentTool(pi, deps);
 
-    const result = await registeredTool().execute(
+    const execution = registeredTool().execute(
       "tc-1",
       { task: "path/to/plan.md", chain: steps },
       undefined,
       undefined,
       { ...CTX, modelRegistry },
-    ) as { isError: boolean };
+    ) as Promise<{ isError: boolean }>;
+
+    for (let expectedCalls = 1; expectedCalls <= 4; expectedCalls++) {
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(expectedCalls));
+      const release = releases.shift();
+      if (!release) throw new Error("step release missing");
+      release();
+    }
+    const result = await execution;
 
     expect(result.isError).toBe(false);
-    expect(spawn).toHaveBeenCalledTimes(4);
     expect(spawn.mock.calls.map(([, agent, options]) => [
       agent.skills,
+      agent.subagentAgents,
       options?.model,
       options?.thinking,
     ])).toEqual([
-      [["brainstorming"], maxModel, "max"],
-      [["test-driven-development"], highModel, "high"],
-      [["requesting-code-review"], maxModel, "max"],
-      [["ponytail-review"], maxModel, "max"],
+      [["brainstorming"], expect.arrayContaining(["reviewer"]), maxModel, "max"],
+      [["test-driven-development"], expect.arrayContaining(["reviewer"]), highModel, "high"],
+      [["requesting-code-review"], expect.arrayContaining(["reviewer"]), maxModel, "max"],
+      [["ponytail-review"], expect.arrayContaining(["reviewer"]), maxModel, "max"],
     ]);
     expect(
       spawn.mock.calls.every(([, , options]) => options?.prompt.includes("path/to/plan.md")),

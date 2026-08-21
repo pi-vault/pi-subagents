@@ -467,10 +467,26 @@ function parseFrontmatter(content: string): {
 // .chain.md step body parsing
 // ---------------------------------------------------------------------------
 
+const CHAIN_STEP_CONFIG_KEYS = new Set([
+  "output",
+  "phase",
+  "label",
+  "as",
+  "outputschema",
+  "outputmode",
+  "reads",
+  "model",
+  "thinking",
+  "skills",
+  "progress",
+  "toolbudget",
+]);
+
 function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
   const lines = sectionBody.split("\n");
+  const firstConfigKey = lines[1]?.match(/^([\w-]+):\s*/)?.[1]?.toLowerCase();
   const configStart =
-    lines[0]?.trim() === "" && /^[\w-]+:\s*/.test(lines[1] ?? "") ? 1 : 0;
+    lines[0]?.trim() === "" && firstConfigKey && CHAIN_STEP_CONFIG_KEYS.has(firstConfigKey) ? 1 : 0;
   const configLinesInput = lines.slice(configStart);
   const blankIndex = configLinesInput.findIndex((line) => line.trim() === "");
   const configLines = blankIndex === -1

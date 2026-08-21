@@ -14,7 +14,7 @@ skills: brainstorming
 Read `{task}`. Improve only that plan until it is implementation-ready.
 This is an autonomous chain stage: treat the chain task as approval, do not
 ask for approval or pause. Modify only `{task}`; do not modify product code,
-tests, agent definitions, or chain files.
+tests, agent definitions, or chain files. Do not commit.
 
 ## worker
 
