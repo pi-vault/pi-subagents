@@ -2,7 +2,7 @@
 
 > **For agentic workers:** This is a verification-only phase. Do not modify source, tests, agents, chains, or this plan while executing it.
 
-**Goal:** Verify the complete runtime change, saved chain, package contents, and current working-tree scope after phases 1–6.
+**Goal:** Verify the complete runtime change, saved chain, package contents, committed implementation scope, and current working-tree scope after phases 1–6.
 
 **Architecture:** This phase changes no product files. It runs the repository's existing checks and confirms the runtime contracts through the tests already added by phases 1–6. A product or test failure is fixed in its owning phase and then reverified here.
 
@@ -26,6 +26,7 @@
 - Do not add tests, scripts, dependencies, acceptance gates, retries, commits, or generated files.
 - Do not run formatting or auto-fix commands. Existing unrelated Biome warnings do not authorize source cleanup in this phase; only a non-zero check result blocks verification.
 - Preserve the parent plan and all phase artifacts. Review any current dirty changes with `git diff HEAD`.
+- The implementation base recorded before Phase 1 is `9619442b0208ac16299f1423db2ab959410c1e87`. Review committed Phase 1–6 scope against that fixed base; do not derive the range from `HEAD~N`.
 
 ---
 
@@ -70,7 +71,19 @@
 
   Expected: the package list includes `chains/implement-plan-review.chain.md`, `agents/worker.md`, and all runtime files under `src/`, including `src/core/chain-preflight.ts` and `src/shared/thinking.ts`. It must not be used to expect files under `tests/`; `package.json.files` intentionally excludes them.
 
-- [ ] **Step 4: Verify whitespace, dirty scope, and plan immutability.**
+- [ ] **Step 4: Verify whitespace, committed scope, dirty scope, and plan immutability.**
+
+  First, review the committed Phase 1–6 range using the recorded implementation base:
+
+  ```bash
+  git diff --check 9619442b0208ac16299f1423db2ab959410c1e87..HEAD
+  git diff --stat 9619442b0208ac16299f1423db2ab959410c1e87..HEAD
+  git diff --name-only 9619442b0208ac16299f1423db2ab959410c1e87..HEAD
+  ```
+
+  Confirm that the committed range contains only the expected Phase 1–6 artifacts: the phase plan documents, runtime files under `src/`, tests, and the saved chain/agent artifacts. This historical committed-scope review is separate from the current dirty-scope review below.
+
+  Then review the current working tree and index:
 
   ```bash
   git diff --check
@@ -82,7 +95,7 @@
   git status --short
   ```
 
-  Confirm that there are no whitespace errors, no staged or unstaged edits to the parent plan, and no unrelated dirty files. If this review has not been committed, the only allowed pre-existing dirty file is this Phase 7 plan itself. Do not use a fixed `HEAD~N` range: phase merges and follow-up fixes make that history-based scope check brittle, while `git diff HEAD` is the actual handoff scope.
+  Confirm that there are no whitespace errors, no staged or unstaged edits to the parent plan, and no unrelated dirty files. If this review has not been committed, the only allowed pre-existing dirty file is this Phase 7 plan itself. The current dirty-scope review uses `git diff HEAD` because it is the actual handoff scope; the committed-scope review above uses the recorded implementation base rather than a moving `HEAD~N` range.
 
 - [ ] **Step 5: Close verification without a commit.**
 
@@ -90,4 +103,4 @@
 
 ## Phase result
 
-The complete runtime and saved chain pass the supported-toolchain checks, the package dry run contains the intended runtime and chain/agent artifacts, the parent plan is unchanged, and no unrelated working-tree changes remain.
+The complete runtime and saved chain pass the supported-toolchain checks, the package dry run contains the intended runtime and chain/agent artifacts, the committed Phase 1–6 range is within its expected scope, the parent plan is unchanged, and no unrelated working-tree changes remain.
