@@ -1,27 +1,35 @@
 # Implement Plan Review Runtime — Phase 7: Verification Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** This is a verification-only phase. Do not modify source, tests, agents, chains, or this plan while executing it.
 
-**Goal:** Verify the complete runtime change, saved chain, package contents, and final diff after phases 1–6.
+**Goal:** Verify the complete runtime change, saved chain, package contents, and current working-tree scope after phases 1–6.
 
-**Architecture:** This is a verification-only phase. It changes no source, tests, agent, or chain files; any failure is fixed in the originating phase and reverified here.
+**Architecture:** This phase changes no product files. It runs the repository's existing checks and confirms the runtime contracts through the tests already added by phases 1–6. A product or test failure is fixed in its owning phase and then reverified here.
 
-**Tech Stack:** pnpm, Biome, TypeScript, Vitest, package dry-run tooling.
+**Tech Stack:** Node `>=24.15.0`, pnpm, Biome, TypeScript, Vitest, and pnpm package dry-run tooling.
 
 **Spec:** `docs/superpowers/specs/2026-08-18-implement-plan-review-chain-design.md`
 
 **Parent plan:** `docs/superpowers/plans/2026-08-19-implement-plan-review-runtime.md`
 
-## Global Constraints
+## Reference alignment
 
-- The parent plan remains unchanged.
-- No automatic acceptance-command execution is added.
-- The package must include the saved chain and modified worker agent.
-- Do not add generated or unrelated files.
+- `/Users/lanh/Developer/pi-packages/nicobailon-pi-subagents/src/runs/shared/model-fallback.ts` and `src/runs/shared/parallel-utils.ts` validate effective explicit/configured/parent model selection and retain raw model/thinking settings on runner tasks. The existing local tests cover those contracts; this phase adds no second smoke harness.
+- `/Users/lanh/Developer/pi-packages/tintinweb-pi-subagents/src/agent-runner.ts` resolves an actual registry model before session creation, while its package scripts separate lint, typecheck, and full tests. The local `pnpm check` remains the authoritative combined command.
+- `/Users/lanh/Developer/pi-packages/pi/packages/coding-agent/src/core/model-registry.ts` exposes synchronous `getAll()`, `getAvailable()`, and `find()` lookups, and the Pi package tests use `getSupportedThinkingLevels()` for capability behavior. The local resolver/preflight tests use those same boundaries.
+- The reference packages keep tests out of their published package boundary. This repository's `package.json.files` publishes `src`, `agents`, and `chains`, so the dry-run must verify runtime files and integration artifacts, not `tests/`.
+
+## Global constraints
+
+- Require Node `>=24.15.0`; a lower version is a precondition failure, not a passing verification result.
+- Do not run live model calls or `acceptance.command`; all runtime coverage is local and uses existing test doubles/sentinels.
+- Do not add tests, scripts, dependencies, acceptance gates, retries, commits, or generated files.
+- Do not run formatting or auto-fix commands. Existing unrelated Biome warnings do not authorize source cleanup in this phase; only a non-zero check result blocks verification.
+- Preserve the parent plan and all phase artifacts. Review any current dirty changes with `git diff HEAD`.
 
 ---
 
-### Task 1: Run Complete Verification
+### Task 1: Run complete verification
 
 **Files:**
 
@@ -32,36 +40,54 @@
 
 - No new interfaces. This phase verifies the contracts delivered by phases 1–6.
 
-- [ ] **Step 1: Run the complete check command.**
+- [ ] **Step 1: Check the toolchain before running the suite.**
 
   ```bash
+  node --version
+  pnpm --version
+  ```
+
+  Expected: Node is `v24.15.0` or newer. Stop and report the environment if it is older; do not sign off on the phase using an unsupported engine.
+
+- [ ] **Step 2: Run the complete check command with signing disabled for child test repositories.**
+
+  ```bash
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=commit.gpgsign \
+  GIT_CONFIG_VALUE_0=false \
   pnpm check
   ```
 
-  Expected: Biome lint, TypeScript compilation, and the complete Vitest suite exit with status 0.
+  The environment override is process-local and prevents host-level Git signing settings from breaking tests that create temporary repositories. It does not change repository configuration.
 
-- [ ] **Step 2: Run the package dry run.**
+  Expected: Biome lint, TypeScript compilation, and the complete Vitest suite exit with status 0. Pre-existing Biome warnings may be reported because the repository's `lint` script does not treat warnings as errors.
+
+- [ ] **Step 3: Run the package dry run and verify the published boundary.**
 
   ```bash
   pnpm pack:dry-run
   ```
 
-  Expected: the package list includes `chains/implement-plan-review.chain.md`, `agents/worker.md`, and all modified source/test files.
+  Expected: the package list includes `chains/implement-plan-review.chain.md`, `agents/worker.md`, and all runtime files under `src/`, including `src/core/chain-preflight.ts` and `src/shared/thinking.ts`. It must not be used to expect files under `tests/`; `package.json.files` intentionally excludes them.
 
-- [ ] **Step 3: Verify diff scope and whitespace.**
+- [ ] **Step 4: Verify whitespace, dirty scope, and plan immutability.**
 
   ```bash
   git diff --check
+  git diff --cached --check
+  git diff HEAD --stat
+  git diff HEAD --name-only
+  git diff --exit-code HEAD -- docs/superpowers/plans/2026-08-19-implement-plan-review-runtime.md
+  git diff --cached --exit-code -- docs/superpowers/plans/2026-08-19-implement-plan-review-runtime.md
   git status --short
-  git diff --stat HEAD~6..HEAD
   ```
 
-  Confirm that only runtime resolver/propagation/preflight changes, tests, the saved chain, and the worker delegation allowlist changed. Confirm the parent plan file is unchanged.
+  Confirm that there are no whitespace errors, no staged or unstaged edits to the parent plan, and no unrelated dirty files. If this review has not been committed, the only allowed pre-existing dirty file is this Phase 7 plan itself. Do not use a fixed `HEAD~N` range: phase merges and follow-up fixes make that history-based scope check brittle, while `git diff HEAD` is the actual handoff scope.
 
-- [ ] **Step 4: Close verification without a commit.**
+- [ ] **Step 5: Close verification without a commit.**
 
-  Do not create a verification commit. If a check fails, return to the phase that owns the failing behavior, make the smallest fix there, rerun its focused test, and repeat this phase.
+  If a product or test check fails after the toolchain precondition is satisfied, do not patch it here. Return the failure to the phase that owns the behavior, make the smallest fix there, and rerun this phase. Leave the working tree exactly as received after verification.
 
-## Phase Result
+## Phase result
 
-The complete runtime and saved chain are verified, packageable, and limited to the requested scope.
+The complete runtime and saved chain pass the supported-toolchain checks, the package dry run contains the intended runtime and chain/agent artifacts, the parent plan is unchanged, and no unrelated working-tree changes remain.
