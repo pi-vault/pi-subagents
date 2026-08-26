@@ -45,7 +45,7 @@ Sources: npm package metadata and the local Pi `v0.84.3` changelogs. TypeScript 
 - Modify `package.json`: declare the eight approved direct development dependency ranges; leave engines and peer dependencies unchanged.
 - Modify `pnpm-lock.yaml`: resolve the declared versions and their transitive graph.
 - Modify `biome.json`: match the configuration schema URL to Biome `2.5.10`.
-- Modify `pnpm-workspace.yaml`: remove the inert Pi `0.80.10` release-age exclusions.
+- Modify `pnpm-workspace.yaml`: remove the inert Pi `0.80.10` release-age exclusions and pin patched transitive development dependencies reported by `pnpm audit`.
 - Modify `.github/workflows/quality.yml`: run quality checks on Node `24.15.0`.
 - Modify `.github/workflows/release.yml`: build and publish on Node `24.15.0`.
 - Modify `README.md`: state the tested Pi and Node prerequisites at the install boundary.
@@ -158,7 +158,15 @@ Sources: npm package metadata and the local Pi `v0.84.3` changelogs. TypeScript 
     - "@earendil-works/pi-tui@0.80.10"
   ```
 
-  Expected: `pnpm-workspace.yaml` retains only the existing `allowBuilds` mapping. Do not replace the entries with `0.84.3`; no `minimumReleaseAge` policy is configured, so the exclusions have no effect.
+  Do not replace the entries with `0.84.3`; no `minimumReleaseAge` policy is configured, so the exclusions have no effect. Add the targeted advisory overrides found during implementation review:
+
+  ```yaml
+  overrides:
+    "nanoid@<3.3.18": "3.3.18"
+    "postcss@<=8.5.22": "8.5.26"
+  ```
+
+  Both targets satisfy their existing parent ranges: PostCSS `8.5.26` satisfies Vite's `^8.5.16`, and Nano ID `3.3.18` satisfies PostCSS's `^3.3.16`. Do not add either package as a direct dependency.
 
 - [ ] **Step 6: Align both CI workflows with the declared Node engine.**
 
@@ -197,10 +205,11 @@ Sources: npm package metadata and the local Pi `v0.84.3` changelogs. TypeScript 
   ```bash
   mise exec node@24.15.0 -- pnpm list --depth 0
   rg -n '0\.80\.10|2\.5\.4|26\.1\.1|1\.3\.6|6\.0\.3|4\.1\.10' \
-    package.json pnpm-lock.yaml pnpm-workspace.yaml biome.json
+    package.json pnpm-workspace.yaml biome.json
+  rg -n '@earendil-works/pi-(agent-core|ai|coding-agent|tui)@0\.80\.10' pnpm-lock.yaml
   ```
 
-  Expected: `pnpm list` reports the eight exact resolved versions from Step 3. The `rg` command exits with status `1` and prints no matches, proving the superseded direct versions and stale configuration values are absent.
+  Expected: `pnpm list` reports the eight exact resolved versions from Step 3. Both `rg` commands exit with status `1` and print no matches, proving the superseded direct declarations, stale configuration values, and old Pi lockfile graph are absent. `pnpm-lock.yaml` contains only `@types/node@26.3.0`; the deduplication gate in Step 10 confirms no satisfiable duplicate remains.
 
 - [ ] **Step 10: Run the complete post-update verification.**
 
@@ -214,6 +223,15 @@ Sources: npm package metadata and the local Pi `v0.84.3` changelogs. TypeScript 
   ```
 
   Expected: Biome no longer reports a schema-version mismatch, TypeScript `7.0.2` typechecking succeeds, and all `56` test files and `1,276` tests pass. No product source/test edits are permitted to obtain this result.
+
+  Run the dependency advisory gate:
+
+  ```bash
+  mise exec node@24.15.0 -- pnpm audit --audit-level high
+  mise exec node@24.15.0 -- pnpm dedupe --check
+  ```
+
+  Expected: both commands exit with status `0`, with no High or Critical vulnerabilities and no deduplicatable lockfile entries.
 
 - [ ] **Step 11: Verify the package boundary.**
 
