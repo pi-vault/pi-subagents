@@ -533,7 +533,7 @@ describe("executeSlashChain validation", () => {
 
     await executeSlashChain(
       { sendMessage: (message: { content: string }) => messages.push(message) } as unknown as ExtensionAPI,
-      { cwd: "/tmp", ui: { custom } } as unknown as ExtensionCommandContext,
+      { cwd: "/tmp", mode: "tui", ui: { custom } } as unknown as ExtensionCommandContext,
       deps,
       [{ agent: "Missing" }],
       "work",
