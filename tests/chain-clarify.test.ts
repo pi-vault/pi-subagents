@@ -86,6 +86,41 @@ describe("ChainClarifyComponent — input", () => {
     expect(result.value?.action).toBe("bg");
   });
 
+  test("CSI-u Enter key returns run action", () => {
+    const { component, result } = makeComponent([
+      { agent: "scout", task: "analyze" },
+    ]);
+    component.handleInput("\x1b[13u");
+    expect(result.value?.action).toBe("run");
+  });
+
+  test("CSI-u j moves the selection", () => {
+    const { component } = makeComponent([
+      { agent: "scout", task: "analyze" },
+      { agent: "planner", task: "plan" },
+    ]);
+    component.handleInput("\x1b[106u");
+    expect(
+      component
+        .render(80)
+        .some((line) => line.includes(">") && line.includes("planner")),
+    ).toBe(true);
+  });
+
+  test("CSI-u b returns background action", () => {
+    const { component, result } = makeComponent([
+      { agent: "scout", task: "analyze" },
+    ]);
+    component.handleInput("\x1b[98u");
+    expect(result.value?.action).toBe("bg");
+  });
+
+  test("CSI-u key release does not confirm the chain", () => {
+    const { component, result } = makeComponent();
+    component.handleInput("\x1b[13;1:3u");
+    expect(result.value).toBeUndefined();
+  });
+
   test("q key returns cancel action", () => {
     const { component, result } = makeComponent([{ agent: "scout", task: "analyze" }]);
     component.handleInput("q");
