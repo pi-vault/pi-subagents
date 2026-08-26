@@ -1,8 +1,14 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import type { TUI } from "@earendil-works/pi-tui";
+import type {
+  ChainClarifyComponent,
+  ChainClarifyResult,
+} from "../src/tui/chain-clarify.js";
+import type { Theme } from "../src/tui/agent-widget.js";
 import { describe, expect, test, vi } from "vitest";
 import { AgentManager } from "../src/core/agent-manager.js";
 import { enqueueChainAppendRequest } from "../src/core/chain-append.js";
@@ -272,6 +278,7 @@ describe("executeSlashChain validation", () => {
       pi,
       {
         cwd: "/tmp",
+        mode: "tui",
         modelRegistry: registry,
         ui: { custom: async () => ({ action: "run", steps: [{ agent: "Scout" }] }) },
       } as unknown as ExtensionCommandContext,
@@ -283,6 +290,7 @@ describe("executeSlashChain validation", () => {
       pi,
       {
         cwd: "/tmp",
+        mode: "tui",
         modelRegistry: registry,
         ui: { custom: async () => ({ action: "run", steps: [{ agent: "Scout", model: "unknown/model" }] }) },
       } as unknown as ExtensionCommandContext,
@@ -293,6 +301,226 @@ describe("executeSlashChain validation", () => {
 
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(messages.at(-1)?.content).toContain("Unknown model: unknown/model");
+    manager.dispose();
+  });
+
+  test("confirms a TUI preview through CSI-u input", async () => {
+    let seenOptions!: { overlay?: boolean; overlayOptions?: unknown };
+    const custom = vi.fn(
+      (
+        factory: (
+          tui: TUI,
+          theme: Theme,
+          keybindings: KeybindingsManager,
+          done: (result: ChainClarifyResult) => void,
+        ) => ChainClarifyComponent,
+        options: { overlay?: boolean; overlayOptions?: unknown },
+      ) => {
+        seenOptions = options;
+        return new Promise<ChainClarifyResult>((resolve) => {
+          const component = factory(
+            { requestRender: vi.fn() } as unknown as TUI,
+            {
+              fg: (_name: string, text: string) => text,
+              bold: (text: string) => text,
+            } as Theme,
+            {} as KeybindingsManager,
+            resolve,
+          );
+          component.handleInput("\x1b[13u");
+        });
+      },
+    );
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step-1",
+      record: completedRecord("done"),
+    });
+    const deps = createDeps({ manager });
+
+    await executeSlashChain(
+      { sendMessage: vi.fn() } as unknown as ExtensionAPI,
+      { cwd: "/tmp", mode: "tui", ui: { custom } } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+    );
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(seenOptions).toEqual({
+      overlay: true,
+      overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" },
+    });
+    manager.dispose();
+  });
+
+  test("does not dispatch when the TUI preview is cancelled", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const background = vi.spyOn(manager, "fireAndForgetChain");
+    const pi = { sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const deps = createDeps({ manager });
+
+    await executeSlashChain(
+      pi,
+      {
+        cwd: "/tmp",
+        mode: "tui",
+        ui: { custom: async () => ({ action: "cancel", steps: [{ agent: "Scout" }] }) },
+      } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+    );
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test("does not dispatch when the TUI preview returns no result", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const background = vi.spyOn(manager, "fireAndForgetChain");
+    const pi = { sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const deps = createDeps({ manager });
+
+    await executeSlashChain(
+      pi,
+      { cwd: "/tmp", mode: "tui", ui: { custom: async () => undefined } } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+    );
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  test("reports a rejected TUI preview without dispatching", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const background = vi.spyOn(manager, "fireAndForgetChain");
+    const pi = { sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const deps = createDeps({ manager });
+
+    await executeSlashChain(
+      pi,
+      {
+        cwd: "/tmp",
+        mode: "tui",
+        ui: { custom: async () => { throw new Error("preview failed"); } },
+      } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+    );
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      customType: "pi-subagent-result",
+      content: expect.stringContaining("preview failed"),
+      display: true,
+    }));
+    manager.dispose();
+  });
+
+  test("reports a synchronous TUI preview failure without dispatching", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait");
+    const background = vi.spyOn(manager, "fireAndForgetChain");
+    const pi = { sendMessage: vi.fn() } as unknown as ExtensionAPI;
+    const deps = createDeps({ manager });
+
+    await executeSlashChain(
+      pi,
+      {
+        cwd: "/tmp",
+        mode: "tui",
+        ui: { custom: () => { throw new Error("preview failed"); } },
+      } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+    );
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(background).not.toHaveBeenCalled();
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      customType: "pi-subagent-result",
+      content: expect.stringContaining("preview failed"),
+      display: true,
+    }));
+    manager.dispose();
+  });
+
+  test("bypasses the preview outside TUI mode", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step-1",
+      record: completedRecord("done"),
+    });
+    const custom = vi.fn();
+    const deps = createDeps({ manager });
+
+    await executeSlashChain(
+      { sendMessage: vi.fn() } as unknown as ExtensionAPI,
+      { cwd: "/tmp", mode: "rpc", ui: { custom } } as unknown as ExtensionCommandContext,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+    );
+
+    expect(custom).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  test("bypasses the TUI preview for --yes and --bg", async () => {
+    const manager = new AgentManager();
+    const spawn = vi.spyOn(manager, "spawnAndWait").mockResolvedValue({
+      id: "step-1",
+      record: completedRecord("done"),
+    });
+    const background = vi.spyOn(manager, "fireAndForgetChain");
+    const custom = vi.fn();
+    const deps = createDeps({ manager });
+    const ctx = {
+      cwd: "/tmp",
+      mode: "tui",
+      ui: { custom },
+    } as unknown as ExtensionCommandContext;
+
+    await executeSlashChain(
+      { sendMessage: vi.fn() } as unknown as ExtensionAPI,
+      ctx,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+      false,
+      true,
+    );
+
+    expect(custom).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    await executeSlashChain(
+      { sendMessage: vi.fn() } as unknown as ExtensionAPI,
+      ctx,
+      deps,
+      [{ agent: "Scout" }],
+      "work",
+      true,
+    );
+
+    expect(custom).not.toHaveBeenCalled();
+    expect(background).toHaveBeenCalledTimes(1);
     manager.dispose();
   });
 
