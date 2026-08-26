@@ -1,66 +1,278 @@
-# Phase 1: Pi Dependency Baseline Implementation Plan
+# Phase 1: Complete Dependency Baseline Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Move the project to the tested Pi/TUI `0.84.3` baseline without changing product behavior or UI.
+**Goal:** Update every direct development dependency to the approved latest stable version and align the repository metadata, CI runtime, documentation, and lockfile without changing product behavior.
 
-**Architecture:** Update only the three Pi development packages and the generated lockfile. Keep wildcard peer dependencies so the published extension remains compatible with its host. Make compiler-driven compatibility edits only if `0.84.3` requires them.
+**Architecture:** Treat the dependency set as one atomic toolchain baseline. Resolve the eight direct development dependencies together, keep the three Pi peer dependencies wildcarded, and update only metadata that must agree with the new versions. The exact dependency set has already passed an isolated Node `24.15.0` compatibility probe, so product source and tests remain unchanged.
 
-**Tech Stack:** TypeScript, pnpm, Vitest, Biome, `@earendil-works/pi-ai@0.84.3`, `@earendil-works/pi-coding-agent@0.84.3`, `@earendil-works/pi-tui@0.84.3`.
+**Tech Stack:** Node.js `24.15.0+`, pnpm `11`, TypeScript `7.0.2`, Vitest `4.1.11`, Biome `2.5.10`, TypeBox `1.3.19`, Pi/TUI `0.84.3`.
 
-**Parent plan:** `docs/superpowers/plans/2026-08-26-run-chain-dashboard-ui.md`
+**Spec:** `docs/superpowers/plans/2026-08-26-run-chain-dashboard-ui.md#approved-design`
 
-**Prerequisite:** None.
+## Global Constraints
 
-**Usable result:** The unchanged extension builds, tests, and packages against Pi `0.84.3`; README states Pi `0.84.3+`.
-
-## Constraints
-
-- Do not change commands, schemas, settings, rendering, or interaction behavior.
-- Leave `peerDependencies` as `"*"`; update only the three Pi `devDependencies`.
+- Use the exact local Pi release tag `v0.84.3` in `/Users/lanh/Developer/pi-packages/pi` as the compatibility reference; do not copy from its unreleased `main` branch.
+- The tested Pi/TUI baseline is exactly `0.84.3`; retain wildcard Pi peer dependencies and document Pi `0.84.3+` for users.
+- Update all eight direct development dependencies to the exact caret ranges listed in Task 1.
+- Retain the existing Node engine requirement `>=24.15.0` and make both CI workflows test that runtime.
+- Do not change commands, schemas, settings, rendering, interaction behavior, runtime dependencies, or product source/tests.
 - Do not add pi-status or any other dependency.
-- Limit source edits to errors proven by the `0.84.3` typecheck or tests.
+- Keep the parent plan and Phases 2–9 unchanged.
+- If the verified dependency set requires a product source change during implementation, stop and report the difference instead of expanding this phase.
 
-### Task 1: Update and verify the dependency baseline
+---
+
+## Audited Dependency Set
+
+These were the npm `latest` versions and exact publication dates when this plan was approved on 2026-08-26:
+
+| Package                           |   Current |   Target | Published (UTC) |
+| --------------------------------- | --------: | -------: | --------------- |
+| `@earendil-works/pi-ai`           | `0.80.10` | `0.84.3` | 2026-08-24      |
+| `@earendil-works/pi-coding-agent` | `0.80.10` | `0.84.3` | 2026-08-24      |
+| `@earendil-works/pi-tui`          | `0.80.10` | `0.84.3` | 2026-08-24      |
+| `@biomejs/biome`                  |   `2.5.4` | `2.5.10` | 2026-08-21      |
+| `@types/node`                     |  `26.1.1` | `26.3.0` | 2026-08-24      |
+| `typebox`                         |   `1.3.6` | `1.3.19` | 2026-08-25      |
+| `typescript`                      |   `6.0.3` |  `7.0.2` | 2026-07-08      |
+| `vitest`                          |  `4.1.10` | `4.1.11` | 2026-08-18      |
+
+Sources: npm package metadata and the local Pi `v0.84.3` changelogs. TypeScript `7.0.2` is intentionally included despite being a compiler major: this repository invokes only `tsc`, does not import the unavailable TypeScript 7 compiler API, and the isolated all-target probe passed typechecking and the complete test suite.
+
+## File Structure
+
+- Modify `package.json`: declare the eight approved direct development dependency ranges; leave engines and peer dependencies unchanged.
+- Modify `pnpm-lock.yaml`: resolve the declared versions and their transitive graph.
+- Modify `biome.json`: match the configuration schema URL to Biome `2.5.10`.
+- Modify `pnpm-workspace.yaml`: remove the inert Pi `0.80.10` release-age exclusions and pin patched transitive development dependencies reported by `pnpm audit`.
+- Modify `.github/workflows/quality.yml`: run quality checks on Node `24.15.0`.
+- Modify `.github/workflows/release.yml`: build and publish on Node `24.15.0`.
+- Modify `README.md`: state the tested Pi and Node prerequisites at the install boundary.
+
+### Task 1: Update and verify the complete dependency baseline
 
 **Files:**
 
-- Modify: `package.json`
+- Modify: `package.json:50-63`
 - Modify: `pnpm-lock.yaml`
-- Modify: `README.md`
-- Modify only if compilation requires it: the exact source/test call site reported by `pnpm typecheck`
+- Modify: `biome.json:2`
+- Modify: `pnpm-workspace.yaml:5-9`
+- Modify: `.github/workflows/quality.yml:22-27`
+- Modify: `.github/workflows/release.yml:23-29`
+- Modify: `README.md:10-16`
+- Test: all files under `tests/` through `pnpm check`
 
-- [ ] **Step 1: Record the baseline.**
+**Interfaces:**
 
-  Run `pnpm check` before editing. Expected: the current suite passes; if it does not, record the pre-existing failure and stop rather than folding an unrelated fix into this phase.
+- Consumes: npm-published direct dependencies and the Pi `v0.84.3` release contracts.
+- Produces: a lockfile and CI baseline in which Pi packages resolve to `0.84.3`, Biome to `2.5.10`, Node types to `26.3.0`, TypeBox to `1.3.19`, TypeScript to `7.0.2`, and Vitest to `4.1.11`.
+- Public APIs/types: none; the three Pi `peerDependencies` remain `"*"`.
 
-- [ ] **Step 2: Update only the Pi development packages.**
+- [ ] **Step 1: Verify the supported toolchain and clean baseline.**
 
-  Set these exact values in `package.json`:
-
-  ```json
-  "@earendil-works/pi-ai": "^0.84.3",
-  "@earendil-works/pi-coding-agent": "^0.84.3",
-  "@earendil-works/pi-tui": "^0.84.3"
-  ```
-
-  Leave TypeScript, Vitest, Biome, TypeBox, engines, and all peer dependencies unchanged. Run `pnpm install --lockfile-only` to regenerate `pnpm-lock.yaml`.
-
-- [ ] **Step 3: Document the minimum tested host.**
-
-  In `README.md`, update the Pi prerequisite/compatibility text to say `0.84.3+`. Do not document dashboard behavior yet.
-
-- [ ] **Step 4: Prove compatibility.**
-
-  Run `pnpm check`. Expected: lint, `tsc --noEmit`, and all Vitest tests pass. If the compiler identifies a Pi API change, make the smallest call-site adaptation, add or update the nearest focused test, and rerun the failing command before the full check.
-
-- [ ] **Step 5: Verify package and scope.**
-
-  Run `pnpm run pack:dry-run`, `git diff --check`, and `git diff -- package.json pnpm-lock.yaml README.md`. Expected: the package dry-run succeeds; only the three versions, their lockfile graph, and minimum-version documentation change unless Step 4 proved a required compatibility edit.
-
-- [ ] **Step 6: Commit the atomic result.**
+  Run:
 
   ```bash
-  git add package.json pnpm-lock.yaml README.md
-  git commit -m "chore: update pi dependencies to 0.84.3"
+  node --version
+  pnpm --version
+  git status --short
+  ```
+
+  Expected: Node is `v24.15.0` or newer, pnpm is major version `11`, and the status contains no unexpected implementation changes. If the active Node is older, use the repository owner's installed runtime for subsequent commands:
+
+  ```bash
+  mise exec node@24.15.0 -- node --version
+  ```
+
+  Expected: `v24.15.0`.
+
+- [ ] **Step 2: Record the pre-update verification result.**
+
+  Run with Git signing disabled only for child processes that create temporary repositories:
+
+  ```bash
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=commit.gpgsign \
+  GIT_CONFIG_VALUE_0=false \
+  mise exec node@24.15.0 -- pnpm check
+  ```
+
+  Expected: Biome lint and `tsc --noEmit` complete, then all `56` test files and `1,276` tests pass. Existing Biome warnings are allowed because the current `lint` script does not treat warnings as errors. If this baseline fails for a reason other than environment configuration, record the failure and stop rather than folding an unrelated fix into this phase.
+
+- [ ] **Step 3: Update all direct development dependency declarations and the lockfile.**
+
+  Run:
+
+  ```bash
+  mise exec node@24.15.0 -- pnpm add -D \
+    @earendil-works/pi-ai@0.84.3 \
+    @earendil-works/pi-coding-agent@0.84.3 \
+    @earendil-works/pi-tui@0.84.3 \
+    @biomejs/biome@2.5.10 \
+    @types/node@26.3.0 \
+    typebox@1.3.19 \
+    typescript@7.0.2 \
+    vitest@4.1.11 \
+    --lockfile-only
+  ```
+
+  Expected: `package.json` contains exactly these ranges:
+
+  ```json
+  {
+    "devDependencies": {
+      "@biomejs/biome": "^2.5.10",
+      "@earendil-works/pi-ai": "^0.84.3",
+      "@earendil-works/pi-coding-agent": "^0.84.3",
+      "@earendil-works/pi-tui": "^0.84.3",
+      "@types/node": "^26.3.0",
+      "typebox": "^1.3.19",
+      "typescript": "^7.0.2",
+      "vitest": "^4.1.11"
+    }
+  }
+  ```
+
+  Leave `engines.node` as `">=24.15.0"` and leave all three Pi peer dependencies as `"*"`.
+
+- [ ] **Step 4: Synchronize the Biome configuration schema.**
+
+  In `biome.json`, change only the schema URL:
+
+  ```json
+  "$schema": "https://biomejs.dev/schemas/2.5.10/schema.json"
+  ```
+
+  Do not run `biome migrate`; the current configuration is valid and only its schema version is stale.
+
+- [ ] **Step 5: Remove the inert release-age exclusions.**
+
+  Delete this complete block from `pnpm-workspace.yaml`:
+
+  ```yaml
+  minimumReleaseAgeExclude:
+    - "@earendil-works/pi-agent-core@0.80.10"
+    - "@earendil-works/pi-ai@0.80.10"
+    - "@earendil-works/pi-coding-agent@0.80.10"
+    - "@earendil-works/pi-tui@0.80.10"
+  ```
+
+  Do not replace the entries with `0.84.3`; no `minimumReleaseAge` policy is configured, so the exclusions have no effect. Add the targeted advisory overrides found during implementation review:
+
+  ```yaml
+  overrides:
+    "nanoid@<3.3.18": "3.3.18"
+    "postcss@<=8.5.22": "8.5.26"
+  ```
+
+  Both targets satisfy their existing parent ranges: PostCSS `8.5.26` satisfies Vite's `^8.5.16`, and Nano ID `3.3.18` satisfies PostCSS's `^3.3.16`. Do not add either package as a direct dependency.
+
+- [ ] **Step 6: Align both CI workflows with the declared Node engine.**
+
+  In `.github/workflows/quality.yml` and `.github/workflows/release.yml`, change the existing setup-node input to:
+
+  ```yaml
+  node-version: "24.15.0"
+  ```
+
+  Leave action versions, pnpm `11.3.0`, triggers, caching, commands, permissions, and release steps unchanged.
+
+- [ ] **Step 7: Document the tested host boundary.**
+
+  In `README.md`, insert this exact sentence immediately after `## Install` and before the install command:
+
+  ```markdown
+  Requires Pi 0.84.3+ and Node.js 24.15.0+.
+  ```
+
+  Do not document dashboard behavior in this phase.
+
+- [ ] **Step 8: Install exactly from the regenerated lockfile.**
+
+  Run:
+
+  ```bash
+  mise exec node@24.15.0 -- pnpm install --frozen-lockfile
+  ```
+
+  Expected: installation succeeds without changing `package.json` or `pnpm-lock.yaml` further.
+
+- [ ] **Step 9: Verify versions and eliminate stale declarations.**
+
+  Run:
+
+  ```bash
+  mise exec node@24.15.0 -- pnpm list --depth 0
+  rg -n '0\.80\.10|2\.5\.4|26\.1\.1|1\.3\.6|6\.0\.3|4\.1\.10' \
+    package.json pnpm-workspace.yaml biome.json
+  rg -n '@earendil-works/pi-(agent-core|ai|coding-agent|tui)@0\.80\.10' pnpm-lock.yaml
+  ```
+
+  Expected: `pnpm list` reports the eight exact resolved versions from Step 3. Both `rg` commands exit with status `1` and print no matches, proving the superseded direct declarations, stale configuration values, and old Pi lockfile graph are absent. `pnpm-lock.yaml` contains only `@types/node@26.3.0`; the deduplication gate in Step 10 confirms no satisfiable duplicate remains.
+
+- [ ] **Step 10: Run the complete post-update verification.**
+
+  Run:
+
+  ```bash
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0=commit.gpgsign \
+  GIT_CONFIG_VALUE_0=false \
+  mise exec node@24.15.0 -- pnpm check
+  ```
+
+  Expected: Biome no longer reports a schema-version mismatch, TypeScript `7.0.2` typechecking succeeds, and all `56` test files and `1,276` tests pass. No product source/test edits are permitted to obtain this result.
+
+  Run the dependency advisory gate:
+
+  ```bash
+  mise exec node@24.15.0 -- pnpm audit --audit-level high
+  mise exec node@24.15.0 -- pnpm dedupe --check
+  ```
+
+  Expected: both commands exit with status `0`, with no High or Critical vulnerabilities and no deduplicatable lockfile entries.
+
+- [ ] **Step 11: Verify the package boundary.**
+
+  Run:
+
+  ```bash
+  mise exec node@24.15.0 -- pnpm run pack:dry-run
+  ```
+
+  Expected: the dry run succeeds and includes `src/`, bundled agents, bundled chains, `LICENSE`, `CHANGELOG.md`, and `README.md`; it does not include tests or planning documents.
+
+- [ ] **Step 12: Audit whitespace and exact scope.**
+
+  Run:
+
+  ```bash
+  git diff --check
+  git diff --stat
+  git diff -- \
+    package.json \
+    pnpm-lock.yaml \
+    pnpm-workspace.yaml \
+    biome.json \
+    README.md \
+    .github/workflows/quality.yml \
+    .github/workflows/release.yml
+  git status --short
+  ```
+
+  Expected: no whitespace errors; only the seven named dependency-baseline files are modified; commands, schemas, settings, UI code, runtime code, tests, `peerDependencies`, and `engines.node` are unchanged.
+
+- [ ] **Step 13: Commit the atomic baseline.**
+
+  ```bash
+  git add \
+    package.json \
+    pnpm-lock.yaml \
+    pnpm-workspace.yaml \
+    biome.json \
+    README.md \
+    .github/workflows/quality.yml \
+    .github/workflows/release.yml
+  git commit -m "chore: update development dependencies"
   ```
