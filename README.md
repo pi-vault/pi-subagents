@@ -9,6 +9,8 @@ Delegate focused work to bundled Pi subagents — singly in the foreground, asyn
 
 ## Install
 
+Requires Pi 0.84.3+ and Node.js 24.15.0+.
+
 ```bash
 pi install npm:@pi-vault/pi-subagents
 ```
