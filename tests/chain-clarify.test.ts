@@ -8,7 +8,8 @@ import { ChainClarifyComponent } from "../src/tui/chain-clarify.js";
 // Minimal mocks — the component only calls tui.requestRender()
 // ---------------------------------------------------------------------------
 
-const mockTui = { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI;
+const requestRender = vi.fn();
+const mockTui = { requestRender } as unknown as import("@earendil-works/pi-tui").TUI;
 // Minimal theme-compatible object — the component uses theme.fg() for styling
 const mockTheme = {
   fg: (_name: string, text: string) => text,
@@ -243,6 +244,25 @@ describe("ChainClarifyComponent — edit mode", () => {
     component.handleInput("i");
     const lines = component.render(80);
     expect(lines.some((l) => l.includes("hi"))).toBe(true);
+  });
+
+  test("edit mutations request a render", () => {
+    const { component } = makeComponent([{ agent: "scout", task: "" }]);
+    component.handleInput("e");
+    requestRender.mockClear();
+    component.handleInput("h");
+    expect(requestRender).toHaveBeenCalledOnce();
+  });
+
+  test("dispose removes edit input callback effects", () => {
+    const { component } = makeComponent([{ agent: "scout", task: "" }]);
+    component.handleInput("e");
+    component.focused = true;
+    component.dispose();
+    component.handleInput("\r");
+    component.handleInput("\x1b");
+    expect(component.render(80).join("\n")).toContain("Edit Task");
+    expect(component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
   });
 
   test("native backspace removes last character", () => {

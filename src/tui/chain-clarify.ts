@@ -62,6 +62,9 @@ export class ChainClarifyComponent implements Component, Focusable {
     if (isKeyRelease(data)) return;
     if (this.mode === "edit-task" || this.mode === "edit-model") {
       this.input.handleInput(data);
+      if (this.mode === "edit-task" || this.mode === "edit-model") {
+        this.tui.requestRender();
+      }
       return;
     }
     this.handleListInput(data);
