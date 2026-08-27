@@ -349,7 +349,11 @@ describe("executeSlashChain validation", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(seenOptions).toEqual({
       overlay: true,
-      overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" },
+      overlayOptions: {
+        anchor: "center",
+        width: "92%",
+        maxHeight: "85%",
+      },
     });
     manager.dispose();
   });

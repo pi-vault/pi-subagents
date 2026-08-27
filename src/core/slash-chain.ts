@@ -9,6 +9,7 @@ import { findAgentByName } from "./subagent.js";
 import { resolveModelSelection, validateModelThinking } from "./model-resolver.js";
 import { preflightChainModels, validateChainAgents } from "./chain-preflight.js";
 import { normalizeThinkingLevel, ChainThinkingLevelError } from "../shared/thinking.js";
+import { DASHBOARD_OVERLAY_OPTIONS } from "../tui/dashboard-style.js";
 
 export class SlashParseError extends Error {}
 
@@ -619,7 +620,7 @@ export async function executeSlashChain(
         (tui, theme, _kb, done) => new ChainClarifyComponent(tui, theme, chain, done),
         {
           overlay: true,
-          overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" },
+          overlayOptions: DASHBOARD_OVERLAY_OPTIONS,
         },
       );
     } catch (error) {
