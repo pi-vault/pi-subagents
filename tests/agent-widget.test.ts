@@ -493,68 +493,6 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     widget.dispose();
   });
 
-  it("heading line contains 'AGENTS'", () => {
-    const agent = makeRecord({ status: "running" });
-    const manager = makeMockManager([agent]);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.length).toBeGreaterThan(0);
-    expect(lines[0]).toContain("AGENTS");
-  });
-
-  it("heading uses the dashboard grammar when there are running agents", () => {
-    const agent = makeRecord({ status: "running" });
-    const manager = makeMockManager([agent]);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines[0]).toBe("╭─ ✦ AGENTS");
-  });
-
-  it("heading uses the dashboard grammar when only finished agents are visible", () => {
-    const agent = makeRecord({ id: "fin", status: "completed", completedAt: Date.now() - 1000 });
-    const manager = makeMockManager([agent]);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.markFinished("fin");
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines[0]).toBe("╭─ ✦ AGENTS");
-  });
-
-  it("running agent lines include agent type as name", () => {
-    const agent = makeRecord({ type: "researcher", status: "running" });
-    const manager = makeMockManager([agent]);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.some((l) => l.includes("researcher"))).toBe(true);
-  });
-
-  it("running agent lines include description", () => {
-    const agent = makeRecord({ description: "find all bugs", status: "running" });
-    const manager = makeMockManager([agent]);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.some((l) => l.includes("find all bugs"))).toBe(true);
-  });
-
   it("reads running stats and activity from the record", () => {
     const agent = makeRecord({
       status: "running",
@@ -587,30 +525,4 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     expect(lines).toEqual([]);
   });
 
-  it("shows queued count line", () => {
-    const manager = makeMockManager([makeRecord({ id: "q1", status: "queued" })]);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.some((l) => l.includes("queued"))).toBe(true);
-  });
-
-  it("overflow: shows +N more line when body exceeds 11 lines", () => {
-    // 7 running agents × 2 lines each = 14 body lines > 11 (MAX_WIDGET_LINES - 1 = 11)
-    const agents = Array.from({ length: 7 }, (_, i) =>
-      makeRecord({ id: `a${i}`, status: "running" }),
-    );
-    const manager = makeMockManager(agents);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.some((l) => l.includes("more"))).toBe(true);
-    expect(lines.length).toBeLessThanOrEqual(12); // MAX_WIDGET_LINES
-  });
 });

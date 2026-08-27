@@ -163,7 +163,7 @@ export class ChainWidget {
         hasRunning ? "accent" : "dim",
         `╭─ ✦ CHAIN · ${snapshot.runId}`,
       ),
-      ...viewport.lines.slice(0, bodyHeight),
+      ...viewport.lines,
       `${theme.fg("dim", "╰─")} ${theme.fg("dim", totals.join(" · "))}`,
     ];
     return lines.map((line) =>
