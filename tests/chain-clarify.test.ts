@@ -49,6 +49,17 @@ function clearAndType(component: ChainClarifyComponent, clear: number, text: str
 // ---------------------------------------------------------------------------
 
 describe("ChainClarifyComponent — render", () => {
+  const resizeSteps: ChainStep[] = [
+    { agent: "scout", task: "analyze" },
+    { parallel: [{ agent: "worker" }, { agent: "reviewer" }] },
+    {
+      expand: { from: { output: "items", path: "$.items" } },
+      parallel: { agent: "planner", task: "plan {{item}}" },
+      collect: { as: "plans" },
+    },
+    { agent: "final", task: "final task", model: "final model" },
+  ];
+
   test("renders step list with agent names", () => {
     const { component } = makeComponent([
       { agent: "scout", task: "analyze" },
@@ -101,53 +112,11 @@ describe("ChainClarifyComponent — render", () => {
   });
 
   test.each([
-    {
-      name: "sequential",
-      selectedIndex: 3,
-      expected: ["▸ [4/4] final", "final task", "final model"],
-      steps: [
-        { agent: "scout", task: "analyze" },
-        { parallel: [{ agent: "worker" }, { agent: "reviewer" }] },
-        {
-          expand: { from: { output: "items", path: "$.items" } },
-          parallel: { agent: "planner", task: "plan {{item}}" },
-          collect: { as: "plans" },
-        },
-        { agent: "final", task: "final task", model: "final model" },
-      ] satisfies ChainStep[],
-    },
-    {
-      name: "static parallel",
-      selectedIndex: 1,
-      expected: ["▸ [2/4] Parallel · worker, reviewer"],
-      steps: [
-        { agent: "scout", task: "analyze" },
-        { parallel: [{ agent: "worker" }, { agent: "reviewer" }] },
-        { agent: "planner", task: "plan" },
-        { agent: "final", task: "finish" },
-      ] satisfies ChainStep[],
-    },
-    {
-      name: "dynamic parallel",
-      selectedIndex: 2,
-      expected: ["▸ [3/4] Dynamic parallel · planner"],
-      steps: [
-        { agent: "scout", task: "analyze" },
-        { parallel: [{ agent: "worker" }, { agent: "reviewer" }] },
-        {
-          expand: { from: { output: "items", path: "$.items" } },
-          parallel: { agent: "planner", task: "plan {{item}}" },
-          collect: { as: "plans" },
-        },
-        { agent: "final", task: "finish" },
-      ] satisfies ChainStep[],
-    },
-  ])("preserves the selected $name step across fallback and resize", ({
-    expected,
-    selectedIndex,
-    steps,
-  }) => {
-    const { component, tui } = makeComponent(steps, undefined, 13);
+    ["sequential", 3, ["▸ [4/4] final", "final task", "final model"]],
+    ["static parallel", 1, ["▸ [2/4] Parallel · worker, reviewer"]],
+    ["dynamic parallel", 2, ["▸ [3/4] Dynamic parallel · planner"]],
+  ] as const)("preserves the selected %s step across fallback and resize", (_name, selectedIndex, expected) => {
+    const { component, tui } = makeComponent(resizeSteps, undefined, 13);
     for (let index = 0; index < selectedIndex; index++) component.handleInput("j");
     component.render(80);
 
