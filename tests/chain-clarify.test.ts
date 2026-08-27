@@ -96,6 +96,22 @@ describe("ChainClarifyComponent — render", () => {
     expect(output).not.toContain("agent-0");
   });
 
+  test("keeps the complete selected sequential step visible when navigating upward", () => {
+    const steps = Array.from({ length: 8 }, (_, index) => ({
+      agent: `agent-${index}`,
+      task: `task-${index}`,
+      model: `model-${index}`,
+    }));
+    const { component } = makeComponent(steps, undefined, 13);
+    for (let index = 1; index < steps.length; index++) component.handleInput("j");
+    component.render(80);
+    component.handleInput("k");
+    const output = component.render(80).join("\n");
+    expect(output).toContain("▸ [7/8] agent-6");
+    expect(output).toContain("task-6");
+    expect(output).toContain("model-6");
+  });
+
   test("renders bounded width and height fallbacks", () => {
     expect(
       makeComponent(undefined, undefined, 10).component.render(30).join("\n"),

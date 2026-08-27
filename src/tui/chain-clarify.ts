@@ -151,6 +151,16 @@ export class ChainClarifyComponent implements Component, Focusable {
       if (i < this.steps.length - 1) lines.push("");
     }
 
+    const selectedStep = this.steps[this.selectedIndex];
+    if (
+      selectedLine !== undefined &&
+      selectedStep &&
+      !("parallel" in selectedStep) &&
+      selectedLine < this.viewportOffset
+    ) {
+      this.viewportOffset = selectedLine - 2;
+    }
+
     return this.renderDashboard(
       width,
       lines,
