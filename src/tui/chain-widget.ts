@@ -10,6 +10,7 @@
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Theme, UICtx } from "./agent-widget.js";
+import { fitDashboardViewport } from "./dashboard-style.js";
 import type {
   WorkflowGraphSnapshot,
   WorkflowNodeStatus,
@@ -17,6 +18,8 @@ import type {
 import { SPINNER } from "./format.js";
 
 const WIDGET_KEY = "chain";
+const MAX_WIDGET_LINES = 12;
+const MAX_BODY_LINES = MAX_WIDGET_LINES - 2;
 
 function statusIcon(
   status: WorkflowNodeStatus,
@@ -82,29 +85,21 @@ export class ChainWidget {
   }
 
   /** Exposed for testing — renders snapshot to themed lines without needing UICtx. */
-  renderLines(snapshot: WorkflowGraphSnapshot, theme: Theme): string[] {
+  renderLines(
+    snapshot: WorkflowGraphSnapshot,
+    theme: Theme,
+    width: number,
+  ): string[] {
     const total = snapshot.nodes.length;
     if (total === 0) return [];
 
+    const safeWidth = Math.max(0, Math.floor(width));
     const spinnerFrame = SPINNER[this.frame % SPINNER.length]!;
-    const hasRunning = snapshot.nodes.some(
-      (n) =>
-        n.status === "running" ||
-        n.children?.some((c) => c.status === "running"),
-    );
-    const headingIcon = hasRunning
-      ? theme.fg("accent", "●")
-      : theme.fg("dim", "○");
-    const headingColor = hasRunning ? "accent" : "dim";
-
-    const lines: string[] = [
-      `${headingIcon} ${theme.fg(headingColor, "Chain")} ${theme.fg("dim", snapshot.runId)}`,
-    ];
+    const bodyRows: Array<{ nodeId: string; text: string }> = [];
 
     for (let i = 0; i < total; i++) {
       const node = snapshot.nodes[i]!;
-      const connector = i === total - 1 ? "└─" : "├─";
-      const prefix = theme.fg("dim", connector);
+      const prefix = theme.fg("dim", "│");
       const idx = theme.fg("dim", `[${(node.stepIndex ?? i) + 1}/${total}]`);
       const icon = statusIcon(node.status, theme, spinnerFrame);
 
@@ -112,27 +107,68 @@ export class ChainWidget {
         node.kind === "parallel-group" ||
         node.kind === "dynamic-parallel-group"
       ) {
-        lines.push(`${prefix} ${idx} ${icon} ${theme.bold(node.label)}`);
+        bodyRows.push({
+          nodeId: node.id,
+          text: `${prefix} ${idx} ${icon} ${theme.bold(node.label)}`,
+        });
         const children = node.children ?? [];
         for (let c = 0; c < children.length; c++) {
           const child = children[c]!;
-          const childConnector = c === children.length - 1 ? "└─" : "├─";
-          const indent =
-            i === total - 1 ? "   " : theme.fg("dim", "│  ");
+          const connector = c === children.length - 1 ? "└─" : "├─";
           const childIcon = statusIcon(child.status, theme, spinnerFrame);
-          let childLine = `${indent}${theme.fg("dim", childConnector)} ${childIcon} ${child.label}`;
-          if (child.error) childLine += ` ${theme.fg("error", `(${child.error})`)}`;
-          lines.push(childLine);
+          let text = `${prefix}   ${theme.fg("dim", connector)} ${childIcon} ${child.label}`;
+          if (child.error) text += ` ${theme.fg("error", `(${child.error})`)}`;
+          bodyRows.push({ nodeId: child.id, text });
         }
       } else {
-        let line = `${prefix} ${idx} ${icon} ${node.label}`;
-        if (node.phase) line += ` ${theme.fg("dim", `(${node.phase})`)}`;
-        if (node.error) line += ` ${theme.fg("error", node.error)}`;
-        lines.push(line);
+        let text = `${prefix} ${idx} ${icon} ${node.label}`;
+        if (node.phase) text += ` ${theme.fg("dim", `(${node.phase})`)}`;
+        if (node.error) text += ` ${theme.fg("error", node.error)}`;
+        bodyRows.push({ nodeId: node.id, text });
       }
     }
 
-    return lines;
+    const selectedRow = bodyRows.findIndex(
+      (row) => row.nodeId === snapshot.currentNodeId,
+    );
+    const bodyHeight = Math.min(bodyRows.length, MAX_BODY_LINES);
+    const viewport = fitDashboardViewport(
+      bodyRows.map((row) => row.text),
+      selectedRow < 0 ? undefined : selectedRow,
+      bodyHeight,
+      0,
+    );
+    const hiddenRows = bodyRows.length - viewport.lines.length;
+    const totals = [
+      "completed",
+      "running",
+      "pending",
+      "failed",
+      "paused",
+      "skipped",
+      "stopped",
+    ].flatMap((status) => {
+      const count = snapshot.nodes.filter((node) => node.status === status).length;
+      return count === 0 ? [] : [`${count} ${status}`];
+    });
+    if (hiddenRows > 0) totals.push(`+${hiddenRows} more`);
+
+    const hasRunning = snapshot.nodes.some(
+      (node) =>
+        node.status === "running" ||
+        node.children?.some((child) => child.status === "running"),
+    );
+    const lines = [
+      theme.fg(
+        hasRunning ? "accent" : "dim",
+        `╭─ ✦ CHAIN · ${snapshot.runId}`,
+      ),
+      ...viewport.lines.slice(0, bodyHeight),
+      `${theme.fg("dim", "╰─")} ${theme.fg("dim", totals.join(" · "))}`,
+    ];
+    return lines.map((line) =>
+      truncateToWidth(line.replace(/[\r\n]+/g, " "), safeWidth, ""),
+    );
   }
 
   private render(): void {
@@ -155,12 +191,9 @@ export class ChainWidget {
         (tui, theme) => {
           this.tui = tui;
           return {
-            render: () => {
+            render: (width) => {
               if (!this.snapshot) return [];
-              const w = tui.terminal.columns;
-              return this.renderLines(this.snapshot, theme).map((l) =>
-                truncateToWidth(l, w),
-              );
+              return this.renderLines(this.snapshot, theme, width);
             },
             invalidate: () => {
               // Theme changed — force re-registration on next render.
