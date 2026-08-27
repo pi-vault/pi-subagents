@@ -609,17 +609,27 @@ export async function executeSlashChain(
     return;
   }
 
-  // Clarification TUI — show step preview before foreground execution
-  // Skip when: --bg (background), --yes (auto-confirm), or no UI available
-  if (!bg && !yes) {
+  // Clarification TUI — show step preview before foreground execution.
+  if (ctx.mode === "tui" && !bg && !yes) {
     const { ChainClarifyComponent } = await import("../tui/chain-clarify.js");
     type ClarifyResult = import("../tui/chain-clarify.js").ChainClarifyResult;
-
-    const result = await ctx.ui.custom<ClarifyResult>(
-      (tui, theme, _kb, done) => new ChainClarifyComponent(tui, theme, chain, done),
-      { overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
-    );
-
+    let result: ClarifyResult | undefined;
+    try {
+      result = await ctx.ui.custom(
+        (tui, theme, _kb, done) => new ChainClarifyComponent(tui, theme, chain, done),
+        {
+          overlay: true,
+          overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" },
+        },
+      );
+    } catch (error) {
+      pi.sendMessage({
+        customType: "pi-subagent-result",
+        content: error instanceof Error ? error.message : String(error),
+        display: true,
+      });
+      return;
+    }
     if (!result || result.action === "cancel") return;
     try {
       chain = normalizeAndPreflight(result.steps); // Apply and validate TUI edits

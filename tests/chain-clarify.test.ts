@@ -1,13 +1,15 @@
+import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
-import { ChainClarifyComponent } from "../src/tui/chain-clarify.js";
-import type { ChainClarifyResult } from "../src/tui/chain-clarify.js";
 import type { ChainStep } from "../src/shared/types.js";
+import type { ChainClarifyResult } from "../src/tui/chain-clarify.js";
+import { ChainClarifyComponent } from "../src/tui/chain-clarify.js";
 
 // ---------------------------------------------------------------------------
 // Minimal mocks — the component only calls tui.requestRender()
 // ---------------------------------------------------------------------------
 
-const mockTui = { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI;
+const requestRender = vi.fn();
+const mockTui = { requestRender } as unknown as import("@earendil-works/pi-tui").TUI;
 // Minimal theme-compatible object — the component uses theme.fg() for styling
 const mockTheme = {
   fg: (_name: string, text: string) => text,
@@ -29,6 +31,7 @@ function makeComponent(
 }
 
 function clearAndType(component: ChainClarifyComponent, clear: number, text: string): void {
+  component.handleInput("\x1b[F");
   for (let i = 0; i < clear; i++) component.handleInput("\x7f");
   for (const ch of text) component.handleInput(ch);
 }
@@ -84,6 +87,56 @@ describe("ChainClarifyComponent — input", () => {
     const { component, result } = makeComponent([{ agent: "scout", task: "analyze" }]);
     component.handleInput("b");
     expect(result.value?.action).toBe("bg");
+  });
+
+  test("CSI-u Enter key returns run action", () => {
+    const { component, result } = makeComponent([
+      { agent: "scout", task: "analyze" },
+    ]);
+    component.handleInput("\x1b[13u");
+    expect(result.value?.action).toBe("run");
+  });
+
+  test("CSI-u j moves the selection", () => {
+    const { component } = makeComponent([
+      { agent: "scout", task: "analyze" },
+      { agent: "planner", task: "plan" },
+    ]);
+    component.handleInput("\x1b[106u");
+    expect(
+      component
+        .render(80)
+        .some((line) => line.includes(">") && line.includes("planner")),
+    ).toBe(true);
+  });
+
+  test("CSI-u b returns background action", () => {
+    const { component, result } = makeComponent([
+      { agent: "scout", task: "analyze" },
+    ]);
+    component.handleInput("\x1b[98u");
+    expect(result.value?.action).toBe("bg");
+  });
+
+  test("CSI-u key release does not confirm the chain", () => {
+    const { component, result } = makeComponent();
+    component.handleInput("\x1b[13;1:3u");
+    expect(result.value).toBeUndefined();
+  });
+
+  test("Kitty arrow aliases move the selection", () => {
+    const { component } = makeComponent([
+      { agent: "scout", task: "analyze" },
+      { agent: "planner", task: "plan" },
+    ]);
+    component.handleInput("\x1b[1;1B");
+    expect(
+      component.render(80).some((line) => line.includes(">") && line.includes("planner")),
+    ).toBe(true);
+    component.handleInput("\x1b[1;1A");
+    expect(component.render(80).some((line) => line.includes(">") && line.includes("scout"))).toBe(
+      true,
+    );
   });
 
   test("q key returns cancel action", () => {
@@ -169,6 +222,7 @@ describe("ChainClarifyComponent — edit mode", () => {
   test("e key enters edit-task mode and renders edit UI", () => {
     const { component } = makeComponent([{ agent: "scout", task: "analyze" }]);
     component.handleInput("e");
+    component.handleInput("\x1b[F");
     const lines = component.render(80);
     expect(lines.some((l) => l.includes("Edit Task"))).toBe(true);
     expect(lines.some((l) => l.includes("analyze"))).toBe(true);
@@ -177,6 +231,7 @@ describe("ChainClarifyComponent — edit mode", () => {
   test("m key enters edit-model mode", () => {
     const { component } = makeComponent([{ agent: "scout", task: "analyze", model: "gpt-4" }]);
     component.handleInput("m");
+    component.handleInput("\x1b[F");
     const lines = component.render(80);
     expect(lines.some((l) => l.includes("Edit Model"))).toBe(true);
     expect(lines.some((l) => l.includes("gpt-4"))).toBe(true);
@@ -191,13 +246,66 @@ describe("ChainClarifyComponent — edit mode", () => {
     expect(lines.some((l) => l.includes("hi"))).toBe(true);
   });
 
-  test("backspace removes last character", () => {
-    const { component } = makeComponent([{ agent: "scout", task: "abc" }]);
+  test("typing in a prefilled edit appends at the end", () => {
+    const { component, result } = makeComponent([{ agent: "scout", task: "analyze" }]);
     component.handleInput("e");
-    component.handleInput("\x7f"); // backspace
-    const lines = component.render(80);
-    // buffer should now be "ab"
-    expect(lines.some((l) => l.includes("> ab"))).toBe(true);
+    component.handleInput("!");
+    component.handleInput("\r");
+    component.handleInput("\r");
+    expect(result.value?.steps[0]).toMatchObject({ task: "analyze!" });
+  });
+
+  test("edit mutations request a render", () => {
+    const { component } = makeComponent([{ agent: "scout", task: "" }]);
+    component.handleInput("e");
+    requestRender.mockClear();
+    component.handleInput("h");
+    expect(requestRender).toHaveBeenCalledOnce();
+  });
+
+  test("dispose removes edit input callback effects", () => {
+    const { component } = makeComponent([{ agent: "scout", task: "" }]);
+    component.handleInput("e");
+    component.focused = true;
+    component.dispose();
+    component.handleInput("\r");
+    component.handleInput("\x1b");
+    expect(component.render(80).join("\n")).toContain("Edit Task");
+    expect(component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
+  });
+
+  test("native backspace removes last character", () => {
+    const { component, result } = makeComponent([{ agent: "scout", task: "" }]);
+    component.handleInput("e");
+    component.handleInput("h");
+    component.handleInput("i");
+    component.handleInput("\x7f");
+    component.handleInput("\r");
+    component.handleInput("\r");
+    expect(result.value?.steps[0]).toMatchObject({ task: "h" });
+  });
+
+  test("CSI-u text and Enter confirm task edit", () => {
+    const { component, result } = makeComponent([{ agent: "scout", task: "" }]);
+    component.handleInput("e");
+    component.handleInput("\x1b[104u");
+    component.handleInput("\x1b[105u");
+    component.handleInput("\x7f");
+    component.handleInput("\x1b[13u");
+    component.handleInput("\r");
+    expect(result.value?.steps[0]).toMatchObject({ task: "h" });
+  });
+
+  test("focus propagates to the native input", () => {
+    const { component } = makeComponent();
+    component.handleInput("e");
+    component.handleInput("\x1b[104u");
+    component.handleInput("\x1b[105u");
+    component.handleInput("\x7f");
+    component.focused = true;
+    expect(component.render(80).join("\n")).toContain(CURSOR_MARKER);
+    component.focused = false;
+    expect(component.render(80).join("\n")).not.toContain(CURSOR_MARKER);
   });
 
   test("Enter confirms task edit and applies override", () => {
