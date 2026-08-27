@@ -112,6 +112,25 @@ describe("ChainClarifyComponent — render", () => {
     expect(output).toContain("model-6");
   });
 
+  test("keeps a preceding sequential step visible when navigating up from parallel", () => {
+    const { component } = makeComponent(
+      [
+        { agent: "scout", task: "analyze", model: "model-scout" },
+        { parallel: [{ agent: "worker" }, { agent: "reviewer" }] },
+      ],
+      undefined,
+      13,
+    );
+    component.render(80);
+    component.handleInput("j");
+    component.render(80);
+    component.handleInput("k");
+    const output = component.render(80).join("\n");
+    expect(output).toContain("▸ [1/2] scout");
+    expect(output).toContain("Task   analyze");
+    expect(output).toContain("Model  model-scout");
+  });
+
   test("renders bounded width and height fallbacks", () => {
     expect(
       makeComponent(undefined, undefined, 10).component.render(30).join("\n"),
