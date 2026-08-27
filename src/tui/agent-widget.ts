@@ -30,7 +30,7 @@ export type UICtx = {
   setWidget(
     key: string,
     // biome-ignore lint/suspicious/noExplicitAny: tui type is unavoidably any
-    content: undefined | ((tui: any, theme: Theme) => { render(): string[]; invalidate(): void }),
+    content: undefined | ((tui: any, theme: Theme) => { render(width: number): string[]; invalidate(): void }),
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void;
 };
@@ -172,12 +172,8 @@ export class AgentWidget {
     }
   }
 
-  /**
-   * Render the widget content. Called from the registered widget's render() callback,
-   * reading live state each time instead of capturing it in a closure.
-   */
-  // biome-ignore lint/suspicious/noExplicitAny: tui type is unavoidably any
-  private renderWidget(tui: any, theme: Theme): string[] {
+  /** Render the widget content, reading live state on every render. */
+  private renderWidget(width: number, theme: Theme): string[] {
     const allAgents = this.widgetAgents();
     const running = allAgents.filter((a) => a.status === "running");
     const queued = allAgents.filter((a) => a.status === "queued");
@@ -188,138 +184,68 @@ export class AgentWidget {
         a.completedAt &&
         this.shouldShowFinished(a.id, a.status),
     );
-
     const hasActive = running.length > 0 || queued.length > 0;
-    const hasFinished = finished.length > 0;
 
-    // Nothing to show — return empty (widget will be unregistered by update())
-    if (!hasActive && !hasFinished) return [];
+    if (!hasActive && finished.length === 0) return [];
 
-    const w = tui.terminal.columns;
-    const truncate = (line: string) => truncateToWidth(line, w);
-    const headingColor = hasActive ? "accent" : "dim";
-    const headingIcon = hasActive ? "●" : "○";
+    const safeWidth = Math.max(0, Math.floor(width));
+    const truncate = (line: string) =>
+      truncateToWidth(line.replace(/[\r\n]+/g, " "), safeWidth, "");
     const frame = SPINNER[this.widgetFrame % SPINNER.length];
+    const maxBodyLines = MAX_WIDGET_LINES - 2;
+    const body: string[] = [];
+    let hiddenRunning = 0;
+    let hiddenFinished = 0;
 
-    // Build sections separately for overflow-aware assembly.
-    // Each running agent = 2 lines (header + activity), finished = 1 line, queued = 1 line.
-
-    const finishedLines: string[] = [];
-    for (const a of finished) {
-      finishedLines.push(
-        truncate(`${theme.fg("dim", "├─")} ${renderFinishedLine(a, theme)}`),
-      );
-    }
-
-    const runningLines: string[][] = []; // each entry is [header, activity]
     for (const a of running) {
-      const name = a.type;
+      if (body.length + 2 > maxBodyLines) {
+        hiddenRunning++;
+        continue;
+      }
       const elapsed = formatMs(Date.now() - a.startedAt);
-
-      const toolUses = a.toolUses;
       const tokens =
         a.lifetimeUsage.inputTokens +
         a.lifetimeUsage.outputTokens +
         a.lifetimeUsage.cacheWriteTokens;
       const tokenText = tokens > 0 ? formatTokens(tokens) : "";
-
       const parts: string[] = [formatTurns(Math.max(1, a.turnCount), a.live.maxTurns)];
-      if (toolUses > 0) parts.push(`${toolUses} tool use${toolUses === 1 ? "" : "s"}`);
+      if (a.toolUses > 0) {
+        parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
+      }
       if (tokenText) parts.push(tokenText);
       parts.push(elapsed);
-      const statsText = parts.join(" · ");
 
-      const activityDesc = describeActivity(a.live.activeTools, a.live.responseText);
-
-      runningLines.push([
+      body.push(
         truncate(
-          `${theme.fg("dim", "├─")} ${theme.fg("accent", frame)} ${theme.bold(name)}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", statsText)}`,
+          `${theme.fg("dim", "│")} ${theme.fg("accent", frame)} ${theme.bold(a.type)}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}`,
         ),
-        truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activityDesc}`)),
-      ]);
-    }
-
-    const queuedLine =
-      queued.length > 0
-        ? truncate(
-            `${theme.fg("dim", "├─")} ${theme.fg("muted", "◦")} ${theme.fg("dim", `${queued.length} queued`)}`,
-          )
-        : undefined;
-
-    // Assemble with overflow cap (heading + overflow indicator = 2 reserved lines).
-    const maxBody = MAX_WIDGET_LINES - 1; // heading takes 1 line
-    const totalBody = finishedLines.length + runningLines.length * 2 + (queuedLine ? 1 : 0);
-
-    const lines: string[] = [
-      truncate(`${theme.fg(headingColor, headingIcon)} ${theme.fg(headingColor, "Agents")}`),
-    ];
-
-    if (totalBody <= maxBody) {
-      // Everything fits — add all lines and fix up connectors for the last item.
-      lines.push(...finishedLines);
-      for (const pair of runningLines) lines.push(...pair);
-      if (queuedLine) lines.push(queuedLine);
-
-      // Fix last connector: swap ├─ → └─ and │ → space for activity lines.
-      if (lines.length > 1) {
-        const last = lines.length - 1;
-        lines[last] = lines[last].replace("├─", "└─");
-        // If last item is a running agent activity line, fix indent of that line
-        // and fix the header line above it.
-        if (runningLines.length > 0 && !queuedLine) {
-          // The last two lines are the last running agent's header + activity.
-          if (last >= 2) {
-            lines[last - 1] = lines[last - 1].replace("├─", "└─");
-            lines[last] = lines[last].replace("│  ", "   ");
-          }
-        }
-      }
-    } else {
-      // Overflow — prioritize: running > queued > finished.
-      // Reserve 1 line for overflow indicator.
-      let budget = maxBody - 1;
-      let hiddenRunning = 0;
-      let hiddenFinished = 0;
-
-      // 1. Running agents (2 lines each)
-      for (const pair of runningLines) {
-        if (budget >= 2) {
-          lines.push(...pair);
-          budget -= 2;
-        } else {
-          hiddenRunning++;
-        }
-      }
-
-      // 2. Queued line
-      if (queuedLine && budget >= 1) {
-        lines.push(queuedLine);
-        budget--;
-      }
-
-      // 3. Finished agents
-      for (const fl of finishedLines) {
-        if (budget >= 1) {
-          lines.push(fl);
-          budget--;
-        } else {
-          hiddenFinished++;
-        }
-      }
-
-      // Overflow summary
-      const overflowParts: string[] = [];
-      if (hiddenRunning > 0) overflowParts.push(`${hiddenRunning} running`);
-      if (hiddenFinished > 0) overflowParts.push(`${hiddenFinished} finished`);
-      const overflowText = overflowParts.join(", ");
-      lines.push(
         truncate(
-          `${theme.fg("dim", "└─")} ${theme.fg("dim", `+${hiddenRunning + hiddenFinished} more (${overflowText})`)}`,
+          `${theme.fg("dim", "│   ⎿")} ${theme.fg("dim", describeActivity(a.live.activeTools, a.live.responseText))}`,
         ),
       );
     }
 
-    return lines;
+    for (const a of finished) {
+      if (body.length === maxBodyLines) {
+        hiddenFinished++;
+        continue;
+      }
+      body.push(truncate(`${theme.fg("dim", "│")} ${renderFinishedLine(a, theme)}`));
+    }
+
+    const totals: string[] = [];
+    if (running.length > 0) totals.push(`${running.length} running`);
+    if (queued.length > 0) totals.push(`${queued.length} queued`);
+    if (finished.length > 0) totals.push(`${finished.length} finished`);
+    if (hiddenRunning + hiddenFinished > 0) {
+      totals.push(`+${hiddenRunning + hiddenFinished} more`);
+    }
+
+    return [
+      truncate(theme.fg(hasActive ? "accent" : "dim", "╭─ ✦ AGENTS")),
+      ...body,
+      truncate(`${theme.fg("dim", "╰─")} ${theme.fg("dim", totals.join(" · "))}`),
+    ];
   }
 
   /** Force an immediate widget update. */
@@ -388,7 +314,7 @@ export class AgentWidget {
         (tui, theme) => {
           this.tui = tui;
           return {
-            render: () => this.renderWidget(tui, theme),
+            render: (width) => this.renderWidget(width, theme),
             invalidate: () => {
               // Theme changed — force re-registration so factory captures fresh theme.
               this.widgetRegistered = false;

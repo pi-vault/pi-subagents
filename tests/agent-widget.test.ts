@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import {
   AgentWidget,
@@ -46,15 +47,20 @@ function makeRecord(overrides: Partial<AgentRecord> = {}): AgentRecord {
 function captureRender(
   ctx: ReturnType<typeof makeMockUICtx>,
   theme: Theme,
-  columns = 200,
+  width = 200,
+  terminalColumns = 200,
 ): string[] {
   const calls = ctx.setWidget.mock.calls as Array<
-    [string, ((tui: unknown, theme: Theme) => { render(): string[] }) | undefined, unknown]
+    [
+      string,
+      ((tui: unknown, theme: Theme) => { render(width: number): string[] }) | undefined,
+      unknown,
+    ]
   >;
   const factory = calls.find(([key]) => key === "agents")?.[1];
   if (!factory) return [];
-  const mockTui = { terminal: { columns }, requestRender: vi.fn() };
-  return factory(mockTui, theme).render();
+  const tui = { terminal: { columns: terminalColumns }, requestRender: vi.fn() };
+  return factory(tui, theme).render(width);
 }
 
 // ---- ERROR_STATUSES ----
@@ -402,66 +408,89 @@ describe("AgentWidget.update", () => {
 });
 
 describe("AgentWidget renderWidget (via factory capture)", () => {
-  it("heading line contains 'Agents'", () => {
-    const agent = makeRecord({ status: "running" });
-    const manager = makeMockManager([agent]);
+  it("renders the live-agent dashboard hierarchy", () => {
+    const manager = makeMockManager([
+      makeRecord({
+        type: "worker",
+        description: "implement phase four",
+        status: "running",
+        turnCount: 2,
+        live: { activeTools: ["read"], responseText: "" },
+      }),
+      makeRecord({ id: "queued", status: "queued" }),
+    ]);
     const ctx = makeMockUICtx();
     const widget = new AgentWidget(manager);
     widget.setUICtx(ctx);
     widget.update();
 
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.length).toBeGreaterThan(0);
-    expect(lines[0]).toContain("Agents");
+    const lines = captureRender(ctx, makeMockTheme(), 100);
+    expect(lines[0]).toBe("╭─ ✦ AGENTS");
+    expect(lines[1]).toMatch(/^│ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] worker {2}implement phase four · /);
+    expect(lines[2]).toContain("│   ⎿ reading…");
+    expect(lines.at(-1)).toBe("╰─ 1 running · 1 queued");
+    widget.dispose();
   });
 
-  it("heading uses ● when there are running agents", () => {
-    const agent = makeRecord({ status: "running" });
-    const manager = makeMockManager([agent]);
+  it("keeps queue totals visible when active rows fill the widget", () => {
+    const agents = [
+      ...Array.from({ length: 7 }, (_, index) =>
+        makeRecord({ id: `run-${index}`, status: "running" }),
+      ),
+      ...Array.from({ length: 3 }, (_, index) =>
+        makeRecord({ id: `queue-${index}`, status: "queued" }),
+      ),
+    ];
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
+    const widget = new AgentWidget(makeMockManager(agents));
     widget.setUICtx(ctx);
     widget.update();
 
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines[0]).toContain("●");
+    const lines = captureRender(ctx, makeMockTheme(), 100);
+    expect(lines).toHaveLength(12);
+    expect(lines.at(-1)).toBe("╰─ 7 running · 3 queued · +2 more");
+    widget.dispose();
   });
 
-  it("heading uses ○ when only finished agents are visible", () => {
-    const agent = makeRecord({ id: "fin", status: "completed", completedAt: Date.now() - 1000 });
-    const manager = makeMockManager([agent]);
+  it("renders a finished-only dashboard", () => {
+    const agent = makeRecord({
+      id: "finished",
+      status: "completed",
+      completedAt: Date.now(),
+    });
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.markFinished("fin");
+    const widget = new AgentWidget(makeMockManager([agent]));
+    widget.markFinished(agent.id);
     widget.setUICtx(ctx);
     widget.update();
 
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines[0]).toContain("○");
+    const lines = captureRender(ctx, makeMockTheme(), 100);
+    expect(lines[0]).toBe("╭─ ✦ AGENTS");
+    expect(lines[1]).toMatch(/^│ ✓ scout {2}do the thing · /);
+    expect(lines.at(-1)).toBe("╰─ 1 finished");
+    widget.dispose();
   });
 
-  it("running agent lines include agent type as name", () => {
-    const agent = makeRecord({ type: "researcher", status: "running" });
-    const manager = makeMockManager([agent]);
+  it("uses the allocated width and keeps every row single-line", () => {
+    const ansiTheme: Theme = {
+      fg: (_color, text) => `\x1b[31m${text}\x1b[39m`,
+      bold: (text) => `\x1b[1m${text}\x1b[22m`,
+    };
+    const agent = makeRecord({
+      description: "a long description\r\nwith a second line",
+      status: "running",
+    });
     const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
+    const widget = new AgentWidget(makeMockManager([agent]));
     widget.setUICtx(ctx);
     widget.update();
 
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.some((l) => l.includes("researcher"))).toBe(true);
-  });
-
-  it("running agent lines include description", () => {
-    const agent = makeRecord({ description: "find all bugs", status: "running" });
-    const manager = makeMockManager([agent]);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.some((l) => l.includes("find all bugs"))).toBe(true);
+    for (const width of [0, 1, 12, 40]) {
+      const lines = captureRender(ctx, ansiTheme, width, 200);
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+      expect(lines.every((line) => !/[\r\n]/.test(line))).toBe(true);
+    }
+    widget.dispose();
   });
 
   it("reads running stats and activity from the record", () => {
@@ -496,30 +525,4 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
     expect(lines).toEqual([]);
   });
 
-  it("shows queued count line", () => {
-    const manager = makeMockManager([makeRecord({ id: "q1", status: "queued" })]);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.some((l) => l.includes("queued"))).toBe(true);
-  });
-
-  it("overflow: shows +N more line when body exceeds 11 lines", () => {
-    // 7 running agents × 2 lines each = 14 body lines > 11 (MAX_WIDGET_LINES - 1 = 11)
-    const agents = Array.from({ length: 7 }, (_, i) =>
-      makeRecord({ id: `a${i}`, status: "running" }),
-    );
-    const manager = makeMockManager(agents);
-    const ctx = makeMockUICtx();
-    const widget = new AgentWidget(manager);
-    widget.setUICtx(ctx);
-    widget.update();
-
-    const lines = captureRender(ctx, makeMockTheme());
-    expect(lines.some((l) => l.includes("more"))).toBe(true);
-    expect(lines.length).toBeLessThanOrEqual(12); // MAX_WIDGET_LINES
-  });
 });
