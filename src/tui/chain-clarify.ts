@@ -156,7 +156,7 @@ export class ChainClarifyComponent implements Component, Focusable {
       selectedLine !== undefined &&
       selectedStep &&
       !("parallel" in selectedStep) &&
-      selectedLine <= this.viewportOffset
+      selectedLine - 2 <= this.viewportOffset
     ) {
       this.viewportOffset = selectedLine - 2;
     }
