@@ -169,7 +169,7 @@
   };
   ```
 
-  Forward all edit-mode data other than the release guard to input.handleInput(data). Render input.render(width) in the existing edit layout so the native cursor marker, cursor movement, deletion, paste, submit, and escape behavior come from Pi/TUI. Do not add frames, the Phase 3 selection glyph, viewport scrolling, or a dashboard footer.
+  After setValue(), send the native End binding "\x1b[F" through input.handleInput() so a prefilled edit starts with the cursor at the end. Forward all edit-mode data other than the release guard to input.handleInput(data). Render input.render(width) in the existing edit layout so the native cursor marker, cursor movement, deletion, paste, submit, and escape behavior come from Pi/TUI. Do not add frames, the Phase 3 selection glyph, viewport scrolling, or a dashboard footer.
 
 - [ ] **Step 3: Replace tests that assert the hand-rolled cursor.**
 

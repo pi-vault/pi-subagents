@@ -304,7 +304,7 @@ export function renderDashboardTooSmall(
   - Ignore key-release events before dispatching actions.
   - Use `matchesKey(data, Key.enter)`, `matchesKey(data, Key.escape)`, `matchesKey(data, Key.up)`, and `matchesKey(data, Key.down)` for primary actions.
   - Preserve `j`/`k`, `q`, `b`, `e`, and `m` by matching each printable key through `matchesKey()`.
-  - Replace `editBuffer` and `handleEditInput()` with one `Input | undefined`. Prefill through `input.handleInput(currentValue)`, save through `input.onSubmit`, and return to list mode through `input.onEscape`.
+  - Preserve Phase 2's single native `Input`. Prefill with `input.setValue(currentValue)` and send the native End binding "\x1b[F" through `input.handleInput()` so typing starts at the end without replaying arbitrary task/model text as terminal input. Save through `input.onSubmit` and return to list mode through `input.onEscape`.
   - Implement `focused` getter/setter and forward the value to the current `Input`.
   - Clear input focus in `dispose()`.
 
