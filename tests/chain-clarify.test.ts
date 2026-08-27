@@ -246,6 +246,15 @@ describe("ChainClarifyComponent — edit mode", () => {
     expect(lines.some((l) => l.includes("hi"))).toBe(true);
   });
 
+  test("typing in a prefilled edit appends at the end", () => {
+    const { component, result } = makeComponent([{ agent: "scout", task: "analyze" }]);
+    component.handleInput("e");
+    component.handleInput("!");
+    component.handleInput("\r");
+    component.handleInput("\r");
+    expect(result.value?.steps[0]).toMatchObject({ task: "analyze!" });
+  });
+
   test("edit mutations request a render", () => {
     const { component } = makeComponent([{ agent: "scout", task: "" }]);
     component.handleInput("e");

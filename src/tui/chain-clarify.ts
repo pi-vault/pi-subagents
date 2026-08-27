@@ -159,6 +159,7 @@ export class ChainClarifyComponent implements Component, Focusable {
         ? (this.taskOverrides.get(this.selectedIndex) ?? seq.task ?? "")
         : (this.modelOverrides.get(this.selectedIndex) ?? seq.model ?? ""),
     );
+    this.input.handleInput("\x1b[F");
     this.input.onSubmit = (value) => {
       if (this.mode === "edit-task") {
         this.taskOverrides.set(this.selectedIndex, value);
