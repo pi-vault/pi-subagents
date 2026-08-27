@@ -154,6 +154,13 @@ async function driveOverrideEdit(updateError?: Error) {
     updateUserAgentOverride,
   } as unknown as RuntimeDeps;
   const inputs = ["\r", "\r", "\r", "\x1b", "\x1b"];
+  const menuNames = [
+    "root",
+    "catalog",
+    "action",
+    "catalog-return",
+    "root-return",
+  ];
   const events: string[] = [];
   const notifications: Array<{ message: string; level: string }> = [];
   const editor = vi.fn(async () => {
@@ -173,8 +180,9 @@ async function driveOverrideEdit(updateError?: Error) {
     {
       ui: {
         custom: async (...args: Parameters<typeof driver.custom>) => {
+          const menuName = menuNames.shift();
           await driver.custom(...args);
-          events.push("done");
+          events.push(`${menuName}-done`);
         },
         editor,
         notify: (message: string, level: string) => {
@@ -247,7 +255,7 @@ test("catalog display and override editing delegate through RuntimeDeps", async 
     message: `Updated "planner" at ${result.sourcePath}`,
     level: "info",
   });
-  expect(result.events.indexOf("done")).toBeLessThan(
+  expect(result.events.indexOf("action-done")).toBeLessThan(
     result.events.indexOf("editor"),
   );
 });
@@ -337,6 +345,7 @@ test("catalog resize fallback remains escapable and restores its viewport", asyn
       (component) => component.handleInput(CSI_U_ENTER),
       (component, tui, capture) => {
         for (let index = 0; index < 11; index++) component.handleInput(KITTY_DOWN);
+        capture(80);
         tui.terminal.rows = 3;
         tui.terminal.columns = 30;
         capture(30);
@@ -358,7 +367,8 @@ test("catalog resize fallback remains escapable and restores its viewport", asyn
     } as unknown as RuntimeDeps,
   );
 
-  const [tinyLines, restoredLines] = driver.renders;
+  const [normalLines, tinyLines, restoredLines] = driver.renders;
+  expect(normalLines.join("\n")).toContain("▸ agent-12");
   expect(tinyLines).toHaveLength(2);
   expect(tinyLines.every((line) => visibleWidth(line) === 30)).toBe(true);
   expect(tinyLines.join("\n")).toContain("Esc");
