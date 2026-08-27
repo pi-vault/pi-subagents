@@ -426,7 +426,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
 
     const lines = captureRender(ctx, makeMockTheme(), 100);
     expect(lines[0]).toBe("╭─ ✦ AGENTS");
-    expect(lines[1]).toMatch(/^│ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] worker  implement phase four · /);
+    expect(lines[1]).toMatch(/^│ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] worker {2}implement phase four · /);
     expect(lines[2]).toContain("│   ⎿ reading…");
     expect(lines.at(-1)).toBe("╰─ 1 running · 1 queued");
     widget.dispose();
@@ -466,7 +466,7 @@ describe("AgentWidget renderWidget (via factory capture)", () => {
 
     const lines = captureRender(ctx, makeMockTheme(), 100);
     expect(lines[0]).toBe("╭─ ✦ AGENTS");
-    expect(lines[1]).toMatch(/^│ ✓ scout  do the thing · /);
+    expect(lines[1]).toMatch(/^│ ✓ scout {2}do the thing · /);
     expect(lines.at(-1)).toBe("╰─ 1 finished");
     widget.dispose();
   });
