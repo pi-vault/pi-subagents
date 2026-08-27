@@ -9,6 +9,17 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ChainStep, SequentialStep } from "../shared/types.js";
 import type { Theme } from "./agent-widget.js";
+import {
+  DASHBOARD_MAX_HEIGHT_RATIO,
+  MIN_DASHBOARD_FRAME_WIDTH,
+  dashboardContentWidth,
+  fitDashboardViewport,
+  renderDashboardFrame,
+  renderDashboardTooSmall,
+} from "./dashboard-style.js";
+
+const DASHBOARD_CHROME_ROWS = 8;
+const MIN_CHAIN_DASHBOARD_ROWS = 11;
 
 export interface ChainClarifyResult {
   action: "run" | "cancel" | "bg";
@@ -41,6 +52,7 @@ export class ChainClarifyComponent implements Component, Focusable {
   private mode: EditMode = "list";
   private modelOverrides = new Map<number, string>();
   private taskOverrides = new Map<number, string>();
+  private viewportOffset = 0;
 
   constructor(
     private tui: TUI,
@@ -113,37 +125,49 @@ export class ChainClarifyComponent implements Component, Focusable {
   }
 
   private renderListMode(width: number): string[] {
-    const th = this.theme;
     const lines: string[] = [];
-    const header = `Chain Preview (${this.steps.length} step${this.steps.length === 1 ? "" : "s"})`;
-    const hint = "[Enter] Run  [b] Background  [Esc] Cancel";
-    lines.push(`${th.fg("accent", header)}  ${th.fg("dim", hint)}`);
-    lines.push(th.fg("dim", "─".repeat(Math.min(width, 60))));
+    let selectedLine: number | undefined;
 
     for (let i = 0; i < this.steps.length; i++) {
       const step = this.steps[i]!;
-      const cursor = i === this.selectedIndex ? ">" : " ";
-      const isSeq = !("parallel" in step);
-
-      if (isSeq) {
+      const cursor = i === this.selectedIndex ? "▸" : " ";
+      if ("expand" in step) {
+        lines.push(`${cursor} [${i + 1}/${this.steps.length}] Dynamic parallel · ${step.parallel.agent}`);
+        if (i === this.selectedIndex) selectedLine = lines.length - 1;
+      } else if ("parallel" in step) {
+        lines.push(`${cursor} [${i + 1}/${this.steps.length}] Parallel · ${step.parallel.map((item) => item.agent).join(", ")}`);
+        if (i === this.selectedIndex) selectedLine = lines.length - 1;
+      } else {
         const seq = step as SequentialStep;
         const taskText = this.taskOverrides.get(i) ?? seq.task ?? "(no task)";
         const modelText = this.modelOverrides.get(i) ?? seq.model ?? "(inherit)";
         const taskMarker = this.taskOverrides.has(i) ? "* " : "";
         const modelMarker = this.modelOverrides.has(i) ? "* " : "";
-        lines.push(
-          `  ${cursor} [${i + 1}] ${th.fg("accent", seq.agent ?? "?")}`,
-        );
-        lines.push(`        Task: ${taskMarker}${taskText}`);
-        lines.push(`        Model: ${modelMarker}${modelText}`);
-      } else {
-        lines.push(`  ${cursor} [${i + 1}] ${th.fg("dim", "(parallel step)")}`);
+        lines.push(`${cursor} [${i + 1}/${this.steps.length}] ${seq.agent ?? "?"}`);
+        lines.push(`    Task   ${taskMarker}${taskText}`);
+        lines.push(`    Model  ${modelMarker}${modelText}`);
+        if (i === this.selectedIndex) selectedLine = lines.length - 1;
       }
+      if (i < this.steps.length - 1) lines.push("");
     }
 
-    lines.push(th.fg("dim", "─".repeat(Math.min(width, 60))));
-    lines.push(th.fg("dim", "[e] Edit task  [m] Model  [j/k] Navigate"));
-    return lines;
+    const selectedStep = this.steps[this.selectedIndex];
+    if (
+      selectedLine !== undefined &&
+      selectedStep &&
+      !("parallel" in selectedStep) &&
+      selectedLine - 2 <= this.viewportOffset
+    ) {
+      this.viewportOffset = selectedLine - 2;
+    }
+
+    return this.renderDashboard(
+      width,
+      lines,
+      selectedLine,
+      `Chain Preview · ${this.steps.length} steps`,
+      "↑/↓ Select • e Edit task • m Edit model • Enter Run • b Background • q/Esc Cancel",
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -178,12 +202,56 @@ export class ChainClarifyComponent implements Component, Focusable {
   }
 
   private renderEditMode(width: number): string[] {
-    const th = this.theme;
     const label = this.mode === "edit-task" ? "Task" : "Model";
-    return [
-      `${th.fg("accent", `Edit ${label}`)}  ${th.fg("dim", "[Enter] Confirm  [Esc] Cancel")}`,
-      ...this.input.render(width),
-    ];
+    return this.renderDashboard(
+      width,
+      this.input.render(dashboardContentWidth(width)),
+      undefined,
+      `Edit ${label}`,
+      "Enter Submit • Esc Cancel",
+    );
+  }
+
+  private renderDashboard(
+    width: number,
+    lines: string[],
+    selectedLine: number | undefined,
+    header: string,
+    footer: string,
+  ): string[] {
+    const maxRows = Math.max(
+      1,
+      Math.floor(this.tui.terminal.rows * DASHBOARD_MAX_HEIGHT_RATIO),
+    );
+    const targetRows =
+      maxRows < MIN_CHAIN_DASHBOARD_ROWS
+        ? maxRows
+        : Math.min(
+            maxRows,
+            DASHBOARD_CHROME_ROWS + Math.max(3, lines.length),
+          );
+    if (width < MIN_DASHBOARD_FRAME_WIDTH || targetRows < MIN_CHAIN_DASHBOARD_ROWS) {
+      return renderDashboardTooSmall(width, targetRows, this.theme);
+    }
+
+    const viewport = fitDashboardViewport(
+      lines,
+      selectedLine,
+      targetRows - DASHBOARD_CHROME_ROWS,
+      this.viewportOffset,
+    );
+    this.viewportOffset = viewport.offset;
+    return renderDashboardFrame(
+      [
+        this.theme.fg("accent", header),
+        "",
+        ...viewport.lines,
+        "",
+        this.theme.fg("dim", footer),
+      ],
+      width,
+      this.theme,
+    );
   }
 
   // ---------------------------------------------------------------------------

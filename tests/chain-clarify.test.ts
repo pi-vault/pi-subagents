@@ -1,15 +1,14 @@
-import { CURSOR_MARKER } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test, vi } from "vitest";
 import type { ChainStep } from "../src/shared/types.js";
 import type { ChainClarifyResult } from "../src/tui/chain-clarify.js";
 import { ChainClarifyComponent } from "../src/tui/chain-clarify.js";
 
 // ---------------------------------------------------------------------------
-// Minimal mocks — the component only calls tui.requestRender()
+// Minimal mocks
 // ---------------------------------------------------------------------------
 
 const requestRender = vi.fn();
-const mockTui = { requestRender } as unknown as import("@earendil-works/pi-tui").TUI;
 // Minimal theme-compatible object — the component uses theme.fg() for styling
 const mockTheme = {
   fg: (_name: string, text: string) => text,
@@ -19,15 +18,24 @@ const mockTheme = {
 function makeComponent(
   steps: ChainStep[] = [{ agent: "scout", task: "analyze" }],
   done?: (r: ChainClarifyResult) => void,
-): { component: ChainClarifyComponent; result: { value: ChainClarifyResult | undefined } } {
+  terminalRows = 40,
+): {
+  component: ChainClarifyComponent;
+  result: { value: ChainClarifyResult | undefined };
+  tui: { requestRender: typeof requestRender; terminal: { columns: number; rows: number } };
+} {
   const result: { value: ChainClarifyResult | undefined } = { value: undefined };
+  const tui = {
+    requestRender,
+    terminal: { columns: 80, rows: terminalRows },
+  };
   const component = new ChainClarifyComponent(
-    mockTui,
+    tui as unknown as TUI,
     mockTheme,
     steps,
     done ?? ((r) => { result.value = r; }),
   );
-  return { component, result };
+  return { component, result, tui };
 }
 
 function clearAndType(component: ChainClarifyComponent, clear: number, text: string): void {
@@ -41,6 +49,17 @@ function clearAndType(component: ChainClarifyComponent, clear: number, text: str
 // ---------------------------------------------------------------------------
 
 describe("ChainClarifyComponent — render", () => {
+  const resizeSteps: ChainStep[] = [
+    { agent: "scout", task: "analyze" },
+    { parallel: [{ agent: "worker" }, { agent: "reviewer" }] },
+    {
+      expand: { from: { output: "items", path: "$.items" } },
+      parallel: { agent: "planner", task: "plan {{item}}" },
+      collect: { as: "plans" },
+    },
+    { agent: "final", task: "final task", model: "final model" },
+  ];
+
   test("renders step list with agent names", () => {
     const { component } = makeComponent([
       { agent: "scout", task: "analyze" },
@@ -62,6 +81,133 @@ describe("ChainClarifyComponent — render", () => {
     const { component } = makeComponent();
     const text = component.render(80).join("\n");
     expect(text.toLowerCase()).toMatch(/enter|run/);
+  });
+
+  test("renders a framed preview with footer and visible selection", () => {
+    const { component } = makeComponent([
+      { agent: "scout", task: "analyze" },
+      { agent: "worker", task: "change" },
+    ]);
+    const lines = component.render(80);
+    expect(lines[0]).toContain("┏");
+    expect(lines.at(-1)).toContain("┗");
+    expect(lines.find((line) => line.includes("scout"))).toContain("▸");
+    expect(lines.join("\n")).toContain("Enter Run");
+    expect(lines.every((line) => visibleWidth(line) === 80)).toBe(true);
+  });
+
+  test("scrolls the complete selected sequential step into view", () => {
+    const steps = Array.from({ length: 8 }, (_, index) => ({
+      agent: `agent-${index}`,
+      task: `task-${index}`,
+      model: `model-${index}`,
+    }));
+    const { component } = makeComponent(steps, undefined, 13);
+    for (let index = 1; index < steps.length; index++) component.handleInput("j");
+    const output = component.render(80).join("\n");
+    expect(output).toContain("▸ [8/8] agent-7");
+    expect(output).toContain("task-7");
+    expect(output).toContain("model-7");
+    expect(output).not.toContain("agent-0");
+  });
+
+  test.each([
+    ["sequential", 3, ["▸ [4/4] final", "final task", "final model"]],
+    ["static parallel", 1, ["▸ [2/4] Parallel · worker, reviewer"]],
+    ["dynamic parallel", 2, ["▸ [3/4] Dynamic parallel · planner"]],
+  ] as const)("preserves the selected %s step across fallback and resize", (_name, selectedIndex, expected) => {
+    const { component, tui } = makeComponent(resizeSteps, undefined, 13);
+    for (let index = 0; index < selectedIndex; index++) component.handleInput("j");
+    component.render(80);
+
+    tui.terminal.rows = 10;
+    expect(component.render(30).join("\n")).toContain("Terminal too small · Esc");
+
+    tui.terminal.rows = 13;
+    const output = component.render(80).join("\n");
+    for (const text of expected) expect(output).toContain(text);
+  });
+
+  test("keeps the complete selected sequential step visible when navigating upward", () => {
+    const steps = Array.from({ length: 8 }, (_, index) => ({
+      agent: `agent-${index}`,
+      task: `task-${index}`,
+      model: `model-${index}`,
+    }));
+    const { component } = makeComponent(steps, undefined, 13);
+    for (let index = 1; index < steps.length; index++) component.handleInput("j");
+    component.render(80);
+    component.handleInput("k");
+    const output = component.render(80).join("\n");
+    expect(output).toContain("▸ [7/8] agent-6");
+    expect(output).toContain("task-6");
+    expect(output).toContain("model-6");
+  });
+
+  test("keeps a preceding sequential step visible when navigating up from parallel", () => {
+    const { component } = makeComponent(
+      [
+        { agent: "scout", task: "analyze", model: "model-scout" },
+        { parallel: [{ agent: "worker" }, { agent: "reviewer" }] },
+      ],
+      undefined,
+      13,
+    );
+    component.render(80);
+    component.handleInput("j");
+    component.render(80);
+    component.handleInput("k");
+    const output = component.render(80).join("\n");
+    expect(output).toContain("▸ [1/2] scout");
+    expect(output).toContain("Task   analyze");
+    expect(output).toContain("Model  model-scout");
+  });
+
+  test("keeps a preceding sequential header and marker in a four-row viewport", () => {
+    const { component } = makeComponent(
+      [
+        { agent: "scout", task: "analyze", model: "model-scout" },
+        { parallel: [{ agent: "worker" }, { agent: "reviewer" }] },
+      ],
+      undefined,
+      15,
+    );
+    component.render(80);
+    component.handleInput("j");
+    component.render(80);
+    component.handleInput("k");
+    const output = component.render(80).join("\n");
+    expect(output).toContain("▸ [1/2] scout");
+    expect(output).toContain("Task   analyze");
+    expect(output).toContain("Model  model-scout");
+  });
+
+  test("renders bounded width and height fallbacks", () => {
+    expect(
+      makeComponent(undefined, undefined, 10).component.render(30).join("\n"),
+    ).toContain("Esc");
+    expect(makeComponent().component.render(6).join("\n")).not.toContain("┏");
+  });
+
+  test("renders static and dynamic parallel agents read-only", () => {
+    const { component } = makeComponent([
+      { parallel: [{ agent: "scout" }, { agent: "worker" }] },
+      {
+        expand: { from: { output: "items", path: "$.items" } },
+        parallel: { agent: "reviewer", task: "review {{item}}" },
+        collect: { as: "reviews" },
+      },
+    ]);
+    const output = component.render(100).join("\n");
+    expect(output).toContain("Parallel · scout, worker");
+    expect(output).toContain("Dynamic parallel · reviewer");
+    component.handleInput("e");
+    expect(component.render(100).join("\n")).not.toContain("Edit Task");
+  });
+
+  test("does not return embedded newlines for task text", () => {
+    const { component } = makeComponent([{ agent: "scout", task: "first\nsecond" }]);
+    expect(component.render(80).every((line) => !/[\r\n]/.test(line))).toBe(true);
   });
 });
 
@@ -106,7 +252,7 @@ describe("ChainClarifyComponent — input", () => {
     expect(
       component
         .render(80)
-        .some((line) => line.includes(">") && line.includes("planner")),
+        .some((line) => line.includes("▸") && line.includes("planner")),
     ).toBe(true);
   });
 
@@ -131,10 +277,10 @@ describe("ChainClarifyComponent — input", () => {
     ]);
     component.handleInput("\x1b[1;1B");
     expect(
-      component.render(80).some((line) => line.includes(">") && line.includes("planner")),
+      component.render(80).some((line) => line.includes("▸") && line.includes("planner")),
     ).toBe(true);
     component.handleInput("\x1b[1;1A");
-    expect(component.render(80).some((line) => line.includes(">") && line.includes("scout"))).toBe(
+    expect(component.render(80).some((line) => line.includes("▸") && line.includes("scout"))).toBe(
       true,
     );
   });
@@ -154,7 +300,7 @@ describe("ChainClarifyComponent — input", () => {
     const lines = component.render(80);
     // Second step should now be selected (cursor on planner)
     const hasCursorOnPlanner = lines.some(
-      (l) => l.includes(">") && l.includes("planner"),
+      (l) => l.includes("▸") && l.includes("planner"),
     );
     expect(hasCursorOnPlanner).toBe(true);
   });
@@ -168,7 +314,7 @@ describe("ChainClarifyComponent — input", () => {
     component.handleInput("k"); // back to scout
     const lines = component.render(80);
     const hasCursorOnScout = lines.some(
-      (l) => l.includes(">") && l.includes("scout"),
+      (l) => l.includes("▸") && l.includes("scout"),
     );
     expect(hasCursorOnScout).toBe(true);
   });
@@ -223,18 +369,24 @@ describe("ChainClarifyComponent — edit mode", () => {
     const { component } = makeComponent([{ agent: "scout", task: "analyze" }]);
     component.handleInput("e");
     component.handleInput("\x1b[F");
+    component.focused = true;
     const lines = component.render(80);
+    expect(lines[0]).toContain("┏");
+    expect(lines.at(-1)).toContain("┗");
     expect(lines.some((l) => l.includes("Edit Task"))).toBe(true);
-    expect(lines.some((l) => l.includes("analyze"))).toBe(true);
+    expect(lines.some((l) => l.includes("analyze") && l.includes(CURSOR_MARKER))).toBe(true);
   });
 
   test("m key enters edit-model mode", () => {
     const { component } = makeComponent([{ agent: "scout", task: "analyze", model: "gpt-4" }]);
     component.handleInput("m");
     component.handleInput("\x1b[F");
+    component.focused = true;
     const lines = component.render(80);
+    expect(lines[0]).toContain("┏");
+    expect(lines.at(-1)).toContain("┗");
     expect(lines.some((l) => l.includes("Edit Model"))).toBe(true);
-    expect(lines.some((l) => l.includes("gpt-4"))).toBe(true);
+    expect(lines.some((l) => l.includes("gpt-4") && l.includes(CURSOR_MARKER))).toBe(true);
   });
 
   test("typing in edit mode appends to buffer", () => {
