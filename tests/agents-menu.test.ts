@@ -255,9 +255,14 @@ test("catalog display and override editing delegate through RuntimeDeps", async 
     message: `Updated "planner" at ${result.sourcePath}`,
     level: "info",
   });
-  expect(result.events.indexOf("action-done")).toBeLessThan(
-    result.events.indexOf("editor"),
-  );
+  expect(result.events).toEqual([
+    "root-done",
+    "catalog-done",
+    "action-done",
+    "editor",
+    "catalog-return-done",
+    "root-return-done",
+  ]);
 });
 
 test("root menu uses the dashboard overlay frame and controls", async () => {
@@ -333,6 +338,7 @@ test("catalog viewport keeps the selected agent visible while scrolling", async 
   );
 
   const [lastSelected, firstSelected] = driver.renders;
+  expect(driver.options).toHaveLength(3);
   expect(lastSelected.join("\n")).toContain("▸ agent-12");
   expect(lastSelected.join("\n")).not.toContain("agent-1   [bundled]");
   expect(firstSelected.join("\n")).toContain("▸ agent-1");
@@ -368,6 +374,7 @@ test("catalog resize fallback remains escapable and restores its viewport", asyn
   );
 
   const [normalLines, tinyLines, restoredLines] = driver.renders;
+  expect(driver.options).toHaveLength(3);
   expect(normalLines.join("\n")).toContain("▸ agent-12");
   expect(tinyLines).toHaveLength(2);
   expect(tinyLines.every((line) => visibleWidth(line) === 30)).toBe(true);
