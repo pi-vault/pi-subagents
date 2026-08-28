@@ -7,8 +7,13 @@ import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "../src/tui/conversation
 const LEGACY_ENTER = "\r";
 const LEGACY_ESCAPE = "\x1b";
 const LEGACY_UP = "\x1b[A";
+const LEGACY_DOWN = "\x1b[B";
+const LEGACY_PAGE_UP = "\x1b[5~";
+const LEGACY_PAGE_DOWN = "\x1b[6~";
 const LEGACY_HOME = "\x1b[H";
 const LEGACY_END = "\x1b[F";
+const KITTY_UP = "\x1b[1;1A";
+const KITTY_DOWN = "\x1b[1;1B";
 const CSI_U_ENTER = "\x1b[13u";
 const CSI_U_ESCAPE = "\x1b[27u";
 const CSI_U_X = "\x1b[120u";
@@ -122,7 +127,6 @@ describe("ConversationViewer", () => {
       "Fix the bug",
       "●",
       "2 tools",
-      "5.0s",
       "10 token",
       "Enter Steer",
       "x Stop",
@@ -132,9 +136,39 @@ describe("ConversationViewer", () => {
     ]) {
       expect(rendered).toContain(text);
     }
+    expect(rendered).toMatch(/\d+\.\d+s \(running\)/);
     expect(theme.bold).toHaveBeenCalledWith("coder");
     expect(theme.fg).toHaveBeenCalledWith("accent", "●");
     expect(theme.fg).toHaveBeenCalledWith("muted", "Fix the bug");
+  });
+
+  it.each([
+    ["running", "●", "accent"],
+    ["completed", "✓", "success"],
+    ["error", "✗", "error"],
+    ["queued", "○", "dim"],
+  ] as const)("renders the %s status with its semantic role", (status, icon, role) => {
+    const theme = makeTheme();
+    const { viewer } = makeViewer({ record: makeRecord({ status }), theme });
+
+    expect(viewer.render(80).join("\n")).toContain(icon);
+    expect(theme.fg).toHaveBeenCalledWith(role, icon);
+  });
+
+  it("renders the waiting state for an empty session", () => {
+    const { viewer } = makeViewer({ messages: [] });
+
+    expect(viewer.render(80).join("\n")).toContain("(waiting for first message...)");
+  });
+
+  it.each([
+    ["user", { role: "user", content: "hello", timestamp: 1 }, "[User]"],
+    ["assistant", { role: "assistant", content: [{ type: "text", text: "hello" }] }, "[Assistant]"],
+    ["tool result", { role: "toolResult", content: [{ type: "text", text: "hello" }] }, "[Result]"],
+  ])("renders the %s role label", (_name, message, label) => {
+    const { viewer } = makeViewer({ messages: [message] });
+
+    expect(viewer.render(80).join("\n")).toContain(label);
   });
 
   it("renders the native composer in the same capped frame", () => {
@@ -153,18 +187,23 @@ describe("ConversationViewer", () => {
   });
 
   it("uses bounded fallback rendering without changing navigation state", () => {
-    const { viewer, tui, done } = makeViewer({ rows: 40, messages: messages(20) });
+    const { viewer, tui } = makeViewer({ rows: 40, messages: messages(20) });
     viewer.render(80);
     viewer.handleInput(LEGACY_UP);
     expect(viewer.render(80).join("\n")).not.toContain("100%");
 
     tui.terminal.rows = 10;
     expect(viewer.render(80).join("\n")).toContain("Terminal too small · Esc");
-    viewer.handleInput(LEGACY_ESCAPE);
-    expect(done).toHaveBeenCalledWith(undefined);
-
     tui.terminal.rows = 40;
     expect(viewer.render(80).join("\n")).not.toContain("100%");
+  });
+
+  it("closes from fallback rendering", () => {
+    const { viewer, done } = makeViewer({ rows: 10 });
+
+    expect(viewer.render(80).join("\n")).toContain("Terminal too small · Esc");
+    viewer.handleInput(LEGACY_ESCAPE);
+    expect(done).toHaveBeenCalledWith(undefined);
   });
 
   it("handles both width and composer height fallback limits", () => {
@@ -194,74 +233,182 @@ describe("ConversationViewer", () => {
 
   it("routes legacy and CSI-u composer input, while release events do nothing", () => {
     const onSteer = vi.fn();
-    const { viewer } = makeViewer({ onSteer, onStop: vi.fn() });
+    const onStop = vi.fn();
+    const { viewer } = makeViewer({ onSteer, onStop });
     viewer.focused = true;
     viewer.handleInput(CSI_U_ENTER_RELEASE);
     viewer.handleInput(CSI_U_X_RELEASE);
     viewer.handleInput(CSI_U_X_RELEASE);
     expect(viewer.render(80).join("\n")).not.toContain("Steer agent");
     expect(viewer.render(80).join("\n")).not.toContain("Again to STOP");
-
-    viewer.handleInput(LEGACY_ENTER);
-    viewer.handleInput(" ");
-    viewer.handleInput("\x1b[97u");
-    viewer.handleInput(" ");
-    viewer.handleInput(CSI_U_ENTER);
-    expect(onSteer).toHaveBeenCalledWith("a");
-
-    viewer.handleInput(LEGACY_ENTER);
-    viewer.handleInput("b");
-    viewer.handleInput(LEGACY_ENTER);
-    expect(onSteer).toHaveBeenLastCalledWith("b");
+    expect(onSteer).not.toHaveBeenCalled();
+    expect(onStop).not.toHaveBeenCalled();
   });
 
-  it("cancels the composer without closing and does not render twice per composer key", () => {
-    const { viewer, tui, done } = makeViewer({ onSteer: vi.fn() });
+  it.each([
+    ["legacy", LEGACY_ENTER, "a", LEGACY_ENTER],
+    ["CSI-u", CSI_U_ENTER, "\x1b[97u", CSI_U_ENTER],
+  ])("submits trimmed %s composer input", (_name, open, input, submit) => {
+    const onSteer = vi.fn();
+    const { viewer } = makeViewer({ onSteer });
+
+    viewer.handleInput(open);
+    viewer.handleInput(" ");
+    viewer.handleInput(input);
+    viewer.handleInput(" ");
+    viewer.handleInput(submit);
+    expect(onSteer).toHaveBeenCalledWith("a");
+    expect(onSteer).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["legacy", LEGACY_ENTER, LEGACY_ESCAPE],
+    ["CSI-u", CSI_U_ENTER, CSI_U_ESCAPE],
+  ])("cancels a %s composer without steering or closing", (_name, open, cancel) => {
+    const onSteer = vi.fn();
+    const { viewer, done } = makeViewer({ onSteer });
+
+    viewer.handleInput(open);
+    viewer.handleInput("a");
+    viewer.handleInput(cancel);
+    expect(viewer.render(80).join("\n")).not.toContain("Steer agent");
+    expect(onSteer).not.toHaveBeenCalled();
+    expect(done).not.toHaveBeenCalled();
+  });
+
+  it("ignores an empty composer submission", () => {
+    const onSteer = vi.fn();
+    const { viewer } = makeViewer({ onSteer });
+
+    viewer.handleInput(LEGACY_ENTER);
+    viewer.handleInput(" ");
+    viewer.handleInput(CSI_U_ENTER);
+    expect(onSteer).not.toHaveBeenCalled();
+    expect(viewer.render(80).join("\n")).not.toContain("Steer agent");
+  });
+
+  it("keeps composer keys from scrolling and renders once for input, submit, and cancel", () => {
+    const onSteer = vi.fn();
+    const { viewer, tui, done } = makeViewer({ messages: messages(30), onSteer });
     viewer.handleInput(LEGACY_ENTER);
     tui.requestRender.mockClear();
-    viewer.handleInput("a");
+    viewer.handleInput("j");
     expect(tui.requestRender).toHaveBeenCalledOnce();
+    tui.requestRender.mockClear();
+    viewer.handleInput("k");
+    expect(tui.requestRender).toHaveBeenCalledOnce();
+    tui.requestRender.mockClear();
+    viewer.handleInput(CSI_U_ENTER);
+    expect(tui.requestRender).toHaveBeenCalledOnce();
+    expect(onSteer).toHaveBeenCalledWith("jk");
+
+    viewer.handleInput(LEGACY_ENTER);
+    tui.requestRender.mockClear();
     viewer.handleInput(CSI_U_ESCAPE);
+    expect(tui.requestRender).toHaveBeenCalledOnce();
     expect(viewer.render(80).join("\n")).not.toContain("Steer agent");
     expect(done).not.toHaveBeenCalled();
   });
 
-  it("preserves transcript order, scroll bounds, custom keys, and auto-follow", () => {
+  it.each([
+    ["legacy Escape", LEGACY_ESCAPE],
+    ["CSI-u Escape", CSI_U_ESCAPE],
+    ["q", "q"],
+  ])("closes once for outer %s", (_name, key) => {
+    const { viewer, done } = makeViewer();
+
+    viewer.handleInput(key);
+    viewer.handleInput(key);
+    expect(done).toHaveBeenCalledOnce();
+  });
+
+  it("preserves chronological transcript order", () => {
     const transcript = [
       { role: "user" as const, content: "first", timestamp: Date.now() },
       { role: "assistant" as const, content: [{ type: "text", text: "second" }] },
       { role: "toolResult" as const, content: [{ type: "text", text: "third" }] },
     ];
-    const keybindings = {
-      matches: (data: string, id: string) => id === "tui.select.up" && data === "w",
-    };
-    const { viewer } = makeViewer({ messages: transcript, keybindings });
+    const { viewer } = makeViewer({ messages: transcript });
     const ordered = viewer.render(100).join("\n");
     expect(ordered.indexOf("first")).toBeLessThan(ordered.indexOf("second"));
     expect(ordered.indexOf("second")).toBeLessThan(ordered.indexOf("third"));
+  });
 
-    const scroll = makeViewer({ messages: messages(30), keybindings });
-    scroll.viewer.render(100);
-    scroll.viewer.handleInput(LEGACY_HOME);
-    scroll.viewer.handleInput("w");
-    scroll.viewer.handleInput("k");
-    expect(scroll.viewer.render(100).join("\n")).toContain("message 0");
-    scroll.viewer.handleInput(LEGACY_END);
-    expect(scroll.viewer.render(100).join("\n")).toContain("100%");
-    scroll.viewer.handleInput("w");
-    const before = scroll.viewer.render(100).join("\n");
-    expect(before).not.toContain("100%");
-    scroll.tui.requestRender.mockClear();
-    scroll.session.messages.push({
+  it("moves and clamps legacy, Kitty, and page scrolling at both transcript bounds", () => {
+    const { viewer } = makeViewer({ messages: messages(30) });
+
+    expect(viewer.render(100).join("\n")).toContain("message 29");
+    for (const [up, down] of [
+      [LEGACY_UP, LEGACY_DOWN],
+      [KITTY_UP, KITTY_DOWN],
+      [LEGACY_PAGE_UP, LEGACY_PAGE_DOWN],
+    ]) {
+      viewer.handleInput(up);
+      expect(viewer.render(100).join("\n")).not.toContain("100%");
+      viewer.handleInput(down);
+      expect(viewer.render(100).join("\n")).toContain("100%");
+    }
+
+    viewer.handleInput(LEGACY_HOME);
+    for (let index = 0; index < 100; index++) viewer.handleInput(KITTY_UP);
+    for (let index = 0; index < 10; index++) viewer.handleInput(LEGACY_PAGE_UP);
+    expect(viewer.render(100).join("\n")).toContain("message 0");
+
+    viewer.handleInput(LEGACY_END);
+    for (let index = 0; index < 100; index++) viewer.handleInput(KITTY_DOWN);
+    for (let index = 0; index < 10; index++) viewer.handleInput(LEGACY_PAGE_DOWN);
+    expect(viewer.render(100).join("\n")).toContain("100%");
+    expect(viewer.render(100).join("\n")).toContain("message 29");
+  });
+
+  it("honors custom scroll and page bindings while retaining j/k fallbacks", () => {
+    const bindings = new Map([
+      ["w", "tui.select.up"],
+      ["s", "tui.select.down"],
+      ["u", "tui.select.pageUp"],
+      ["d", "tui.select.pageDown"],
+    ]);
+    const keybindings = { matches: (data: string, id: string) => bindings.get(data) === id };
+    const { viewer } = makeViewer({ messages: messages(30), keybindings });
+
+    viewer.render(100);
+    for (const [up, down] of [
+      ["w", "s"],
+      ["u", "d"],
+      ["k", "j"],
+    ]) {
+      viewer.handleInput(up);
+      expect(viewer.render(100).join("\n")).not.toContain("100%");
+      viewer.handleInput(down);
+      expect(viewer.render(100).join("\n")).toContain("100%");
+    }
+  });
+
+  it("preserves manual position on updates and auto-follows new messages after End", () => {
+    const { viewer, session, tui } = makeViewer({ messages: messages(30) });
+
+    viewer.render(100);
+    viewer.handleInput(KITTY_UP);
+    tui.requestRender.mockClear();
+    session.messages.push({
       role: "user" as const,
       content: "newest",
       timestamp: Date.now(),
     });
-    scroll.session.emit();
-    expect(scroll.tui.requestRender).toHaveBeenCalledOnce();
-    expect(scroll.viewer.render(100).join("\n")).not.toContain("100%");
-    scroll.viewer.handleInput(LEGACY_END);
-    expect(scroll.viewer.render(100).join("\n")).toContain("100%");
+    session.emit();
+    expect(tui.requestRender).toHaveBeenCalledOnce();
+    expect(viewer.render(100).join("\n")).not.toContain("100%");
+
+    viewer.handleInput(LEGACY_END);
+    session.messages.push({
+      role: "user" as const,
+      content: "after End",
+      timestamp: Date.now(),
+    });
+    session.emit();
+    const followed = viewer.render(100).join("\n");
+    expect(followed).toContain("after End");
+    expect(followed).toContain("100%");
   });
 
   it("reads mutable record state and keeps completed viewers open", () => {
@@ -271,6 +418,8 @@ describe("ConversationViewer", () => {
       messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
     });
     expect(viewer.render(80).join("\n")).toContain("working");
+    record.live.responseText = "still working";
+    expect(viewer.render(80).join("\n")).toContain("still working");
     record.status = "completed";
     record.live.responseText = "finished";
     tui.requestRender.mockClear();
@@ -280,11 +429,33 @@ describe("ConversationViewer", () => {
     expect(done).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["completed", makeRecord({ status: "completed", completedAt: Date.now() })],
+    ["read-only", makeRecord()],
+  ])("hides and disables actions for a %s viewer", (_name, record) => {
+    const onSteer = vi.fn();
+    const onStop = vi.fn();
+    const callbacks = _name === "read-only" ? {} : { onSteer, onStop };
+    const { viewer } = makeViewer({ record, ...callbacks });
+    const rendered = viewer.render(80).join("\n");
+
+    expect(rendered).not.toContain("Enter Steer");
+    expect(rendered).not.toContain("x Stop");
+    viewer.handleInput(LEGACY_ENTER);
+    viewer.handleInput(CSI_U_X);
+    viewer.handleInput(CSI_U_X);
+    expect(onSteer).not.toHaveBeenCalled();
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
   it("keeps stop confirmation and cleanup behavior", () => {
     const onStop = vi.fn();
     const { viewer, session, done, tui } = makeViewer({ onStop });
     viewer.handleInput(CSI_U_X);
+    expect(viewer.render(80).join("\n")).toContain("x Again to STOP");
     viewer.handleInput("a");
+    expect(viewer.render(80).join("\n")).not.toContain("x Again to STOP");
+    expect(onStop).not.toHaveBeenCalled();
     viewer.handleInput(CSI_U_X);
     viewer.handleInput(CSI_U_X);
     expect(onStop).toHaveBeenCalledOnce();
