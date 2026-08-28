@@ -1,5 +1,13 @@
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Key, Text, matchesKey } from "@earendil-works/pi-tui";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
+import {
+  DASHBOARD_MAX_HEIGHT_RATIO,
+  DASHBOARD_OVERLAY_OPTIONS,
+  MIN_DASHBOARD_FRAME_WIDTH,
+  fitDashboardViewport,
+  renderDashboardFrame,
+  renderDashboardTooSmall,
+} from "./dashboard-style.js";
 import type { AgentCatalogEntry } from "../core/agents.js";
 import type {
   EditableSettingKey,
@@ -8,6 +16,9 @@ import type {
 } from "../core/settings.js";
 import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type { AgentCreationInput } from "../shared/types.js";
+
+const MENU_CHROME_ROWS = 8;
+const MENU_KEY_HINTS = "↑/↓ Select • Enter Choose • Esc Close";
 
 type MenuChoice<T> = { label: string; value: T };
 
@@ -169,22 +180,42 @@ async function showRowsMenu<T>(
 
   let selectedIndex = 0;
   let selectedValue: T | undefined;
+  let viewportOffset = 0;
 
   await ctx.ui.custom((tui, theme, _kb, done) => ({
     render(width: number) {
-      const container = new Container();
-      container.addChild(new Text(theme.fg("accent", theme.bold(title)), 0, 0));
-      container.addChild(new Text("", 0, 0));
-      for (const [index, row] of renderedRows.entries()) {
-        container.addChild(
-          new Text(renderRow(theme, row, index === selectedIndex), 0, 0),
-        );
+      const targetRows = Math.min(
+        Math.max(1, Math.floor(tui.terminal.rows * DASHBOARD_MAX_HEIGHT_RATIO)),
+        MENU_CHROME_ROWS + Math.max(1, renderedRows.length),
+      );
+
+      if (width < MIN_DASHBOARD_FRAME_WIDTH || targetRows <= MENU_CHROME_ROWS) {
+        return renderDashboardTooSmall(width, targetRows, theme);
       }
-      if (footer) {
-        container.addChild(new Text("", 0, 0));
-        container.addChild(new Text(theme.fg("dim", footer), 0, 0));
-      }
-      return container.render(width);
+
+      const bodyLines = renderedRows.map((row, index) =>
+        renderRow(theme, row, index === selectedIndex),
+      );
+      const viewport = fitDashboardViewport(
+        bodyLines,
+        selectedIndex,
+        targetRows - MENU_CHROME_ROWS,
+        viewportOffset,
+      );
+      viewportOffset = viewport.offset;
+      const footerText = footer ? `${MENU_KEY_HINTS} • ${footer}` : MENU_KEY_HINTS;
+
+      return renderDashboardFrame(
+        [
+          theme.fg("accent", theme.bold(title)),
+          "",
+          ...viewport.lines,
+          "",
+          theme.fg("dim", footerText),
+        ],
+        width,
+        theme,
+      );
     },
     invalidate() {},
     handleInput(data: string) {
@@ -207,7 +238,10 @@ async function showRowsMenu<T>(
         done(undefined);
       }
     },
-  }));
+  }), {
+    overlay: true,
+    overlayOptions: DASHBOARD_OVERLAY_OPTIONS,
+  });
 
   return selectedValue;
 }
@@ -583,7 +617,7 @@ async function showAgentsBrowser(
       ],
       catalog.userDiagnostics.length > 0
         ? `${catalog.userDiagnostics.length} invalid user agent file(s) skipped`
-        : "↑/↓ move • Enter select • Esc close",
+        : undefined,
     );
 
     if (!choice) {
