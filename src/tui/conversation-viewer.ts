@@ -8,7 +8,9 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  type Focusable,
   Input,
+  isKeyRelease,
   type KeyId,
   matchesKey,
   type TUI,
@@ -18,12 +20,19 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AgentRecord } from "../shared/types.js";
 import type { Theme } from "./agent-widget.js";
+import {
+  DASHBOARD_MAX_HEIGHT_RATIO,
+  dashboardContentWidth,
+  fitDashboardViewport,
+  MIN_DASHBOARD_FRAME_WIDTH,
+  renderDashboardFrame,
+  renderDashboardTooSmall,
+} from "./dashboard-style.js";
 import { describeActivity, formatMs, formatTokens } from "./format.js";
-/** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
-const CHROME_LINES_BASE = 6;
+
 const MIN_VIEWPORT = 3;
 /** Height ceiling shared by the overlay's `maxHeight` and the viewer's internal viewport cap. */
-export const VIEWPORT_HEIGHT_PCT = 70;
+export const VIEWPORT_HEIGHT_PCT = DASHBOARD_MAX_HEIGHT_RATIO * 100;
 
 function extractText(content: string | Array<{ type: string; text?: string }>): string {
   if (typeof content === "string") return content;
@@ -52,11 +61,12 @@ function createViewerKeys(keybindings?: ViewerKeybindings): ViewerKeys {
     scrollUp: (data) => m(data, "tui.select.up", "up") || matchesKey(data, "k"),
     scrollDown: (data) => m(data, "tui.select.down", "down") || matchesKey(data, "j"),
     pageUp: (data) => m(data, "tui.select.pageUp", "pageUp") || matchesKey(data, "shift+up"),
-    pageDown: (data) => m(data, "tui.select.pageDown", "pageDown") || matchesKey(data, "shift+down"),
+    pageDown: (data) =>
+      m(data, "tui.select.pageDown", "pageDown") || matchesKey(data, "shift+down"),
   };
 }
 
-export class ConversationViewer implements Component {
+export class ConversationViewer implements Component, Focusable {
   private scrollOffset = 0;
   private autoScroll = true;
   private unsubscribe: (() => void) | undefined;
@@ -67,6 +77,7 @@ export class ConversationViewer implements Component {
   private keys: ViewerKeys;
   /** Steering composer — present while the user is typing a message to the agent. */
   private composer: Input | undefined;
+  private _focused = false;
 
   constructor(
     private tui: TUI,
@@ -88,7 +99,19 @@ export class ConversationViewer implements Component {
     });
   }
 
+  get focused(): boolean {
+    return this._focused;
+  }
+
+  set focused(value: boolean) {
+    this._focused = value;
+    if (this.composer) this.composer.focused = value;
+  }
+
   handleInput(data: string): void {
+    if (isKeyRelease(data)) return;
+    if (this.closed) return;
+
     // While composing a steer message, the input owns all keys (Enter sends,
     // Esc cancels — both wired in openComposer()). Editing keys flow through.
     if (this.composer) {
@@ -128,8 +151,8 @@ export class ConversationViewer implements Component {
     }
     if (this.stopArmed) this.stopArmed = false;
 
-    const totalLines = this.buildContentLines(this.lastInnerW).length;
     const viewportHeight = this.viewportHeight();
+    const totalLines = this.buildContentLines(this.lastInnerW).length;
     const maxScroll = Math.max(0, totalLines - viewportHeight);
 
     if (this.keys.scrollUp(data)) {
@@ -154,28 +177,14 @@ export class ConversationViewer implements Component {
   }
 
   render(width: number): string[] {
-    if (width < 6) return []; // too narrow for any meaningful rendering
+    const targetRows = this.targetRows();
+    if (width < MIN_DASHBOARD_FRAME_WIDTH || targetRows < this.chromeLines() + MIN_VIEWPORT) {
+      return renderDashboardTooSmall(width, targetRows, this.theme);
+    }
+
     const th = this.theme;
-    const innerW = width - 4; // border + padding
+    const innerW = dashboardContentWidth(width);
     this.lastInnerW = innerW;
-    const lines: string[] = [];
-
-    const pad = (s: string, len: number) => {
-      const vis = visibleWidth(s);
-      return s + " ".repeat(Math.max(0, len - vis));
-    };
-    const row = (content: string) =>
-      th.fg("border", "│") +
-      " " +
-      truncateToWidth(pad(content, innerW), innerW) +
-      " " +
-      th.fg("border", "│");
-    const hrTop = th.fg("border", `╭${"─".repeat(width - 2)}╮`);
-    const hrBot = th.fg("border", `╰${"─".repeat(width - 2)}╯`);
-    const hrMid = row(th.fg("dim", "─".repeat(innerW)));
-
-    // Header
-    lines.push(hrTop);
     const statusIcon =
       this.record.status === "running"
         ? th.fg("accent", "●")
@@ -184,118 +193,93 @@ export class ConversationViewer implements Component {
           : this.record.status === "error"
             ? th.fg("error", "✗")
             : th.fg("dim", "○");
-    const duration = this.record.completedAt ? formatMs(this.record.completedAt - this.record.startedAt) : `${formatMs(Date.now() - this.record.startedAt)} (running)`;
-
+    const duration = this.record.completedAt
+      ? formatMs(this.record.completedAt - this.record.startedAt)
+      : `${formatMs(Date.now() - this.record.startedAt)} (running)`;
     const headerParts: string[] = [duration];
-    const toolUses = this.record.toolUses;
-    if (toolUses > 0) headerParts.unshift(`${toolUses} tool${toolUses === 1 ? "" : "s"}`);
+    if (this.record.toolUses > 0) {
+      headerParts.unshift(`${this.record.toolUses} tool${this.record.toolUses === 1 ? "" : "s"}`);
+    }
     const tokens =
       this.record.lifetimeUsage.inputTokens +
       this.record.lifetimeUsage.outputTokens +
       this.record.lifetimeUsage.cacheWriteTokens;
     if (tokens > 0) headerParts.push(formatTokens(tokens));
+    const header = `${statusIcon} ${th.bold(this.record.type)}  ${th.fg("muted", this.record.description)} ${th.fg("dim", "•")} ${th.fg("dim", headerParts.join(" • "))}`;
 
-    lines.push(
-      row(
-        `${statusIcon} ${th.bold(this.record.type)}  ${th.fg("muted", this.record.description)} ${th.fg("dim", "·")} ${th.fg("dim", headerParts.join(" · "))}`,
-      ),
-    );
-    lines.push(hrMid);
-
-    // Content area — rebuild every render (live data, no cache needed)
     const contentLines = this.buildContentLines(innerW);
     const viewportHeight = this.viewportHeight();
-    const maxScroll = Math.max(0, contentLines.length - viewportHeight);
+    if (this.autoScroll) this.scrollOffset = Math.max(0, contentLines.length - viewportHeight);
+    const viewport = fitDashboardViewport(
+      contentLines,
+      undefined,
+      viewportHeight,
+      this.scrollOffset,
+    );
+    this.scrollOffset = viewport.offset;
 
-    if (this.autoScroll) {
-      this.scrollOffset = maxScroll;
+    const scrollPct =
+      contentLines.length <= viewportHeight
+        ? "100%"
+        : `${Math.round(((viewport.offset + viewportHeight) / contentLines.length) * 100)}%`;
+    const sep = th.fg("dim", " • ");
+    const actions: string[] = [];
+    if (this.canSteer()) actions.push(th.fg("dim", "Enter Steer"));
+    if (this.isStoppable()) {
+      actions.push(this.stopArmed ? th.fg("error", "x Again to STOP") : th.fg("dim", "x Stop"));
     }
+    const footerRight = th.fg("dim", "↑/↓ Scroll • PgUp/PgDn or Shift+↑/↓ • Esc Close");
+    const withCount = [
+      th.fg("dim", `${contentLines.length} lines • ${scrollPct}`),
+      ...actions,
+    ].join(sep);
+    const footerLeft =
+      visibleWidth(withCount) + visibleWidth(footerRight) + 1 <= innerW
+        ? withCount
+        : actions.join(sep);
+    const idleFooter =
+      footerLeft +
+      " ".repeat(Math.max(1, innerW - visibleWidth(footerLeft) - visibleWidth(footerRight))) +
+      footerRight;
 
-    const visibleStart = Math.min(this.scrollOffset, maxScroll);
-    const visible = contentLines.slice(visibleStart, visibleStart + viewportHeight);
-
-    for (let i = 0; i < viewportHeight; i++) {
-      lines.push(row(visible[i] ?? ""));
-    }
-
-    // Footer
-    lines.push(hrMid);
-    if (this.composer) {
-      // Composer row: the Input renders its own `> ` prompt and cursor.
-      lines.push(row(this.composer.render(innerW)[0] ?? ""));
-      const composeHint = th.fg("dim", "Enter send · Esc cancel");
-      const composeLeft = th.fg("accent", "✎ steer");
-      const composeGap = Math.max(
-        1,
-        innerW - visibleWidth(composeLeft) - visibleWidth(composeHint),
-      );
-      lines.push(row(composeLeft + " ".repeat(composeGap) + composeHint));
-    } else {
-      // Actions on the left, navigation on the right. The scroll hint keeps its
-      // full key list so the less-obvious bindings stay discoverable; it leads
-      // the right group so "Esc close" is the only part that truncates first.
-      const sep = th.fg("dim", " · ");
-      const actions: string[] = [];
-      if (this.canSteer()) actions.push(th.fg("dim", "Enter steer"));
-      if (this.isStoppable()) {
-        actions.push(
-          this.stopArmed ? th.fg("error", "x again to STOP") : th.fg("dim", "x stop"),
-        );
-      }
-      const footerRight = th.fg("dim", "↑↓ scroll · PgUp/PgDn or Shift+↑↓ · Esc close");
-
-      // Prepend the line-count/scroll-% readout only when there's spare width —
-      // it's the first thing dropped so it never crowds out the hints.
-      const scrollPct =
-        contentLines.length <= viewportHeight
-          ? "100%"
-          : `${Math.round(((visibleStart + viewportHeight) / contentLines.length) * 100)}%`;
-      const count = th.fg("dim", `${contentLines.length} lines · ${scrollPct}`);
-      const withCount = [count, ...actions].join(sep);
-      const footerLeft =
-        visibleWidth(withCount) + visibleWidth(footerRight) + 1 <= innerW
-          ? withCount
-          : actions.join(sep);
-
-      const footerGap = Math.max(
-        1,
-        innerW - visibleWidth(footerLeft) - visibleWidth(footerRight),
-      );
-      lines.push(row(footerLeft + " ".repeat(footerGap) + footerRight));
-    }
-    lines.push(hrBot);
-
-    return lines;
+    return renderDashboardFrame(
+      [
+        header,
+        "",
+        ...viewport.lines,
+        ...(this.composer
+          ? [
+              th.fg("accent", "Steer agent"),
+              this.composer.render(innerW)[0] ?? "",
+              th.fg("dim", "Enter Send • Esc Cancel"),
+            ]
+          : ["", idleFooter]),
+      ],
+      width,
+      th,
+    );
   }
 
   /** Stoppable only when a stop handler exists and the agent is still active. */
   private isStoppable(): boolean {
-    return (
-      !!this.onStop && (this.record.status === "running" || this.record.status === "queued")
-    );
+    return !!this.onStop && (this.record.status === "running" || this.record.status === "queued");
   }
 
   /** Steerable only when a steer handler exists and the agent is still active. */
   private canSteer(): boolean {
-    return (
-      !!this.onSteer && (this.record.status === "running" || this.record.status === "queued")
-    );
+    return !!this.onSteer && (this.record.status === "running" || this.record.status === "queued");
   }
 
   /** Open the inline steering composer and route subsequent input to it. */
   private openComposer(): void {
     const input = new Input();
-    input.focused = true;
+    input.focused = this._focused;
     input.onSubmit = (value: string) => {
       const message = value.trim();
-      this.composer = undefined;
+      this.closeComposer();
       if (message) this.onSteer?.(message);
-      this.tui.requestRender();
     };
-    input.onEscape = () => {
-      this.composer = undefined;
-      this.tui.requestRender();
-    };
+    input.onEscape = () => this.closeComposer();
     this.composer = input;
     this.tui.requestRender();
   }
@@ -306,6 +290,8 @@ export class ConversationViewer implements Component {
 
   dispose(): void {
     this.closed = true;
+    this._focused = false;
+    this.closeComposer();
     if (this.unsubscribe) {
       this.unsubscribe();
       this.unsubscribe = undefined;
@@ -314,16 +300,24 @@ export class ConversationViewer implements Component {
 
   // ---- Private ----
 
+  private closeComposer(): void {
+    if (!this.composer) return;
+    this.composer.focused = false;
+    this.composer.onSubmit = undefined;
+    this.composer.onEscape = undefined;
+    this.composer = undefined;
+  }
+
+  private targetRows(): number {
+    return Math.max(1, Math.floor(this.tui.terminal.rows * DASHBOARD_MAX_HEIGHT_RATIO));
+  }
+
   private viewportHeight(): number {
-    // Cap mirrors the overlay's maxHeight — otherwise the viewer would render
-    // more lines than the overlay shows and clip the footer.
-    const maxRows = Math.floor((this.tui.terminal.rows * VIEWPORT_HEIGHT_PCT) / 100);
-    return Math.max(MIN_VIEWPORT, maxRows - this.chromeLines());
+    return Math.max(MIN_VIEWPORT, this.targetRows() - this.chromeLines());
   }
 
   private chromeLines(): number {
-    // The composer adds one row above the footer hint while it's open.
-    return CHROME_LINES_BASE + (this.composer ? 1 : 0);
+    return 8 + (this.composer ? 1 : 0);
   }
 
   private buildContentLines(width: number): string[] {
@@ -381,9 +375,7 @@ export class ConversationViewer implements Component {
         lines.push(truncateToWidth(th.fg("muted", `  $ ${msg.command}`), width));
         if (msg.output?.trim()) {
           const out =
-            msg.output.length > 500
-              ? `${msg.output.slice(0, 500)}... (truncated)`
-              : msg.output;
+            msg.output.length > 500 ? `${msg.output.slice(0, 500)}... (truncated)` : msg.output;
           for (const line of wrapTextWithAnsi(out.trim(), width)) {
             lines.push(th.fg("dim", line));
           }
