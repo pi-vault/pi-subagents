@@ -2,13 +2,14 @@
  * fleet-list.ts — Claude Code-style "FleetView" list rendered below the editor.
  *
  * Shows `main` + each running/queued subagent as a navigable list. Pressing ↓ (or
- * ←) at an empty prompt activates the list; ↑/↓ move the selection (filled ⏺ marker),
+ * ←) at an empty prompt activates the list; ↑/↓ move the selection (▸ marker),
  * Enter opens the selected agent's live conversation overlay, Esc returns to the prompt.
  * A viewer stays open when its agent finishes; finished agents linger briefly in the list.
  *
  * Mechanics: the list is a `belowEditor` widget (render-only), and ALL key handling
  * goes through `onTerminalInput` — which fires before the focused editor and can
- * `consume` keys — gated on `getEditorText() === ""` so normal typing is untouched.
+ * `consume` keys — gated on prompt focus and `getEditorText() === ""` so dialogs
+ * and normal typing are untouched.
  */
 
 import { isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -30,7 +31,7 @@ const TICK_MS = 200;
 const FINISHED_LINGER_MS = 4000;
 
 /** Minimal TUI surface needed for focus checks and re-renders. */
-type TuiHandle = Pick<TUI, "requestRender"> & {
+type TuiHandle = Pick<TUI, "children" | "requestRender"> & {
   getFocusedComponent(): Component | null;
 };
 
@@ -95,6 +96,7 @@ function rightAlign(left: string, right: string, width: number): string {
 export class FleetList {
   private ui: FleetUICtx | undefined;
   private tuiHandle: TuiHandle | undefined;
+  private promptEditor: Component | undefined;
   private inputUnsub: (() => void) | undefined;
   private widgetRegistered = false;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -126,6 +128,7 @@ export class FleetList {
     this.ui = ui;
     this.widgetRegistered = false;
     this.tuiHandle = undefined;
+    this.promptEditor = undefined;
     this.inputUnsub = ui.onTerminalInput((data) => this.handleKey(data));
   }
 
@@ -149,6 +152,7 @@ export class FleetList {
     if (this.ui && this.widgetRegistered) this.ui.setWidget(FLEET_KEY, undefined);
     this.widgetRegistered = false;
     this.tuiHandle = undefined;
+    this.promptEditor = undefined;
     this.active = false;
     // Null last so a `viewerClose()` microtask above can't re-register the widget.
     this.ui = undefined;
@@ -182,6 +186,7 @@ export class FleetList {
         FLEET_KEY,
         (tui, theme) => {
           this.tuiHandle = tui as TuiHandle;
+          this.capturePromptEditor();
           return {
             render: (w: number) => this.renderBar(w, theme),
             invalidate: () => {
@@ -295,16 +300,30 @@ export class FleetList {
   }
 
   private editorHasFocus(): boolean {
+    this.capturePromptEditor();
+    return this.tuiHandle?.getFocusedComponent() === this.promptEditor;
+  }
+
+  private capturePromptEditor(): void {
+    if (this.promptEditor) return;
     const focused = this.tuiHandle?.getFocusedComponent();
-    if (!focused) return false;
+    if (!focused || !this.tuiHandle?.children.some((root) => this.contains(root, focused))) return;
     const candidate = focused as Partial<EditorComponent>;
-    return (
+    if (
       typeof candidate.render === "function" &&
       typeof candidate.invalidate === "function" &&
       typeof candidate.handleInput === "function" &&
       typeof candidate.getText === "function" &&
       typeof candidate.setText === "function"
-    );
+    ) {
+      this.promptEditor = focused;
+    }
+  }
+
+  private contains(root: Component, target: Component): boolean {
+    if (root === target) return true;
+    const children = (root as Component & { children?: Component[] }).children;
+    return children?.some((child) => this.contains(child, target)) ?? false;
   }
 
   private deactivate(): void {

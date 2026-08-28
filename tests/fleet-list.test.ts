@@ -63,9 +63,16 @@ const dialogComponent = () => ({
   handleInput: () => {},
 });
 
-function harness(records: AgentRecord[]) {
+function harness(
+  records: AgentRecord[],
+  initialFocus: { component: unknown; overlayVisible: boolean; mountedComponent?: unknown } = {
+    component: editorComponent(),
+    overlayVisible: false,
+  },
+) {
   let editorText = "";
-  let focused: unknown = editorComponent();
+  let focused = initialFocus.component;
+  let overlayVisible = initialFocus.overlayVisible;
   let handler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
   let widgetFactory: ((tui: unknown, theme: Theme) => { render(width: number): string[] }) | undefined;
   let overlayOpen = false;
@@ -79,9 +86,11 @@ function harness(records: AgentRecord[]) {
     steer: vi.fn(() => true),
   } as unknown as AgentManager;
   const tui = {
+    children: [initialFocus.mountedComponent ?? initialFocus.component],
     terminal: { rows: 40, columns: 80 },
     requestRender: vi.fn(),
     getFocusedComponent: () => focused,
+    hasOverlay: () => overlayVisible,
   };
   const ui = {
     setWidget: vi.fn((key: string, content: unknown) => {
@@ -122,7 +131,10 @@ function harness(records: AgentRecord[]) {
     press: (data: string) => handler?.(data),
     render: (width: number, theme = makeTheme()) => widgetFactory?.(tui, theme).render(width) ?? [],
     setEditorText: (text: string) => { editorText = text; },
-    setFocus: (component: unknown) => { focused = component; },
+    setFocus: (component: unknown, isOverlay = false) => {
+      focused = component;
+      overlayVisible = isOverlay;
+    },
     closeOverlay: () => overlayDone?.(),
     overlayOpened: () => overlayOpen,
     customOptions: () => customOptions,
@@ -212,6 +224,45 @@ describe("FleetList terminal input", () => {
     const h = harness([makeRecord()]);
     h.setFocus(dialogComponent());
     expect(h.press(KITTY_DOWN)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it("does not steal activation keys from an editor-shaped overlay", () => {
+    const h = harness([makeRecord()]);
+    h.setFocus(editorComponent(), true);
+    expect(h.press(KITTY_DOWN)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it("does not steal activation keys from another editor component", () => {
+    const h = harness([makeRecord()]);
+    h.setFocus(editorComponent());
+    expect(h.press(KITTY_DOWN)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it("learns the prompt editor after mounting behind an overlay", () => {
+    const overlayEditor = editorComponent();
+    const promptEditor = editorComponent();
+    const h = harness([makeRecord()], {
+      component: overlayEditor,
+      overlayVisible: true,
+      mountedComponent: promptEditor,
+    });
+    expect(h.press(KITTY_DOWN)).toBeUndefined();
+    h.setFocus(promptEditor);
+    expect(h.press(KITTY_DOWN)).toEqual({ consume: true });
+    h.fleet.dispose();
+  });
+
+  it("activates beneath a non-capturing overlay", () => {
+    const promptEditor = editorComponent();
+    const h = harness([makeRecord()], {
+      component: promptEditor,
+      overlayVisible: true,
+      mountedComponent: promptEditor,
+    });
+    expect(h.press(KITTY_DOWN)).toEqual({ consume: true });
     h.fleet.dispose();
   });
 
