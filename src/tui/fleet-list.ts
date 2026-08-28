@@ -16,8 +16,9 @@ import type { Component, EditorComponent, TUI } from "@earendil-works/pi-tui";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../core/agent-manager.js";
 import type { AgentRecord } from "../shared/types.js";
-import { ConversationViewer, VIEWPORT_HEIGHT_PCT, type ViewerKeybindings } from "./conversation-viewer.js";
+import { ConversationViewer, type ViewerKeybindings } from "./conversation-viewer.js";
 import type { Theme } from "./agent-widget.js";
+import { DASHBOARD_OVERLAY_OPTIONS } from "./dashboard-style.js";
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -82,11 +83,13 @@ export function formatFleetTokens(count: number): string {
  * desync pi's line-diff → flicker) even on a terminal too narrow for the stats.
  */
 function rightAlign(left: string, right: string, width: number): string {
-  const rightW = visibleWidth(right);
+  const safeLeft = left.replace(/[\r\n]+/g, " ");
+  const safeRight = right.replace(/[\r\n]+/g, " ");
+  const rightW = visibleWidth(safeRight);
   const maxLeft = Math.max(0, width - rightW - 1);
-  const leftClamped = truncateToWidth(left, maxLeft);
+  const leftClamped = truncateToWidth(safeLeft, maxLeft);
   const gap = Math.max(1, width - visibleWidth(leftClamped) - rightW);
-  return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
+  return truncateToWidth(leftClamped + " ".repeat(gap) + safeRight, width);
 }
 
 export class FleetList {
@@ -346,11 +349,7 @@ export class FleetList {
         },
         {
           overlay: true,
-          overlayOptions: {
-            anchor: "center",
-            width: "90%",
-            maxHeight: `${VIEWPORT_HEIGHT_PCT}%`,
-          },
+          overlayOptions: DASHBOARD_OVERLAY_OPTIONS,
         },
       )
       .then(
@@ -384,14 +383,13 @@ export class FleetList {
     // Clamp locally so a render between a roster shrink and the next update()
     // (e.g. on terminal resize) never loses the selection marker.
     const sel = Math.min(this.selectedIndex, agents.length);
-
-    const hint = this.active
-      ? "↑↓ select · enter view · esc back"
-      : "esc to interrupt · ← for agents · ↓ to manage";
-    const lines: string[] = [];
-    lines.push(truncateToWidth(`  ${theme.fg("dim", hint)}`, width));
-    lines.push("");
-    lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
+    const footer = this.active
+      ? "↑/↓ Select • Enter View • Esc Back"
+      : "↓/← Focus agents • Esc Interrupt";
+    const lines: string[] = [
+      truncateToWidth(theme.fg("accent", theme.bold("✦ Agents")), width),
+      truncateToWidth(`${this.marker(0, sel, theme)}${sel === 0 ? theme.bold("main") : "main"}`, width),
+    ];
 
     // Window the agent rows so the selected one stays visible.
     const visible = Math.min(MAX_AGENT_ROWS, agents.length);
@@ -404,12 +402,15 @@ export class FleetList {
       lines.push(this.renderAgentRow(a + 1, sel, agents[a].record, width, theme));
     }
     if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
+    lines.push(truncateToWidth(theme.fg("dim", footer), width));
 
     return lines;
   }
 
-  private bullet(rosterIndex: number, sel: number, theme: Theme): string {
-    return rosterIndex === sel ? theme.fg("accent", "⏺") : theme.fg("dim", "◯");
+  private marker(rosterIndex: number, selectedIndex: number, theme: Theme): string {
+    return this.active && rosterIndex === selectedIndex
+      ? `${theme.fg("accent", "▸")} `
+      : "  ";
   }
 
   private renderAgentRow(
@@ -419,13 +420,14 @@ export class FleetList {
     width: number,
     theme: Theme,
   ): string {
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${theme.fg("muted", record.type)}  ${record.description}`;
+    const subject = rosterIndex === sel ? theme.bold(record.description) : record.description;
+    const left = `${this.marker(rosterIndex, sel, theme)}${theme.fg("muted", record.type)}  ${subject}`;
     const tokens =
       record.lifetimeUsage.inputTokens +
       record.lifetimeUsage.outputTokens +
       record.lifetimeUsage.cacheWriteTokens;
     const elapsedMs = (record.completedAt ?? Date.now()) - record.startedAt; // freezes once finished
-    const right = theme.fg("dim", `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}`);
+    const right = theme.fg("dim", `${formatFleetElapsed(elapsedMs)} • ${formatFleetTokens(tokens)}`);
     return rightAlign(left, right, width);
   }
 }

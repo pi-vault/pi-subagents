@@ -39,6 +39,16 @@ const makeTheme = (): Theme => ({
   bold: (text: string) => text,
 });
 
+const ansiTheme = (): Theme => {
+  const colors: Record<string, number> = { accent: 35, dim: 2, muted: 36 };
+  return {
+    fg: (color, text) => `\x1b[${colors[color] ?? 37}m${text}\x1b[0m`,
+    bold: (text) => `\x1b[1m${text}\x1b[0m`,
+  };
+};
+
+const plain = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
+
 const editorComponent = (): EditorComponent => ({
   render: () => [],
   invalidate: () => {},
@@ -61,6 +71,7 @@ function harness(records: AgentRecord[]) {
   let overlayOpen = false;
   let overlayDone: (() => void) | undefined;
   let customOptions: CustomOptions | undefined;
+  let viewer: { render(width: number): string[]; handleInput(data: string): void } | undefined;
   const unsubscribe = vi.fn();
   const manager = {
     listAgents: vi.fn(() => records),
@@ -92,7 +103,7 @@ function harness(records: AgentRecord[]) {
           overlayOpen = false;
           resolve(result);
         };
-        factory(tui, makeTheme(), {}, done);
+        viewer = factory(tui, makeTheme(), {}, done) as typeof viewer;
         overlayDone = () => done(undefined as T);
       });
     }),
@@ -109,12 +120,13 @@ function harness(records: AgentRecord[]) {
     ui,
     unsubscribe,
     press: (data: string) => handler?.(data),
-    render: (width: number) => widgetFactory?.(tui, makeTheme()).render(width) ?? [],
+    render: (width: number, theme = makeTheme()) => widgetFactory?.(tui, theme).render(width) ?? [],
     setEditorText: (text: string) => { editorText = text; },
     setFocus: (component: unknown) => { focused = component; },
     closeOverlay: () => overlayDone?.(),
     overlayOpened: () => overlayOpen,
     customOptions: () => customOptions,
+    viewer: () => viewer,
   };
 }
 
@@ -263,28 +275,154 @@ describe("FleetList lifecycle", () => {
 });
 
 describe("FleetList rendering", () => {
-  it("registers the fleet widget and renders the main and agent rows", () => {
+  it("renders the unboxed inactive and active fleet presentation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00Z"));
     const h = harness([makeRecord()]);
-    expect(h.ui.setWidget).toHaveBeenCalledWith("fleet", expect.any(Function), { placement: "belowEditor" });
-    const lines = h.render(80);
-    expect(lines.some((line) => line.includes("main"))).toBe(true);
-    expect(lines.some((line) => line.includes("coder"))).toBe(true);
-    expect(lines.some((line) => line.includes("↓ 150 tokens"))).toBe(true);
-    expect(lines.every((line) => visibleWidth(line) <= 80)).toBe(true);
+    const inactive = h.render(80);
+    expect(plain(inactive[0])).toBe("✦ Agents");
+    expect(plain(inactive.at(-1)!)).toBe("↓/← Focus agents • Esc Interrupt");
+    expect(plain(inactive.join("\n"))).not.toContain("▸");
+
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_DOWN);
+    const active = h.render(80);
+    expect(plain(active[0])).toBe("✦ Agents");
+    expect(plain(active.find((line) => line.includes("coder"))!)).toMatch(
+      /^▸ coder  Fix bug\s+5s • ↓ 150 tokens$/,
+    );
+    expect(plain(active.at(-1)!)).toBe("↑/↓ Select • Enter View • Esc Back");
     h.fleet.dispose();
   });
 
-  it("keeps FleetList's existing viewer overlay composition", () => {
-    const h = harness([makeRecord()]);
+  it("uses semantic styles without fleet box glyphs", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00Z"));
+    const h = harness([makeRecord(), makeRecord({ id: "a2", type: "reviewer" })]);
+    const inactive = h.render(80, ansiTheme());
+    expect(inactive[0]).toContain("\x1b[35m\x1b[1m✦ Agents");
+    expect(inactive.at(-1)).toMatch(/^\x1b\[2m/);
+
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_DOWN);
+    const active = h.render(80, ansiTheme());
+    const selected = active.find((line) => plain(line).includes("coder"))!;
+    expect(selected).toMatch(/^\x1b\[35m▸/);
+    expect(selected).toContain("\x1b[2m5s • ↓ 150 tokens");
+    expect(active.at(-1)).toMatch(/^\x1b\[2m/);
+    expect(plain(active.join("\n"))).not.toMatch(/[┏━┃┗╭─│╰]/);
+    h.fleet.dispose();
+
+    const overflow = harness(Array.from({ length: 6 }, (_, index) => makeRecord({ id: `o${index}` })));
+    expect(overflow.render(80, ansiTheme()).find((line) => plain(line).trim() === "↓ 1 more")).toContain(
+      "\x1b[2m↓ 1 more",
+    );
+    overflow.fleet.dispose();
+  });
+
+  it("uses dashboard overlay options and preserves the selected live viewer record", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00Z"));
+    const record = makeRecord({
+      toolUses: 2,
+      live: { activeTools: ["read"], responseText: "" },
+      session: { messages: [{ role: "user", content: "hi" }], subscribe: () => () => {} },
+    });
+    const h = harness([record]);
     h.press(LEGACY_DOWN);
     h.press(LEGACY_DOWN);
     h.press(LEGACY_ENTER);
     expect(h.customOptions()).toEqual({
       overlay: true,
-      overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" },
+      overlayOptions: DASHBOARD_OVERLAY_OPTIONS,
     });
-    expect(DASHBOARD_OVERLAY_OPTIONS).toBeDefined();
+    const viewer = h.viewer()!;
+    const viewerOutput = viewer.render(80).join("\n");
+    expect(viewerOutput).toContain("2 tools");
+    expect(viewerOutput).toContain("150 token");
+    expect(viewerOutput).toContain("reading…");
+    viewer.handleInput(LEGACY_ENTER);
+    viewer.handleInput("message");
+    viewer.handleInput(LEGACY_ENTER);
+    expect(h.manager.steer).toHaveBeenCalledOnce();
+    expect(h.manager.steer).toHaveBeenCalledWith(record.id, "message");
+    viewer.handleInput("x");
+    viewer.handleInput("x");
+    expect(h.manager.abort).toHaveBeenCalledOnce();
+    expect(h.manager.abort).toHaveBeenCalledWith(record.id);
     h.closeOverlay();
+    h.fleet.dispose();
+  });
+
+  it("keeps a five-agent window separate from main and shows overflow above and below", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00Z"));
+    const records = Array.from({ length: 8 }, (_, index) =>
+      makeRecord({ id: `a${index}`, type: `agent-${index}`, startedAt: Date.now() - (8000 - index) }),
+    );
+    const h = harness(records);
+    let lines = h.render(80).map(plain);
+    expect(lines.filter((line) => line.includes("agent-")).length).toBe(5);
+    expect(lines.some((line) => line.trim() === "↓ 3 more")).toBe(true);
+    expect(lines.some((line) => line.includes("main"))).toBe(true);
+
+    h.press(LEGACY_DOWN);
+    for (let index = 0; index < 8; index++) h.press(LEGACY_DOWN);
+    lines = h.render(80).map(plain);
+    expect(lines.filter((line) => line.includes("agent-")).length).toBe(5);
+    expect(lines.some((line) => line.trim() === "↑ 3 more")).toBe(true);
+    expect(lines.some((line) => line.startsWith("▸ agent-7"))).toBe(true);
+    h.fleet.dispose();
+  });
+
+  it("filters, orders, and lingers roster records", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00Z"));
+    const h = harness([
+      makeRecord({ id: "late", type: "late", startedAt: Date.now() - 1000 }),
+      makeRecord({ id: "hidden", type: "hidden", session: undefined }),
+      makeRecord({ id: "early", type: "early", startedAt: Date.now() - 3000 }),
+      makeRecord({ id: "linger", type: "linger", status: "completed", completedAt: Date.now() - 3999 }),
+      makeRecord({ id: "gone", type: "gone", status: "completed", completedAt: Date.now() - 4000 }),
+    ]);
+    const output = h.render(80).map(plain).join("\n");
+    expect(output).not.toContain("hidden");
+    expect(output).toContain("linger");
+    expect(output).not.toContain("gone");
+    expect(output.indexOf("early")).toBeLessThan(output.indexOf("late"));
+    h.fleet.dispose();
+  });
+
+  it("reselects a viewed agent by id when an earlier row disappears", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00Z"));
+    const first = makeRecord({ id: "first", type: "first", startedAt: Date.now() - 2000 });
+    const selected = makeRecord({ id: "selected", type: "selected", startedAt: Date.now() - 1000 });
+    const h = harness([first, selected]);
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_ENTER);
+    first.status = "completed";
+    first.completedAt = Date.now() - 4000;
+    h.closeOverlay();
+    await Promise.resolve();
+    expect(h.render(80).map(plain).find((line) => line.includes("selected"))).toMatch(/^▸ selected/);
+    h.fleet.dispose();
+  });
+
+  it("caps ANSI output, normalizes dynamic CR/LF text, and retains metadata when it fits", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00Z"));
+    const h = harness([makeRecord({ type: "coder\r\nlong", description: "Fix\n\rvery long bug" })]);
+    for (const width of [0, 1, 4, 8, 20, 40, 80, 200]) {
+      const lines = h.render(width, ansiTheme());
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+      expect(lines.every((line) => !/[\r\n]/.test(line))).toBe(true);
+    }
+    expect(plain(h.render(20, ansiTheme()).find((line) => plain(line).includes("5s"))!)).toContain(
+      "5s • ↓ 150 tokens",
+    );
     h.fleet.dispose();
   });
 });
