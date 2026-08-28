@@ -18,7 +18,6 @@ import type { RuntimeDeps } from "../shared/runtime-deps.js";
 import type { AgentCreationInput } from "../shared/types.js";
 
 const MENU_CHROME_ROWS = 8;
-const MIN_MENU_DASHBOARD_ROWS = MENU_CHROME_ROWS + 1;
 const MENU_KEY_HINTS = "↑/↓ Select • Enter Choose • Esc Close";
 
 type MenuChoice<T> = { label: string; value: T };
@@ -185,19 +184,12 @@ async function showRowsMenu<T>(
 
   await ctx.ui.custom((tui, theme, _kb, done) => ({
     render(width: number) {
-      const maxRows = Math.max(
-        1,
-        Math.floor(tui.terminal.rows * DASHBOARD_MAX_HEIGHT_RATIO),
+      const targetRows = Math.min(
+        Math.max(1, Math.floor(tui.terminal.rows * DASHBOARD_MAX_HEIGHT_RATIO)),
+        MENU_CHROME_ROWS + Math.max(1, renderedRows.length),
       );
-      const targetRows =
-        maxRows < MIN_MENU_DASHBOARD_ROWS
-          ? maxRows
-          : Math.min(maxRows, MENU_CHROME_ROWS + Math.max(1, renderedRows.length));
 
-      if (
-        width < MIN_DASHBOARD_FRAME_WIDTH ||
-        targetRows < MIN_MENU_DASHBOARD_ROWS
-      ) {
+      if (width < MIN_DASHBOARD_FRAME_WIDTH || targetRows <= MENU_CHROME_ROWS) {
         return renderDashboardTooSmall(width, targetRows, theme);
       }
 

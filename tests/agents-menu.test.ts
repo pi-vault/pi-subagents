@@ -69,8 +69,8 @@ function createTheme() {
 }
 
 type TestTui = {
-  terminal: { columns: number; rows: number };
-  requestRender: ReturnType<typeof vi.fn>;
+  terminal: { rows: number };
+  requestRender(): void;
 };
 
 type MenuScript = (
@@ -97,8 +97,8 @@ function createCustomDriver(
 
     await new Promise<void>((resolveDone) => {
       const tui: TestTui = {
-        terminal: { columns: width, rows: terminalRows },
-        requestRender: vi.fn(),
+        terminal: { rows: terminalRows },
+        requestRender() {},
       };
       const component = factory(
         tui as unknown as TUI,
@@ -353,10 +353,8 @@ test("catalog resize fallback remains escapable and restores its viewport", asyn
         for (let index = 0; index < 11; index++) component.handleInput(KITTY_DOWN);
         capture(80);
         tui.terminal.rows = 3;
-        tui.terminal.columns = 30;
         capture(30);
         tui.terminal.rows = 14;
-        tui.terminal.columns = 80;
         capture(80);
         component.handleInput(CSI_U_ESCAPE);
       },
