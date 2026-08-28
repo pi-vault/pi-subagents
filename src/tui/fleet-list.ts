@@ -85,12 +85,10 @@ export function formatFleetTokens(count: number): string {
  */
 function rightAlign(left: string, right: string, width: number): string {
   const safeLeft = left.replace(/[\r\n]+/g, " ");
-  const safeRight = right.replace(/[\r\n]+/g, " ");
-  const rightW = visibleWidth(safeRight);
-  const maxLeft = Math.max(0, width - rightW - 1);
-  const leftClamped = truncateToWidth(safeLeft, maxLeft);
+  const rightW = visibleWidth(right);
+  const leftClamped = truncateToWidth(safeLeft, Math.max(0, width - rightW - 1));
   const gap = Math.max(1, width - visibleWidth(leftClamped) - rightW);
-  return truncateToWidth(leftClamped + " ".repeat(gap) + safeRight, width);
+  return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
 }
 
 export class FleetList {

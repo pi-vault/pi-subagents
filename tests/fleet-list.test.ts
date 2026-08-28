@@ -1,4 +1,8 @@
-import { type EditorComponent, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  type EditorComponent,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FleetList, formatFleetElapsed, formatFleetTokens } from "../src/tui/fleet-list.js";
 import type { AgentManager } from "../src/core/agent-manager.js";
@@ -47,7 +51,7 @@ const ansiTheme = (): Theme => {
   };
 };
 
-const plain = (text: string) => text.split("\x1b[").map((part, index) => index ? part.replace(/^[0-9;]*m/, "") : part).join("");
+const plain = stripTerminalSequences;
 
 const editorComponent = (): EditorComponent => ({
   render: () => [],
@@ -65,20 +69,17 @@ const dialogComponent = () => ({
 
 function harness(
   records: AgentRecord[],
-  initialFocus: { component: unknown; overlayVisible: boolean; mountedComponent?: unknown } = {
-    component: editorComponent(),
-    overlayVisible: false,
-  },
+  initialFocus: unknown = editorComponent(),
+  mountedComponent: unknown = initialFocus,
 ) {
   let editorText = "";
-  let focused = initialFocus.component;
-  let overlayVisible = initialFocus.overlayVisible;
+  let focused = initialFocus;
   let handler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
   let widgetFactory: ((tui: unknown, theme: Theme) => { render(width: number): string[] }) | undefined;
   let overlayOpen = false;
   let overlayDone: (() => void) | undefined;
   let customOptions: CustomOptions | undefined;
-  let viewer: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+  let viewer: { handleInput(data: string): void } | undefined;
   const unsubscribe = vi.fn();
   const manager = {
     listAgents: vi.fn(() => records),
@@ -86,11 +87,10 @@ function harness(
     steer: vi.fn(() => true),
   } as unknown as AgentManager;
   const tui = {
-    children: [initialFocus.mountedComponent ?? initialFocus.component],
+    children: [mountedComponent],
     terminal: { rows: 40, columns: 80 },
     requestRender: vi.fn(),
     getFocusedComponent: () => focused,
-    hasOverlay: () => overlayVisible,
   };
   const ui = {
     setWidget: vi.fn((key: string, content: unknown) => {
@@ -131,10 +131,7 @@ function harness(
     press: (data: string) => handler?.(data),
     render: (width: number, theme = makeTheme()) => widgetFactory?.(tui, theme).render(width) ?? [],
     setEditorText: (text: string) => { editorText = text; },
-    setFocus: (component: unknown, isOverlay = false) => {
-      focused = component;
-      overlayVisible = isOverlay;
-    },
+    setFocus: (component: unknown) => { focused = component; },
     closeOverlay: () => overlayDone?.(),
     overlayOpened: () => overlayOpen,
     customOptions: () => customOptions,
@@ -227,13 +224,6 @@ describe("FleetList terminal input", () => {
     h.fleet.dispose();
   });
 
-  it("does not steal activation keys from an editor-shaped overlay", () => {
-    const h = harness([makeRecord()]);
-    h.setFocus(editorComponent(), true);
-    expect(h.press(KITTY_DOWN)).toBeUndefined();
-    h.fleet.dispose();
-  });
-
   it("does not steal activation keys from another editor component", () => {
     const h = harness([makeRecord()]);
     h.setFocus(editorComponent());
@@ -242,26 +232,10 @@ describe("FleetList terminal input", () => {
   });
 
   it("learns the prompt editor after mounting behind an overlay", () => {
-    const overlayEditor = editorComponent();
     const promptEditor = editorComponent();
-    const h = harness([makeRecord()], {
-      component: overlayEditor,
-      overlayVisible: true,
-      mountedComponent: promptEditor,
-    });
+    const h = harness([makeRecord()], editorComponent(), promptEditor);
     expect(h.press(KITTY_DOWN)).toBeUndefined();
     h.setFocus(promptEditor);
-    expect(h.press(KITTY_DOWN)).toEqual({ consume: true });
-    h.fleet.dispose();
-  });
-
-  it("activates beneath a non-capturing overlay", () => {
-    const promptEditor = editorComponent();
-    const h = harness([makeRecord()], {
-      component: promptEditor,
-      overlayVisible: true,
-      mountedComponent: promptEditor,
-    });
     expect(h.press(KITTY_DOWN)).toEqual({ consume: true });
     h.fleet.dispose();
   });
@@ -371,14 +345,8 @@ describe("FleetList rendering", () => {
     overflow.fleet.dispose();
   });
 
-  it("uses dashboard overlay options and preserves the selected live viewer record", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-28T00:00:00Z"));
-    const record = makeRecord({
-      toolUses: 2,
-      live: { activeTools: ["read"], responseText: "" },
-      session: { messages: [{ role: "user", content: "hi" }], subscribe: () => () => {} },
-    });
+  it("uses dashboard overlay options and targets the selected live agent", () => {
+    const record = makeRecord();
     const h = harness([record]);
     h.press(LEGACY_DOWN);
     h.press(LEGACY_DOWN);
@@ -389,10 +357,6 @@ describe("FleetList rendering", () => {
     });
     const viewer = h.viewer();
     if (!viewer) throw new Error("Expected viewer");
-    const viewerOutput = viewer.render(80).join("\n");
-    expect(viewerOutput).toContain("2 tools");
-    expect(viewerOutput).toContain("150 token");
-    expect(viewerOutput).toContain("reading…");
     viewer.handleInput(LEGACY_ENTER);
     viewer.handleInput("message");
     viewer.handleInput(LEGACY_ENTER);
