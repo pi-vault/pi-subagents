@@ -2,22 +2,24 @@
  * fleet-list.ts — Claude Code-style "FleetView" list rendered below the editor.
  *
  * Shows `main` + each running/queued subagent as a navigable list. Pressing ↓ (or
- * ←) at an empty prompt activates the list; ↑/↓ move the selection (filled ⏺ marker),
+ * ←) at an empty prompt activates the list; ↑/↓ move the selection (▸ marker),
  * Enter opens the selected agent's live conversation overlay, Esc returns to the prompt.
  * A viewer stays open when its agent finishes; finished agents linger briefly in the list.
  *
  * Mechanics: the list is a `belowEditor` widget (render-only), and ALL key handling
  * goes through `onTerminalInput` — which fires before the focused editor and can
- * `consume` keys — gated on `getEditorText() === ""` so normal typing is untouched.
+ * `consume` keys — gated on prompt focus and `getEditorText() === ""` so dialogs
+ * and normal typing are untouched.
  */
 
 import { isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { TUI } from "@earendil-works/pi-tui";
+import type { Component, EditorComponent, TUI } from "@earendil-works/pi-tui";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../core/agent-manager.js";
 import type { AgentRecord } from "../shared/types.js";
-import { ConversationViewer, VIEWPORT_HEIGHT_PCT, type ViewerKeybindings } from "./conversation-viewer.js";
+import { ConversationViewer, type ViewerKeybindings } from "./conversation-viewer.js";
 import type { Theme } from "./agent-widget.js";
+import { DASHBOARD_OVERLAY_OPTIONS } from "./dashboard-style.js";
 
 /** Widget key for the below-editor fleet list. */
 const FLEET_KEY = "fleet";
@@ -28,8 +30,10 @@ const TICK_MS = 200;
 /** How long a finished agent lingers in the list before it drops out. */
 const FINISHED_LINGER_MS = 4000;
 
-/** Minimal handle needed from the tui object to request re-renders. */
-type TuiHandle = { requestRender(): void };
+/** Minimal TUI surface needed for focus checks and re-renders. */
+type TuiHandle = Pick<TUI, "children" | "requestRender"> & {
+  getFocusedComponent(): Component | null;
+};
 
 /** Minimal UI surface the FleetView needs from `ctx.ui` (structural subset). */
 export type FleetUICtx = {
@@ -80,9 +84,9 @@ export function formatFleetTokens(count: number): string {
  * desync pi's line-diff → flicker) even on a terminal too narrow for the stats.
  */
 function rightAlign(left: string, right: string, width: number): string {
+  const safeLeft = left.replace(/[\r\n]+/g, " ");
   const rightW = visibleWidth(right);
-  const maxLeft = Math.max(0, width - rightW - 1);
-  const leftClamped = truncateToWidth(left, maxLeft);
+  const leftClamped = truncateToWidth(safeLeft, Math.max(0, width - rightW - 1));
   const gap = Math.max(1, width - visibleWidth(leftClamped) - rightW);
   return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
 }
@@ -90,6 +94,7 @@ function rightAlign(left: string, right: string, width: number): string {
 export class FleetList {
   private ui: FleetUICtx | undefined;
   private tuiHandle: TuiHandle | undefined;
+  private promptEditor: Component | undefined;
   private inputUnsub: (() => void) | undefined;
   private widgetRegistered = false;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -121,6 +126,7 @@ export class FleetList {
     this.ui = ui;
     this.widgetRegistered = false;
     this.tuiHandle = undefined;
+    this.promptEditor = undefined;
     this.inputUnsub = ui.onTerminalInput((data) => this.handleKey(data));
   }
 
@@ -144,6 +150,7 @@ export class FleetList {
     if (this.ui && this.widgetRegistered) this.ui.setWidget(FLEET_KEY, undefined);
     this.widgetRegistered = false;
     this.tuiHandle = undefined;
+    this.promptEditor = undefined;
     this.active = false;
     // Null last so a `viewerClose()` microtask above can't re-register the widget.
     this.ui = undefined;
@@ -177,6 +184,7 @@ export class FleetList {
         FLEET_KEY,
         (tui, theme) => {
           this.tuiHandle = tui as TuiHandle;
+          this.capturePromptEditor();
           return {
             render: (w: number) => this.renderBar(w, theme),
             invalidate: () => {
@@ -242,6 +250,10 @@ export class FleetList {
     if (isKeyRelease(data)) return undefined;
     // While an overlay is open, let it own all input.
     if (this.viewerClose) return undefined;
+    if (!this.editorHasFocus()) {
+      if (this.active) this.deactivate();
+      return undefined;
+    }
 
     if (!this.active) {
       // Activate: ↓ or ← at an empty prompt moves focus into the list.
@@ -283,6 +295,33 @@ export class FleetList {
     // Any other key cancels navigation and flows to the editor.
     this.deactivate();
     return undefined;
+  }
+
+  private editorHasFocus(): boolean {
+    this.capturePromptEditor();
+    return this.tuiHandle?.getFocusedComponent() === this.promptEditor;
+  }
+
+  private capturePromptEditor(): void {
+    if (this.promptEditor) return;
+    const focused = this.tuiHandle?.getFocusedComponent();
+    if (!focused || !this.tuiHandle?.children.some((root) => this.contains(root, focused))) return;
+    const candidate = focused as Partial<EditorComponent>;
+    if (
+      typeof candidate.render === "function" &&
+      typeof candidate.invalidate === "function" &&
+      typeof candidate.handleInput === "function" &&
+      typeof candidate.getText === "function" &&
+      typeof candidate.setText === "function"
+    ) {
+      this.promptEditor = focused;
+    }
+  }
+
+  private contains(root: Component, target: Component): boolean {
+    if (root === target) return true;
+    const children = (root as Component & { children?: Component[] }).children;
+    return children?.some((child) => this.contains(child, target)) ?? false;
   }
 
   private deactivate(): void {
@@ -327,11 +366,7 @@ export class FleetList {
         },
         {
           overlay: true,
-          overlayOptions: {
-            anchor: "center",
-            width: "90%",
-            maxHeight: `${VIEWPORT_HEIGHT_PCT}%`,
-          },
+          overlayOptions: DASHBOARD_OVERLAY_OPTIONS,
         },
       )
       .then(
@@ -365,14 +400,13 @@ export class FleetList {
     // Clamp locally so a render between a roster shrink and the next update()
     // (e.g. on terminal resize) never loses the selection marker.
     const sel = Math.min(this.selectedIndex, agents.length);
-
-    const hint = this.active
-      ? "↑↓ select · enter view · esc back"
-      : "esc to interrupt · ← for agents · ↓ to manage";
-    const lines: string[] = [];
-    lines.push(truncateToWidth(`  ${theme.fg("dim", hint)}`, width));
-    lines.push("");
-    lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
+    const footer = this.active
+      ? "↑/↓ Select • Enter View • Esc Back"
+      : "↓/← Focus agents • Esc Interrupt";
+    const lines: string[] = [
+      truncateToWidth(theme.fg("accent", theme.bold("✦ Agents")), width),
+      truncateToWidth(`${this.marker(0, sel, theme)}${sel === 0 ? theme.bold("main") : "main"}`, width),
+    ];
 
     // Window the agent rows so the selected one stays visible.
     const visible = Math.min(MAX_AGENT_ROWS, agents.length);
@@ -385,12 +419,15 @@ export class FleetList {
       lines.push(this.renderAgentRow(a + 1, sel, agents[a].record, width, theme));
     }
     if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
+    lines.push(truncateToWidth(theme.fg("dim", footer), width));
 
     return lines;
   }
 
-  private bullet(rosterIndex: number, sel: number, theme: Theme): string {
-    return rosterIndex === sel ? theme.fg("accent", "⏺") : theme.fg("dim", "◯");
+  private marker(rosterIndex: number, selectedIndex: number, theme: Theme): string {
+    return this.active && rosterIndex === selectedIndex
+      ? `${theme.fg("accent", "▸")} `
+      : "  ";
   }
 
   private renderAgentRow(
@@ -400,13 +437,14 @@ export class FleetList {
     width: number,
     theme: Theme,
   ): string {
-    const left = `  ${this.bullet(rosterIndex, sel, theme)} ${theme.fg("muted", record.type)}  ${record.description}`;
+    const subject = rosterIndex === sel ? theme.bold(record.description) : record.description;
+    const left = `${this.marker(rosterIndex, sel, theme)}${theme.fg("muted", record.type)}  ${subject}`;
     const tokens =
       record.lifetimeUsage.inputTokens +
       record.lifetimeUsage.outputTokens +
       record.lifetimeUsage.cacheWriteTokens;
     const elapsedMs = (record.completedAt ?? Date.now()) - record.startedAt; // freezes once finished
-    const right = theme.fg("dim", `${formatFleetElapsed(elapsedMs)} · ${formatFleetTokens(tokens)}`);
+    const right = theme.fg("dim", `${formatFleetElapsed(elapsedMs)} • ${formatFleetTokens(tokens)}`);
     return rightAlign(left, right, width);
   }
 }
