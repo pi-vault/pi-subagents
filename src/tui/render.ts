@@ -148,6 +148,9 @@ export function buildSubagentResultText(
   lines.push(theme.fg("muted", `task: ${details.task || "-"}`));
   lines.push(theme.fg("muted", `cwd: ${formatPath(details.cwd)}`));
   lines.push(theme.fg("muted", `source: ${formatPath(details.sourcePath)}`));
+  if (details.model) {
+    lines.push(theme.fg("muted", `model: ${details.model}`));
+  }
   lines.push(
     theme.fg(
       "muted",
@@ -291,6 +294,7 @@ export function buildWatchdogWarningText(
   ]);
   if (metadata) lines.push(theme.fg("dim", metadata));
   if (expanded) {
+    lines.push(theme.fg("dim", `  ⎿  ${details.summary}`));
     lines.push(theme.fg("dim", `  ${parts.evidenceLine}`));
     lines.push(theme.fg("dim", `  ${parts.actionLine}`));
     lines.push(theme.fg("dim", `  ${parts.categoryLine}`));

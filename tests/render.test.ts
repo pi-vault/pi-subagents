@@ -177,6 +177,7 @@ describe("subagent render helpers", () => {
     expect(text).toContain("task: Inspect repo structure and summarize findings");
     expect(text).toContain("cwd: /repo");
     expect(text).toContain("source: /repo/agents/scout.md");
+    expect(text).toContain("model: openai/gpt-5");
     expect(text).toContain("turns: 30");
     expect(text).toContain("stop reason: error");
     expect(text).toContain("exit code: 2");
@@ -303,6 +304,7 @@ describe("watchdog and intercom render helpers", () => {
     );
 
     expect(text).toContain("⚠ Watchdog Concern auto-follow attempt 2");
+    expect(text).toContain("⎿  Missing test coverage");
     expect(text).toContain("Evidence: src/bar.ts");
     expect(text).toContain("Recommended action: Add unit test");
     expect(text).toContain("Category: test-gap");
