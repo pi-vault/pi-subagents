@@ -1,15 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { type EditorComponent, visibleWidth } from "@earendil-works/pi-tui";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FleetList, formatFleetElapsed, formatFleetTokens } from "../src/tui/fleet-list.js";
 import type { AgentManager } from "../src/core/agent-manager.js";
 import type { AgentRecord } from "../src/shared/types.js";
 import type { Theme } from "../src/tui/agent-widget.js";
+import { DASHBOARD_OVERLAY_OPTIONS } from "../src/tui/dashboard-style.js";
 
-const DOWN = "\x1b[B";
-const UP_ARROW = "\x1b[A";
-const ESC = "\x1b";
-const ENTER = "\r";
-/** Kitty key-release event for 'A' (codepoint 65, event type 3). */
-const KEY_RELEASE = "\x1b[65:3u";
+const LEGACY_DOWN = "\x1b[B";
+const LEGACY_UP = "\x1b[A";
+const LEGACY_LEFT = "\x1b[D";
+const LEGACY_ENTER = "\r";
+const LEGACY_ESCAPE = "\x1b";
+const KITTY_DOWN = "\x1b[1;1B";
+const KITTY_UP = "\x1b[1;1A";
+const KITTY_LEFT = "\x1b[1;1D";
+const CSI_U_ENTER = "\x1b[13u";
+const CSI_U_ESCAPE = "\x1b[27u";
+const KITTY_DOWN_RELEASE = "\x1b[1;1:3B";
+
+type CustomOptions = { overlay?: boolean; overlayOptions?: unknown };
 
 const makeRecord = (overrides: Partial<AgentRecord> = {}): AgentRecord => ({
   id: "a1",
@@ -21,22 +30,8 @@ const makeRecord = (overrides: Partial<AgentRecord> = {}): AgentRecord => ({
   live: { activeTools: [], responseText: "" },
   startedAt: Date.now() - 5000,
   lifetimeUsage: { inputTokens: 100, outputTokens: 50, cacheWriteTokens: 0 },
-  session: {},
+  session: { messages: [], subscribe: () => () => {} },
   ...overrides,
-});
-
-const makeMockManager = (records: AgentRecord[] = []): AgentManager => ({
-  listAgents: () => records,
-  abort: vi.fn(() => true),
-  steer: vi.fn(() => true),
-} as unknown as AgentManager);
-
-const makeUICtx = (editorText = "") => ({
-  setWidget: vi.fn(),
-  onTerminalInput: vi.fn(() => () => {}),
-  getEditorText: () => editorText,
-  notify: vi.fn(),
-  custom: vi.fn(),
 });
 
 const makeTheme = (): Theme => ({
@@ -44,231 +39,252 @@ const makeTheme = (): Theme => ({
   bold: (text: string) => text,
 });
 
-// ---- formatFleetElapsed ----
+const editorComponent = (): EditorComponent => ({
+  render: () => [],
+  invalidate: () => {},
+  handleInput: () => {},
+  getText: () => "",
+  setText: () => {},
+});
+
+const dialogComponent = () => ({
+  render: () => [],
+  invalidate: () => {},
+  handleInput: () => {},
+});
+
+function harness(records: AgentRecord[]) {
+  let editorText = "";
+  let focused: unknown = editorComponent();
+  let handler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
+  let widgetFactory: ((tui: unknown, theme: Theme) => { render(width: number): string[] }) | undefined;
+  let overlayOpen = false;
+  let overlayDone: (() => void) | undefined;
+  let customOptions: CustomOptions | undefined;
+  const unsubscribe = vi.fn();
+  const manager = {
+    listAgents: vi.fn(() => records),
+    abort: vi.fn(() => true),
+    steer: vi.fn(() => true),
+  } as unknown as AgentManager;
+  const tui = {
+    terminal: { rows: 40, columns: 80 },
+    requestRender: vi.fn(),
+    getFocusedComponent: () => focused,
+  };
+  const ui = {
+    setWidget: vi.fn((key: string, content: unknown) => {
+      if (key === "fleet" && typeof content === "function") {
+        widgetFactory = content as (tui: unknown, theme: Theme) => { render(width: number): string[] };
+      }
+    }),
+    onTerminalInput: vi.fn((nextHandler: typeof handler) => {
+      handler = nextHandler;
+      return unsubscribe;
+    }),
+    getEditorText: () => editorText,
+    notify: vi.fn(),
+    custom: vi.fn(<T>(factory: (tui: unknown, theme: Theme, keybindings: unknown, done: (result: T) => void) => unknown, options?: CustomOptions) => {
+      customOptions = options;
+      overlayOpen = true;
+      return new Promise<T>((resolve) => {
+        const done = (result: T) => {
+          overlayOpen = false;
+          resolve(result);
+        };
+        factory(tui, makeTheme(), {}, done);
+        overlayDone = () => done(undefined as T);
+      });
+    }),
+  };
+  const fleet = new FleetList(manager);
+  fleet.setUICtx(ui as never);
+  fleet.update();
+  if (widgetFactory) widgetFactory(tui, makeTheme());
+
+  return {
+    fleet,
+    manager,
+    records,
+    ui,
+    unsubscribe,
+    press: (data: string) => handler?.(data),
+    render: (width: number) => widgetFactory?.(tui, makeTheme()).render(width) ?? [],
+    setEditorText: (text: string) => { editorText = text; },
+    setFocus: (component: unknown) => { focused = component; },
+    closeOverlay: () => overlayDone?.(),
+    overlayOpened: () => overlayOpen,
+    customOptions: () => customOptions,
+  };
+}
+
+afterEach(() => vi.useRealTimers());
+
+// ---- format helpers ----
 
 describe("formatFleetElapsed", () => {
-  it("rounds 5500ms to 6s", () => {
-    expect(formatFleetElapsed(5500)).toBe("6s");
-  });
-
-  it("formats 0ms as 0s", () => {
-    expect(formatFleetElapsed(0)).toBe("0s");
-  });
-
-  it("formats 1000ms as 1s", () => {
-    expect(formatFleetElapsed(1000)).toBe("1s");
-  });
+  it("rounds 5500ms to 6s", () => expect(formatFleetElapsed(5500)).toBe("6s"));
+  it("formats 0ms as 0s", () => expect(formatFleetElapsed(0)).toBe("0s"));
+  it("formats 1000ms as 1s", () => expect(formatFleetElapsed(1000)).toBe("1s"));
 });
-
-// ---- formatFleetTokens ----
 
 describe("formatFleetTokens", () => {
-  it("formats 0 as '↓ 0 tokens'", () => {
-    expect(formatFleetTokens(0)).toBe("↓ 0 tokens");
+  it("formats 0 as '↓ 0 tokens'", () => expect(formatFleetTokens(0)).toBe("↓ 0 tokens"));
+  it("formats 500 as '↓ 500 tokens'", () => expect(formatFleetTokens(500)).toBe("↓ 500 tokens"));
+  it("formats 13100 as '↓ 13.1k tokens'", () => expect(formatFleetTokens(13100)).toBe("↓ 13.1k tokens"));
+  it("formats 1_200_000 as '↓ 1.2M tokens'", () => expect(formatFleetTokens(1_200_000)).toBe("↓ 1.2M tokens"));
+});
+
+// ---- FleetList input boundary ----
+
+describe("FleetList terminal input", () => {
+  it.each([LEGACY_DOWN, KITTY_DOWN, LEGACY_LEFT, KITTY_LEFT])("activates from an empty focused editor for %j", (key) => {
+    const h = harness([makeRecord()]);
+    expect(h.press(key)).toEqual({ consume: true });
+    h.fleet.dispose();
   });
 
-  it("formats 500 as '↓ 500 tokens'", () => {
-    expect(formatFleetTokens(500)).toBe("↓ 500 tokens");
+  it.each([LEGACY_DOWN, KITTY_DOWN])("navigates with legacy and Kitty arrows after %j activation", (activate) => {
+    const h = harness([makeRecord()]);
+    expect(h.press(activate)).toEqual({ consume: true });
+    expect(h.press(KITTY_DOWN)).toEqual({ consume: true });
+    expect(h.press(LEGACY_UP)).toEqual({ consume: true });
+    expect(h.press(KITTY_UP)).toEqual({ consume: true });
+    expect(h.press(LEGACY_UP)).toBeUndefined();
+    h.fleet.dispose();
   });
 
-  it("formats 13100 as '↓ 13.1k tokens'", () => {
-    expect(formatFleetTokens(13100)).toBe("↓ 13.1k tokens");
+  it.each([LEGACY_ESCAPE, CSI_U_ESCAPE])("deactivates for Escape encoding %j", (escape) => {
+    const h = harness([makeRecord()]);
+    h.press(LEGACY_DOWN);
+    expect(h.press(escape)).toEqual({ consume: true });
+    expect(h.press(LEGACY_UP)).toBeUndefined();
+    h.fleet.dispose();
   });
 
-  it("formats 1_200_000 as '↓ 1.2M tokens'", () => {
-    expect(formatFleetTokens(1_200_000)).toBe("↓ 1.2M tokens");
+  it.each([LEGACY_ENTER, CSI_U_ENTER])("Enter encoding %j deactivates on main without opening an overlay", (enter) => {
+    const h = harness([makeRecord()]);
+    h.press(LEGACY_DOWN);
+    expect(h.press(enter)).toEqual({ consume: true });
+    expect(h.overlayOpened()).toBe(false);
+    expect(h.press(LEGACY_UP)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it.each([LEGACY_ENTER, CSI_U_ENTER])("Enter encoding %j opens the selected agent", (enter) => {
+    const h = harness([makeRecord()]);
+    h.press(LEGACY_DOWN);
+    h.press(KITTY_DOWN);
+    expect(h.press(enter)).toEqual({ consume: true });
+    expect(h.overlayOpened()).toBe(true);
+    h.closeOverlay();
+    h.fleet.dispose();
+  });
+
+  it("passes a non-navigation key through after deactivating", () => {
+    const h = harness([makeRecord()]);
+    h.press(LEGACY_DOWN);
+    expect(h.press("x")).toBeUndefined();
+    expect(h.press(LEGACY_UP)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it("does not activate when the editor has text", () => {
+    const h = harness([makeRecord()]);
+    h.setEditorText("some text");
+    expect(h.press(LEGACY_DOWN)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it("does not steal activation keys from a focused dialog", () => {
+    const h = harness([makeRecord()]);
+    h.setFocus(dialogComponent());
+    expect(h.press(KITTY_DOWN)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it("deactivates and passes through when focus leaves the editor", () => {
+    const h = harness([makeRecord()]);
+    expect(h.press(LEGACY_DOWN)).toEqual({ consume: true });
+    h.setFocus(dialogComponent());
+    expect(h.press(LEGACY_DOWN)).toBeUndefined();
+    h.setFocus(editorComponent());
+    expect(h.press(LEGACY_UP)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it("does not consume input while focused component is unknown", () => {
+    const h = harness([makeRecord()]);
+    h.setFocus(null);
+    expect(h.press(LEGACY_DOWN)).toBeUndefined();
+    h.fleet.dispose();
+  });
+
+  it("ignores the release half of a Down key", () => {
+    const h = harness([makeRecord(), makeRecord({ id: "a2" })]);
+    h.press(KITTY_DOWN);
+    expect(h.press(KITTY_DOWN_RELEASE)).toBeUndefined();
+    h.press(CSI_U_ENTER);
+    expect(h.overlayOpened()).toBe(false);
+    h.fleet.dispose();
   });
 });
 
-// ---- FleetList key handling ----
+// ---- FleetList lifecycle and rendering ----
 
-describe("FleetList handleKey", () => {
-  it("returns undefined when no agents", () => {
-    const fleet = new FleetList(makeMockManager([]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    expect(fleet.handleKey(DOWN)).toBeUndefined();
-    fleet.dispose();
+describe("FleetList lifecycle", () => {
+  it("clears its interval when disabled or empty and restarts it when re-enabled", () => {
+    vi.useFakeTimers();
+    const h = harness([makeRecord()]);
+    expect(vi.getTimerCount()).toBe(1);
+    h.fleet.setEnabled(false);
+    expect(vi.getTimerCount()).toBe(0);
+    h.fleet.setEnabled(true);
+    expect(vi.getTimerCount()).toBe(1);
+    h.records.length = 0;
+    h.fleet.update();
+    expect(vi.getTimerCount()).toBe(0);
+    h.fleet.dispose();
   });
 
-  it("returns undefined when editor has text (even with agents)", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx("some text");
-    fleet.setUICtx(ui);
-    expect(fleet.handleKey(DOWN)).toBeUndefined();
-    fleet.dispose();
-  });
-
-  it("down arrow at empty editor with agents activates list and returns {consume:true}", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    const result = fleet.handleKey(DOWN);
-    expect(result).toEqual({ consume: true });
-    fleet.dispose();
-  });
-
-  it("up arrow when inactive returns undefined", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    expect(fleet.handleKey(UP_ARROW)).toBeUndefined();
-    fleet.dispose();
-  });
-
-  it("non-activator key when inactive returns undefined", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    expect(fleet.handleKey("x")).toBeUndefined();
-    fleet.dispose();
-  });
-
-  it("down arrow when active navigates and returns {consume:true}", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    fleet.handleKey(DOWN); // activate (selectedIndex=0)
-    const result = fleet.handleKey(DOWN); // navigate down
-    expect(result).toEqual({ consume: true });
-    fleet.dispose();
-  });
-
-  it("escape when active deactivates and returns {consume:true}", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    fleet.handleKey(DOWN); // activate
-    const result = fleet.handleKey(ESC);
-    expect(result).toEqual({ consume: true });
-    // now inactive: up arrow should be undefined
-    expect(fleet.handleKey(UP_ARROW)).toBeUndefined();
-    fleet.dispose();
-  });
-
-  it("key-release event returns undefined (filtered out)", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    fleet.handleKey(DOWN); // activate
-    expect(fleet.handleKey(KEY_RELEASE)).toBeUndefined();
-    fleet.dispose();
-  });
-
-  it("update() calls without throwing after agent finishes", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    expect(() => fleet.update()).not.toThrow();
-    fleet.dispose();
-  });
-
-  it("setEnabled(false) deactivates the list", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    fleet.handleKey(DOWN); // activate
-    fleet.setEnabled(false);
-    // disabled: handleKey returns undefined for any key
-    expect(fleet.handleKey(DOWN)).toBeUndefined();
-    fleet.dispose();
-  });
-
-  it("dispose() runs without throwing", () => {
-    const fleet = new FleetList(makeMockManager([]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    expect(() => fleet.dispose()).not.toThrow();
+  it("dispose unsubscribes, closes an open viewer, clears its widget, and timer", () => {
+    vi.useFakeTimers();
+    const h = harness([makeRecord()]);
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_ENTER);
+    expect(h.overlayOpened()).toBe(true);
+    h.fleet.dispose();
+    expect(h.unsubscribe).toHaveBeenCalledOnce();
+    expect(h.overlayOpened()).toBe(false);
+    expect(h.ui.setWidget).toHaveBeenCalledWith("fleet", undefined);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
-
-// ---- FleetList rendering ----
 
 describe("FleetList rendering", () => {
-  it("update() with a running agent calls setWidget with key 'fleet'", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    fleet.update();
-    expect(ui.setWidget).toHaveBeenCalledWith(
-      "fleet",
-      expect.any(Function),
-      { placement: "belowEditor" },
-    );
-    fleet.dispose();
+  it("registers the fleet widget and renders the main and agent rows", () => {
+    const h = harness([makeRecord()]);
+    expect(h.ui.setWidget).toHaveBeenCalledWith("fleet", expect.any(Function), { placement: "belowEditor" });
+    const lines = h.render(80);
+    expect(lines.some((line) => line.includes("main"))).toBe(true);
+    expect(lines.some((line) => line.includes("coder"))).toBe(true);
+    expect(lines.some((line) => line.includes("↓ 150 tokens"))).toBe(true);
+    expect(lines.every((line) => visibleWidth(line) <= 80)).toBe(true);
+    h.fleet.dispose();
   });
 
-  it("rendered output includes 'main' and agent type row", () => {
-    const record = makeRecord();
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    fleet.setUICtx(ui);
-    fleet.update();
-
-    // Extract the widget factory from the setWidget call
-    const calls = ui.setWidget.mock.calls as Array<
-      [string, ((tui: unknown, theme: Theme) => { render(width: number): string[] }) | undefined, unknown]
-    >;
-    const factory = calls.find(([key]) => key === "fleet")?.[1];
-    expect(factory).toBeDefined();
-
-    const theme = makeTheme();
-    if (!factory) throw new Error("factory should be defined");
-    const widget = factory({ requestRender: vi.fn() }, theme);
-    const lines = widget.render(80);
-
-    expect(lines.some((l) => l.includes("main"))).toBe(true);
-    expect(lines.some((l) => l.includes("coder"))).toBe(true);
-    expect(lines.some((l) => l.includes("↓ 150 tokens"))).toBe(true);
-    fleet.dispose();
-  });
-
-  it("passes the live record to the conversation viewer", () => {
-    const session = makeRecord().session as NonNullable<AgentRecord["session"]>;
-    Object.assign(session, {
-      messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
-      subscribe: vi.fn(() => () => {}),
+  it("keeps FleetList's existing viewer overlay composition", () => {
+    const h = harness([makeRecord()]);
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_DOWN);
+    h.press(LEGACY_ENTER);
+    expect(h.customOptions()).toEqual({
+      overlay: true,
+      overlayOptions: { anchor: "center", width: "90%", maxHeight: "70%" },
     });
-    const record = makeRecord({
-      session,
-      toolUses: 2,
-      live: { activeTools: ["read", "read"], responseText: "" },
-    });
-    const fleet = new FleetList(makeMockManager([record]));
-    const ui = makeUICtx();
-    ui.custom.mockReturnValue(Promise.resolve(undefined));
-    fleet.setUICtx(ui);
-    fleet.handleKey(DOWN);
-    fleet.handleKey(DOWN);
-    fleet.handleKey(ENTER);
-
-    const factory = ui.custom.mock.calls[0]?.[0] as unknown as (
-      tui: unknown,
-      theme: Theme,
-      keybindings: unknown,
-      done: (result: undefined) => void,
-    ) => { render(width: number): string[] };
-    const viewer = factory(
-      { terminal: { rows: 40, columns: 80 }, requestRender: vi.fn() },
-      makeTheme(),
-      undefined,
-      vi.fn(),
-    );
-    const output = viewer.render(80).join("\n");
-
-    expect(output).toContain("2 tools");
-    expect(output).toContain("150 token");
-    expect(output).toContain("reading 2 files…");
-    fleet.dispose();
+    expect(DASHBOARD_OVERLAY_OPTIONS).toBeDefined();
+    h.closeOverlay();
+    h.fleet.dispose();
   });
 });

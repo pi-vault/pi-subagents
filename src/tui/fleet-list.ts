@@ -12,7 +12,7 @@
  */
 
 import { isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { TUI } from "@earendil-works/pi-tui";
+import type { Component, EditorComponent, TUI } from "@earendil-works/pi-tui";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../core/agent-manager.js";
 import type { AgentRecord } from "../shared/types.js";
@@ -28,8 +28,10 @@ const TICK_MS = 200;
 /** How long a finished agent lingers in the list before it drops out. */
 const FINISHED_LINGER_MS = 4000;
 
-/** Minimal handle needed from the tui object to request re-renders. */
-type TuiHandle = { requestRender(): void };
+/** Minimal TUI surface needed for focus checks and re-renders. */
+type TuiHandle = Pick<TUI, "requestRender"> & {
+  getFocusedComponent(): Component | null;
+};
 
 /** Minimal UI surface the FleetView needs from `ctx.ui` (structural subset). */
 export type FleetUICtx = {
@@ -242,6 +244,10 @@ export class FleetList {
     if (isKeyRelease(data)) return undefined;
     // While an overlay is open, let it own all input.
     if (this.viewerClose) return undefined;
+    if (!this.editorHasFocus()) {
+      if (this.active) this.deactivate();
+      return undefined;
+    }
 
     if (!this.active) {
       // Activate: ↓ or ← at an empty prompt moves focus into the list.
@@ -283,6 +289,19 @@ export class FleetList {
     // Any other key cancels navigation and flows to the editor.
     this.deactivate();
     return undefined;
+  }
+
+  private editorHasFocus(): boolean {
+    const focused = this.tuiHandle?.getFocusedComponent();
+    if (!focused) return false;
+    const candidate = focused as Partial<EditorComponent>;
+    return (
+      typeof candidate.render === "function" &&
+      typeof candidate.invalidate === "function" &&
+      typeof candidate.handleInput === "function" &&
+      typeof candidate.getText === "function" &&
+      typeof candidate.setText === "function"
+    );
   }
 
   private deactivate(): void {
