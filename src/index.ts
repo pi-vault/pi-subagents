@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
-import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { AgentManager } from "./core/agent-manager.js";
 import { getAgentConversation } from "./core/agent-runner.js";
@@ -39,14 +39,18 @@ import {
   parseWatchdogConfig,
   type WatchdogWarning,
 } from "./core/watchdog.js";
-import { formatWatchdogWarningText } from "./core/watchdog-render.js";
 import type { RuntimeDeps } from "./shared/runtime-deps.js";
 import type { NotificationDetails } from "./shared/types.js";
 import { AgentWidget, type UICtx } from "./tui/agent-widget.js";
 import { showAgentsMenu } from "./tui/agents-menu.js";
 import { ChainWidget } from "./tui/chain-widget.js";
 import { FleetList, type FleetUICtx } from "./tui/fleet-list.js";
-import { buildNotificationText, renderSubagentMessage } from "./tui/render.js";
+import {
+  buildIntercomRequestText,
+  buildNotificationText,
+  buildWatchdogWarningText,
+  renderSubagentMessage,
+} from "./tui/render.js";
 
 const NUDGE_HOLD_MS = 200;
 
@@ -400,23 +404,15 @@ export function registerSubagentsExtension(
     const fallback = typeof (msg as { content?: string }).content === "string"
       ? (msg as { content: string }).content : "";
     if (!d?.summary) return new Text(fallback, 0, 0);
-    const t = theme as {
-      fg: (color: string, text: string) => string;
-      bold: (text: string) => string;
-    };
-    const parts = formatWatchdogWarningText(d as Parameters<typeof formatWatchdogWarningText>[0]);
-    const header = t.fg(parts.color, t.bold(parts.header));
-    const container = new Container();
-    container.addChild(new Text(header, 0, 0));
-    if (opts.expanded) {
-      container.addChild(new Spacer(1));
-      container.addChild(new Text(t.fg("dim", parts.evidenceLine), 0, 0));
-      container.addChild(new Text(t.fg("dim", parts.actionLine), 0, 0));
-      container.addChild(new Text(t.fg("dim", parts.categoryLine), 0, 0));
-    } else if (d.evidence) {
-      container.addChild(new Text(t.fg("dim", `  \u23BF  ${parts.evidenceLine}`), 0, 0));
-    }
-    return container;
+    return new Text(
+      buildWatchdogWarningText(
+        d as Parameters<typeof buildWatchdogWarningText>[0],
+        opts.expanded ?? false,
+        theme,
+      ),
+      0,
+      0,
+    );
   });
 
   registerSubagentTool(pi, deps);
@@ -584,15 +580,7 @@ export function registerSubagentsExtension(
     pi.registerMessageRenderer("intercom-request", (msg, _opts, theme) => {
       const d = (msg as { details?: IntercomRequest }).details;
       if (!d) return new Text("", 0, 0);
-      const t = theme as {
-        fg: (color: string, text: string) => string;
-        bold: (text: string) => string;
-      };
-      return new Text(
-        `${t.bold(t.fg("cyan", `[${d.agentName}]`))} ${d.reason}: ${d.message}`,
-        0,
-        0,
-      );
+      return new Text(buildIntercomRequestText(d, theme), 0, 0);
     });
   }
 
