@@ -47,7 +47,7 @@ const ansiTheme = (): Theme => {
   };
 };
 
-const plain = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
+const plain = (text: string) => text.split("\x1b[").map((part, index) => index ? part.replace(/^[0-9;]*m/, "") : part).join("");
 
 const editorComponent = (): EditorComponent => ({
   render: () => [],
@@ -166,10 +166,10 @@ describe("FleetList terminal input", () => {
     h.fleet.dispose();
   });
 
-  it.each([LEGACY_ESCAPE, CSI_U_ESCAPE])("deactivates for Escape encoding %j", (escape) => {
+  it.each([LEGACY_ESCAPE, CSI_U_ESCAPE])("deactivates for Escape encoding %j", (escapeSequence) => {
     const h = harness([makeRecord()]);
     h.press(LEGACY_DOWN);
-    expect(h.press(escape)).toEqual({ consume: true });
+    expect(h.press(escapeSequence)).toEqual({ consume: true });
     expect(h.press(LEGACY_UP)).toBeUndefined();
     h.fleet.dispose();
   });
@@ -281,17 +281,17 @@ describe("FleetList rendering", () => {
     const h = harness([makeRecord()]);
     const inactive = h.render(80);
     expect(plain(inactive[0])).toBe("✦ Agents");
-    expect(plain(inactive.at(-1)!)).toBe("↓/← Focus agents • Esc Interrupt");
+    expect(plain(inactive.at(-1) ?? "")).toBe("↓/← Focus agents • Esc Interrupt");
     expect(plain(inactive.join("\n"))).not.toContain("▸");
 
     h.press(LEGACY_DOWN);
     h.press(LEGACY_DOWN);
     const active = h.render(80);
     expect(plain(active[0])).toBe("✦ Agents");
-    expect(plain(active.find((line) => line.includes("coder"))!)).toMatch(
-      /^▸ coder  Fix bug\s+5s • ↓ 150 tokens$/,
+    expect(plain(active.find((line) => line.includes("coder")) ?? "")).toMatch(
+      /^▸ coder {2}Fix bug\s+5s • ↓ 150 tokens$/,
     );
-    expect(plain(active.at(-1)!)).toBe("↑/↓ Select • Enter View • Esc Back");
+    expect(plain(active.at(-1) ?? "")).toBe("↑/↓ Select • Enter View • Esc Back");
     h.fleet.dispose();
   });
 
@@ -301,15 +301,15 @@ describe("FleetList rendering", () => {
     const h = harness([makeRecord(), makeRecord({ id: "a2", type: "reviewer" })]);
     const inactive = h.render(80, ansiTheme());
     expect(inactive[0]).toContain("\x1b[35m\x1b[1m✦ Agents");
-    expect(inactive.at(-1)).toMatch(/^\x1b\[2m/);
+    expect(inactive.at(-1)?.startsWith("\x1b[2m")).toBe(true);
 
     h.press(LEGACY_DOWN);
     h.press(LEGACY_DOWN);
     const active = h.render(80, ansiTheme());
-    const selected = active.find((line) => plain(line).includes("coder"))!;
-    expect(selected).toMatch(/^\x1b\[35m▸/);
+    const selected = active.find((line) => plain(line).includes("coder")) ?? "";
+    expect(selected.startsWith("\x1b[35m▸")).toBe(true);
     expect(selected).toContain("\x1b[2m5s • ↓ 150 tokens");
-    expect(active.at(-1)).toMatch(/^\x1b\[2m/);
+    expect(active.at(-1)?.startsWith("\x1b[2m")).toBe(true);
     expect(plain(active.join("\n"))).not.toMatch(/[┏━┃┗╭─│╰]/);
     h.fleet.dispose();
 
@@ -336,7 +336,8 @@ describe("FleetList rendering", () => {
       overlay: true,
       overlayOptions: DASHBOARD_OVERLAY_OPTIONS,
     });
-    const viewer = h.viewer()!;
+    const viewer = h.viewer();
+    if (!viewer) throw new Error("Expected viewer");
     const viewerOutput = viewer.render(80).join("\n");
     expect(viewerOutput).toContain("2 tools");
     expect(viewerOutput).toContain("150 token");
@@ -420,7 +421,7 @@ describe("FleetList rendering", () => {
       expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
       expect(lines.every((line) => !/[\r\n]/.test(line))).toBe(true);
     }
-    expect(plain(h.render(20, ansiTheme()).find((line) => plain(line).includes("5s"))!)).toContain(
+    expect(plain(h.render(20, ansiTheme()).find((line) => plain(line).includes("5s")) ?? "")).toContain(
       "5s • ↓ 150 tokens",
     );
     h.fleet.dispose();
