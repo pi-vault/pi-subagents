@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Handle legacy and CSI-u/Kitty keyboard input in the foreground chain preview so `/chain` and `/run-chain` can be confirmed, edited, backgrounded, or cancelled in modern terminals.
+
+### Changed
+
+- Align pi-subagents-owned overlays, widgets, fleet navigation, conversation viewing, and inline status rendering with a compact dashboard hierarchy that follows Pi's active theme.
+- Raise the tested Pi development baseline to `0.84.3`; Pi `0.84.3+` and Node.js `24.15.0+` are required.
+
 ## [0.4.0] - 2026-07-17
 
 ### Added

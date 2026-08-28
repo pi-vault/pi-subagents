@@ -138,6 +138,8 @@ Bundled chains ship in the `chains/` directory. Run one with `/run-chain`:
 
 Project chains go in `.pi/chains/`; user chains in your global agent dir. Chain files use `.chain.md` or `.chain.json` format.
 
+Foreground `/chain` and `/run-chain` commands open a preview in TUI sessions. Use `↑`/`↓` or `j`/`k` to select a step, `e` to edit its task, `m` to edit its model, `Enter` to run, `b` to run in the background, and `q`/`Esc` to cancel. Pass `--yes` to skip the preview or `--bg` to start in the background immediately.
+
 ### Chain Status and Cancellation
 
 ```text
@@ -248,17 +250,20 @@ Make the smallest safe change that completes the task, then verify.
 
 **Back** returns to the parent menu.
 
+The dashboard menu uses `↑`/`↓` to navigate, `Enter` to select, and `Esc` to go back. Agent creation and markdown editing continue to use Pi's native input and editor dialogs.
+
 ---
 
-## UI: Widget, Fleet, And Conversation Viewer
+## UI: Widgets, Fleet, And Conversation Viewer
 
-Three optional TUI surfaces sync with running agents:
+Four TUI surfaces sync with running agents and chains:
 
-- **AgentWidget** — activity sidebar above the editor; respects `widgetMode`.
-- **FleetList** — below-editor navigator listing every in-flight agent; toggle with `fleetView`.
-- **ConversationViewer** — overlay (Ctrl/Cmd+O) for reading the full transcript of any agent.
+- **AgentWidget** — above-editor activity for agents; respects `widgetMode`.
+- **ChainWidget** — above-editor progress for active background chains.
+- **FleetList** — below-editor navigator for in-flight agents; toggle with `fleetView`. At an empty prompt, press `↓` or `←` to enter the list, use `↑`/`↓` to select, `Enter` to open a conversation, and `Esc` to return to the prompt.
+- **ConversationViewer** — live transcript overlay. Use `↑`/`↓`, `j`/`k`, or page keys to scroll; `Enter` to steer a running agent; `x` twice to stop it; and `q`/`Esc` to close.
 
-All three show live tool activity, turn count, and steered status.
+The surfaces follow Pi's active theme. Narrow terminals show a bounded fallback and recover when resized.
 
 ---
 
