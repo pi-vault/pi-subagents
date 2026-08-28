@@ -293,13 +293,11 @@ export function buildWatchdogWarningText(
     details.agentId ? `agent ${details.agentId}` : "",
   ]);
   if (metadata) lines.push(theme.fg("dim", metadata));
+  lines.push(theme.fg("dim", `  ⎿  ${details.summary}`));
   if (expanded) {
-    lines.push(theme.fg("dim", `  ⎿  ${details.summary}`));
     lines.push(theme.fg("dim", `  ${parts.evidenceLine}`));
     lines.push(theme.fg("dim", `  ${parts.actionLine}`));
     lines.push(theme.fg("dim", `  ${parts.categoryLine}`));
-  } else {
-    lines.push(theme.fg("dim", `  ⎿  ${details.summary}`));
   }
   return lines.join("\n");
 }

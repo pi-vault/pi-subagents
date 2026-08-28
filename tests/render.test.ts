@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
-import * as render from "../src/tui/render.js";
 import {
+  buildIntercomRequestText,
   buildSubagentCallText,
   buildSubagentResultText,
+  buildWatchdogWarningText,
   renderSubagentMessage,
   toSubagentCommandMessage,
 } from "../src/tui/render.js";
@@ -252,23 +253,9 @@ describe("subagent render helpers", () => {
   });
 });
 
-type InlineSurfaceBuilders = typeof render & {
-  buildWatchdogWarningText: (
-    details: Record<string, unknown>,
-    expanded: boolean,
-    renderTheme: typeof theme,
-  ) => string;
-  buildIntercomRequestText: (
-    details: Record<string, unknown>,
-    renderTheme: typeof theme,
-  ) => string;
-};
-
-const inlineSurfaceBuilders = render as InlineSurfaceBuilders;
-
 describe("watchdog and intercom render helpers", () => {
   test("renders a collapsed blocker as header, metadata, and summary", () => {
-    const text = inlineSurfaceBuilders.buildWatchdogWarningText(
+    const text = buildWatchdogWarningText(
       {
         severity: "blocker",
         summary: "Null pointer dereference",
@@ -290,7 +277,7 @@ describe("watchdog and intercom render helpers", () => {
   });
 
   test("preserves expanded watchdog evidence and action", () => {
-    const text = inlineSurfaceBuilders.buildWatchdogWarningText(
+    const text = buildWatchdogWarningText(
       {
         severity: "concern",
         summary: "Missing test coverage",
@@ -315,7 +302,7 @@ describe("watchdog and intercom render helpers", () => {
     ["failed", "failed review"],
     ["stalemate", "stalemate"],
   ] as const)("preserves the %s watchdog state label", (state, label) => {
-    const firstLine = inlineSurfaceBuilders.buildWatchdogWarningText(
+    const firstLine = buildWatchdogWarningText(
       {
         severity: "blocker",
         summary: "Review stopped",
@@ -332,7 +319,7 @@ describe("watchdog and intercom render helpers", () => {
   });
 
   test("omits the watchdog status fragment when no state applies", () => {
-    const firstLine = inlineSurfaceBuilders.buildWatchdogWarningText(
+    const firstLine = buildWatchdogWarningText(
       {
         severity: "blocker",
         summary: "Broken",
@@ -351,7 +338,7 @@ describe("watchdog and intercom render helpers", () => {
 
   test("uses semantic roles for watchdog severity and intercom requests", () => {
     expect(
-      inlineSurfaceBuilders.buildWatchdogWarningText(
+      buildWatchdogWarningText(
         {
           severity: "blocker",
           summary: "Broken",
@@ -364,7 +351,7 @@ describe("watchdog and intercom render helpers", () => {
       ),
     ).toContain("<error>⚠</error>");
     expect(
-      inlineSurfaceBuilders.buildWatchdogWarningText(
+      buildWatchdogWarningText(
         {
           severity: "concern",
           summary: "Missing test",
@@ -377,7 +364,7 @@ describe("watchdog and intercom render helpers", () => {
       ),
     ).toContain("<warning>⚠</warning>");
     expect(
-      inlineSurfaceBuilders.buildIntercomRequestText(
+      buildIntercomRequestText(
         {
           id: "request-1",
           agentId: "agent-1",
@@ -393,7 +380,7 @@ describe("watchdog and intercom render helpers", () => {
   });
 
   test("renders intercom reason, request metadata, and message", () => {
-    const text = inlineSurfaceBuilders.buildIntercomRequestText(
+    const text = buildIntercomRequestText(
       {
         id: "request-1",
         agentId: "agent-1",
@@ -414,7 +401,7 @@ describe("watchdog and intercom render helpers", () => {
   });
 
   test("labels non-blocking intercom updates without a reply promise", () => {
-    const text = inlineSurfaceBuilders.buildIntercomRequestText(
+    const text = buildIntercomRequestText(
       {
         id: "request-2",
         agentId: "agent-1",
