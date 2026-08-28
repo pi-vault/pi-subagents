@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+  buildIntercomRequestText,
   buildSubagentCallText,
   buildSubagentResultText,
+  buildWatchdogWarningText,
   renderSubagentMessage,
   toSubagentCommandMessage,
 } from "../src/tui/render.js";
@@ -10,6 +12,11 @@ import type { SubagentExecutionDetails } from "../src/shared/types.js";
 const theme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
+};
+
+const semanticTheme = {
+  fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  bold: (text: string) => `<b>${text}</b>`,
 };
 
 function createDetails(
@@ -57,31 +64,106 @@ function createDetails(
 }
 
 describe("subagent render helpers", () => {
-  test("renderCall includes agent, task preview, and cwd when present", () => {
-    const text = buildSubagentCallText(
+  test("renders a running call with metadata before the task preview", () => {
+    const lines = buildSubagentCallText(
       {
         agent: "Scout",
         task: "Inspect repo structure and summarize findings in a compact report.",
         cwd: "/repo/worktree",
       },
       theme,
-    );
+    ).split("\n");
 
-    expect(text).toContain("subagent Scout");
-    expect(text).toContain("Inspect repo structure");
-    expect(text).toContain("cwd: /repo/worktree");
+    expect(lines).toEqual([
+      "● Scout running",
+      "  cwd /repo/worktree",
+      "  ⎿  Inspect repo structure and summarize findings in a compact report.",
+    ]);
   });
 
-  test("renders collapsed results with summary metadata and only 5 activity labels", () => {
-    const text = buildSubagentResultText("final answer", createDetails(), false, theme);
+  test("uses Pi semantic roles for a running call", () => {
+    const firstLine = buildSubagentCallText(
+      { agent: "Scout", task: "Inspect" },
+      semanticTheme,
+    ).split("\n")[0];
 
-    expect(text).toContain("SUCCESS Scout openai/gpt-5");
-    expect(text).toContain("duration 321ms");
-    expect(text).toContain("usage 12/8 tok, 2 turns");
-    expect(text).toContain("session /sessions/child/run-0/session.jsonl");
-    expect(text).toContain("tools: read done, bash done, write done, edit done, find done");
-    expect(text).not.toContain("read start");
-    expect(text).not.toContain("final output:");
+    expect(firstLine).toBe(
+      "<accent>●</accent> <toolTitle><b>Scout</b></toolTitle> <accent>running</accent>",
+    );
+  });
+
+  test.each([
+    ["success", "✓", "success"],
+    ["error", "✗", "error"],
+    ["timeout", "✗", "error"],
+    ["aborted", "✗", "error"],
+    ["steered", "■", "warning"],
+  ] as const)("renders %s with the expected icon and role", (status, icon, role) => {
+    const firstLine = buildSubagentResultText(
+      "output",
+      createDetails({ status }),
+      false,
+      semanticTheme,
+    ).split("\n")[0];
+
+    expect(firstLine).toContain(`<${role}>${icon}</${role}>`);
+    expect(firstLine).toContain("<toolTitle><b>Scout</b></toolTitle>");
+    expect(firstLine).toContain(`<${role}>${status}</${role}>`);
+  });
+
+  test("renders collapsed result metadata in a stable order", () => {
+    const lines = buildSubagentResultText(
+      "final answer",
+      createDetails(),
+      false,
+      theme,
+    ).split("\n");
+
+    expect(lines).toEqual([
+      "✓ Scout success",
+      "  openai/gpt-5 · 321ms · 12/8 tok · 2 turns · session /sessions/child/run-0/session.jsonl",
+      "  ⎿  tools read done, bash done, write done, edit done, find done",
+    ]);
+    expect(lines.join("\n")).not.toContain("read start");
+    expect(lines.join("\n")).not.toContain("final output:");
+  });
+
+  test("renders a background result with agent identity and optional id", () => {
+    expect(
+      buildSubagentResultText(
+        "Agent started in background",
+        createDetails({ status: "background", agentId: "agent-123" }),
+        false,
+        theme,
+      ),
+    ).toBe("● Scout background\n  id agent-123");
+    expect(
+      buildSubagentResultText(
+        "Agent started in background",
+        createDetails({ status: "background", agentId: undefined }),
+        false,
+        theme,
+      ),
+    ).toBe("● Scout background");
+  });
+
+  test("uses the accent role for a background result", () => {
+    const firstLine = buildSubagentResultText(
+      "Agent started in background",
+      createDetails({ status: "background", agentId: "agent-123" }),
+      false,
+      semanticTheme,
+    ).split("\n")[0];
+
+    expect(firstLine).toContain("<accent>●</accent>");
+    expect(firstLine).toContain("<accent>background</accent>");
+  });
+
+  test("keeps raw content when result details are unavailable", () => {
+    expect(buildSubagentResultText("plain output", undefined, false, theme)).toBe(
+      "plain output",
+    );
+    expect(buildSubagentResultText("", undefined, false, theme)).toBe("(no output)");
   });
 
   test("renders expanded results with task, diagnostics, recent tools, and final output", () => {
@@ -92,10 +174,11 @@ describe("subagent render helpers", () => {
       theme,
     );
 
-    expect(text).toContain("ERROR Scout openai/gpt-5");
+    expect(text).toContain("✗ Scout error");
     expect(text).toContain("task: Inspect repo structure and summarize findings");
     expect(text).toContain("cwd: /repo");
     expect(text).toContain("source: /repo/agents/scout.md");
+    expect(text).toContain("model: openai/gpt-5");
     expect(text).toContain("turns: 30");
     expect(text).toContain("stop reason: error");
     expect(text).toContain("exit code: 2");
@@ -117,17 +200,17 @@ describe("subagent render helpers", () => {
     expect(text).toContain("final answer");
   });
 
-  test("renderSubagentMessage renders completed details", () => {
+  test("renders completed details in a custom message", () => {
     const text = renderSubagentMessage(
       { content: "the answer", details: createDetails() },
       { expanded: false } as never,
       theme as never,
     ).render(120).join("\n");
 
-    expect(text).toContain("SUCCESS Scout");
+    expect(text).toContain("✓ Scout success");
   });
 
-  test("renderSubagentMessage renders without details (plain text)", () => {
+  test("renders custom messages without details as plain text", () => {
     const text = renderSubagentMessage(
       { content: "plain output" },
       { expanded: false } as never,
@@ -137,7 +220,7 @@ describe("subagent render helpers", () => {
     expect(text).toContain("plain output");
   });
 
-  test("toSubagentCommandMessage wraps details into message envelope", () => {
+  test("wraps details in the subagent command message envelope", () => {
     const message = toSubagentCommandMessage({
       content: "done",
       isError: false,
@@ -147,16 +230,6 @@ describe("subagent render helpers", () => {
     expect(message.customType).toBe("pi-subagent-result");
     expect(message.display).toBe(true);
     expect(message.details?.agent).toBe("Scout");
-  });
-
-  test("renders steered status with warning color", () => {
-    const text = buildSubagentResultText(
-      "wrapped up",
-      createDetails({ status: "steered", stopReason: "steered" }),
-      false,
-      theme,
-    );
-    expect(text).toContain("STEERED");
   });
 
   test("renders thinking level in expanded details", () => {
@@ -169,7 +242,7 @@ describe("subagent render helpers", () => {
     expect(text).toContain("thinking: high");
   });
 
-  test("renders unlimited turns", () => {
+  test("renders unlimited turns in expanded details", () => {
     const text = buildSubagentResultText(
       "done",
       createDetails({ maxTurns: 0 }),
@@ -177,5 +250,171 @@ describe("subagent render helpers", () => {
       theme,
     );
     expect(text).toContain("turns: unlimited");
+  });
+});
+
+describe("watchdog and intercom render helpers", () => {
+  test("renders a collapsed blocker as header, metadata, and summary", () => {
+    const text = buildWatchdogWarningText(
+      {
+        severity: "blocker",
+        summary: "Null pointer dereference",
+        evidence: "src/foo.ts:42",
+        recommendedAction: "Add null check",
+        category: "correctness",
+        state: "displayed",
+        agentId: "agent-xyz",
+      },
+      false,
+      theme,
+    );
+
+    expect(text.split("\n")).toEqual([
+      "⚠ Watchdog Blocker displayed",
+      "  correctness · agent agent-xyz",
+      "  ⎿  Null pointer dereference",
+    ]);
+  });
+
+  test("preserves expanded watchdog evidence and action", () => {
+    const text = buildWatchdogWarningText(
+      {
+        severity: "concern",
+        summary: "Missing test coverage",
+        evidence: "src/bar.ts",
+        recommendedAction: "Add unit test",
+        category: "test-gap",
+        autoFollowAttempt: 2,
+      },
+      true,
+      theme,
+    );
+
+    expect(text).toContain("⚠ Watchdog Concern auto-follow attempt 2");
+    expect(text).toContain("⎿  Missing test coverage");
+    expect(text).toContain("Evidence: src/bar.ts");
+    expect(text).toContain("Recommended action: Add unit test");
+    expect(text).toContain("Category: test-gap");
+  });
+
+  test.each([
+    ["stale", "stale"],
+    ["failed", "failed review"],
+    ["stalemate", "stalemate"],
+  ] as const)("preserves the %s watchdog state label", (state, label) => {
+    const firstLine = buildWatchdogWarningText(
+      {
+        severity: "blocker",
+        summary: "Review stopped",
+        evidence: "src/foo.ts:42",
+        recommendedAction: "Inspect manually",
+        category: "correctness",
+        state,
+      },
+      false,
+      theme,
+    ).split("\n")[0];
+
+    expect(firstLine).toContain(label);
+  });
+
+  test("omits the watchdog status fragment when no state applies", () => {
+    const firstLine = buildWatchdogWarningText(
+      {
+        severity: "blocker",
+        summary: "Broken",
+        evidence: "src/foo.ts:42",
+        recommendedAction: "Fix it",
+        category: "correctness",
+      },
+      false,
+      semanticTheme,
+    ).split("\n")[0];
+
+    expect(firstLine).toBe(
+      "<error>⚠</error> <toolTitle><b>Watchdog Blocker</b></toolTitle>",
+    );
+  });
+
+  test("uses semantic roles for watchdog severity and intercom requests", () => {
+    expect(
+      buildWatchdogWarningText(
+        {
+          severity: "blocker",
+          summary: "Broken",
+          evidence: "src/foo.ts:42",
+          recommendedAction: "Fix it",
+          category: "correctness",
+        },
+        false,
+        semanticTheme,
+      ),
+    ).toContain("<error>⚠</error>");
+    expect(
+      buildWatchdogWarningText(
+        {
+          severity: "concern",
+          summary: "Missing test",
+          evidence: "src/foo.ts:42",
+          recommendedAction: "Add it",
+          category: "test-gap",
+        },
+        false,
+        semanticTheme,
+      ),
+    ).toContain("<warning>⚠</warning>");
+    expect(
+      buildIntercomRequestText(
+        {
+          id: "request-1",
+          agentId: "agent-1",
+          agentName: "Scout",
+          reason: "need_decision",
+          message: "Which file should I change?",
+          expectsReply: true,
+          createdAt: 1,
+        },
+        semanticTheme,
+      ),
+    ).toContain("<accent>◆</accent>");
+  });
+
+  test("renders intercom reason, request metadata, and message", () => {
+    const text = buildIntercomRequestText(
+      {
+        id: "request-1",
+        agentId: "agent-1",
+        agentName: "Scout",
+        reason: "need_decision",
+        message: "Which file should I change?",
+        expectsReply: true,
+        createdAt: 1,
+      },
+      theme,
+    );
+
+    expect(text.split("\n")).toEqual([
+      "◆ Scout need decision",
+      "  agent agent-1 · request request-1 · reply requested",
+      "  ⎿  Which file should I change?",
+    ]);
+  });
+
+  test("labels non-blocking intercom updates without a reply promise", () => {
+    const text = buildIntercomRequestText(
+      {
+        id: "request-2",
+        agentId: "agent-1",
+        agentName: "Scout",
+        reason: "progress_update",
+        message: "Halfway done",
+        expectsReply: false,
+        createdAt: 2,
+      },
+      theme,
+    );
+
+    expect(text).toContain("◆ Scout progress update");
+    expect(text).toContain("no reply needed");
   });
 });

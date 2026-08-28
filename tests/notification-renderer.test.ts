@@ -20,6 +20,20 @@ const makeDetails = (overrides: Partial<NotificationDetails> = {}): Notification
 });
 
 describe("buildNotificationText", () => {
+  it("renders header, metadata, and collapsed preview in order", () => {
+    const lines = buildNotificationText(
+      makeDetails({ maxTurns: 30 }),
+      false,
+      makeTheme(),
+    ).split("\n");
+
+    expect(lines).toEqual([
+      "✓ Fix the login bug completed",
+      "  ↻3≤30 · 5 tool uses · 12.3k token · 11.2s",
+      "  ⎿  Fixed the authentication issue",
+    ]);
+  });
+
   it("completed: contains ✓, bold description, and 'completed' status", () => {
     const text = buildNotificationText(makeDetails(), false, makeTheme());
     expect(text).toContain("✓");

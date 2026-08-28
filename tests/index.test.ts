@@ -151,12 +151,80 @@ describe("subagents extension", () => {
     );
 
     expect(() => extension(pi)).not.toThrow();
-    expect(renderers).toContainEqual(
-      expect.objectContaining({
-        customType: "pi-subagent-result",
-        renderer: expect.any(Function),
-      }),
+    expect(renderers.map(({ customType }) => customType)).toEqual(
+      expect.arrayContaining([
+        "pi-subagent-result",
+        "subagent-notification",
+        "watchdog-warning",
+        "intercom-request",
+      ]),
     );
+    expect(renderers.every(({ renderer }) => typeof renderer === "function")).toBe(true);
+
+    type TestRenderer = (
+      message: { content: string; details?: unknown },
+      options: { expanded: boolean },
+      theme: {
+        fg: (color: string, text: string) => string;
+        bold: (text: string) => string;
+      },
+    ) => { render(width: number): string[] } | undefined;
+
+    const rendererTheme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    };
+    const rendererByType = new Map(
+      renderers.map(({ customType, renderer }) => [
+        customType,
+        renderer as TestRenderer,
+      ]),
+    );
+    const watchdog = rendererByType.get("watchdog-warning");
+    const intercom = rendererByType.get("intercom-request");
+    expect(watchdog).toBeDefined();
+    expect(intercom).toBeDefined();
+
+    const watchdogText = watchdog?.(
+      {
+        content: "",
+        details: {
+          severity: "blocker",
+          summary: "Null pointer dereference",
+          evidence: "src/foo.ts:42",
+          recommendedAction: "Add null check",
+          category: "correctness",
+          state: "displayed",
+          agentId: "agent-xyz",
+        },
+      },
+      { expanded: false },
+      rendererTheme,
+    )?.render(120).join("\n");
+    expect(watchdogText).toContain("⚠ Watchdog Blocker displayed");
+    expect(watchdogText).toContain("correctness");
+    expect(watchdogText).toContain("Null pointer dereference");
+
+    const intercomText = intercom?.(
+      {
+        content: "",
+        details: {
+          id: "request-1",
+          agentId: "agent-1",
+          agentName: "Scout",
+          reason: "need_decision",
+          message: "Which file should I change?",
+          expectsReply: true,
+          createdAt: 1,
+        },
+      },
+      { expanded: false },
+      rendererTheme,
+    )?.render(120).join("\n");
+    expect(intercomText).toContain("◆ Scout need decision");
+    expect(intercomText).toContain("reply requested");
+    expect(intercomText).toContain("Which file should I change?");
+
     expect(commands).toContainEqual({
       name: "agent",
       description: "Run a discovered pi-subagents agent in the foreground",

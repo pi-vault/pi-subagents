@@ -11,6 +11,11 @@ import type {
   SubagentExecutionDetails,
   SubagentToolInput,
 } from "../shared/types.js";
+import {
+  formatWatchdogWarningText,
+  type WatchdogWarningInput,
+} from "../core/watchdog-render.js";
+import type { IntercomRequest } from "../core/intercom.js";
 import { formatMs, formatTokens, formatTurns } from "./format.js";
 
 const MAX_TASK_PREVIEW = 80;
@@ -55,18 +60,39 @@ type RenderTheme = {
   bold: (text: string) => string;
 };
 
+function statusHeader(icon: string, subject: string, status: string): string {
+  return [icon, subject, status].filter((part) => part.trim()).join(" ");
+}
+
+function metadataLine(parts: readonly string[]): string {
+  const text = parts.filter((part) => part.trim()).join(" · ");
+  return text ? `  ${text}` : "";
+}
+
+function statusPresentation(status: Exclude<SubagentExecutionDetails["status"], "background">): {
+  icon: string;
+  color: "success" | "error" | "warning";
+} {
+  if (status === "success") return { icon: "✓", color: "success" };
+  if (status === "steered") return { icon: "■", color: "warning" };
+  return { icon: "✗", color: "error" };
+}
+
 export function buildSubagentCallText(
   args: SubagentToolInput,
   theme: RenderTheme,
 ): string {
-  let text =
-    theme.fg("toolTitle", theme.bold("subagent ")) +
-    theme.fg("accent", args.agent || "...");
-  text += `\n  ${theme.fg("dim", previewText(args.task, MAX_TASK_PREVIEW))}`;
-  if (args.cwd?.trim()) {
-    text += `\n  ${theme.fg("muted", `cwd: ${args.cwd}`)}`;
-  }
-  return text;
+  const lines = [
+    statusHeader(
+      theme.fg("accent", "●"),
+      theme.fg("toolTitle", theme.bold(args.agent || "...")),
+      theme.fg("accent", "running"),
+    ),
+  ];
+  const metadata = metadataLine([args.cwd?.trim() ? `cwd ${args.cwd}` : ""]);
+  if (metadata) lines.push(theme.fg("dim", metadata));
+  lines.push(theme.fg("dim", `  ⎿  ${previewText(args.task, MAX_TASK_PREVIEW)}`));
+  return lines.join("\n");
 }
 
 export function buildSubagentResultText(
@@ -79,43 +105,52 @@ export function buildSubagentResultText(
     return content || "(no output)";
   }
 
-  // Background spawn — render minimal status line
   if (details.status === "background") {
-    const agentId = details.agentId ? ` (id: ${details.agentId})` : "";
-    return theme.fg("dim", `Running in background${agentId}`);
+    const lines = [
+      statusHeader(
+        theme.fg("accent", "●"),
+        theme.fg("toolTitle", theme.bold(details.agent)),
+        theme.fg("accent", "background"),
+      ),
+    ];
+    const metadata = metadataLine([details.agentId ? `id ${details.agentId}` : ""]);
+    if (metadata) lines.push(theme.fg("dim", metadata));
+    return lines.join("\n");
   }
 
-  const statusColor = details.status === "success" ? "success" : details.status === "error" ? "error" : "warning";
-  const status = theme.fg(statusColor, details.status.toUpperCase());
-  const headerParts = [
-    status,
+  const presentation = statusPresentation(details.status);
+  const header = statusHeader(
+    theme.fg(presentation.color, presentation.icon),
     theme.fg("toolTitle", theme.bold(details.agent)),
-  ];
-  if (details.model) {
-    headerParts.push(theme.fg("muted", details.model));
-  }
+    theme.fg(presentation.color, details.status),
+  );
 
   if (!expanded) {
-    const lines = [headerParts.join(" ")];
-    lines.push(
-      theme.fg(
-        "muted",
-        `duration ${details.durationMs}ms • usage ${formatUsage(details)} • session ${formatPath(details.childSessionPath)}`,
-      ),
-    );
+    const lines = [header];
+    const metadata = metadataLine([
+      details.model ?? "",
+      `${details.durationMs}ms`,
+      `${details.usage.input}/${details.usage.output} tok`,
+      `${details.usage.turns} turns`,
+      `session ${formatPath(details.childSessionPath)}`,
+    ]);
+    if (metadata) lines.push(theme.fg("dim", metadata));
     const activityLabels = details.recentToolActivity
       .slice(-MAX_COLLAPSED_ACTIVITY)
       .map((activity) => activity.label);
     if (activityLabels.length > 0) {
-      lines.push(theme.fg("dim", `tools: ${activityLabels.join(", ")}`));
+      lines.push(theme.fg("dim", `  ⎿  tools ${activityLabels.join(", ")}`));
     }
     return lines.join("\n");
   }
 
-  const lines = [headerParts.join(" ")];
+  const lines = [header];
   lines.push(theme.fg("muted", `task: ${details.task || "-"}`));
   lines.push(theme.fg("muted", `cwd: ${formatPath(details.cwd)}`));
   lines.push(theme.fg("muted", `source: ${formatPath(details.sourcePath)}`));
+  if (details.model) {
+    lines.push(theme.fg("muted", `model: ${details.model}`));
+  }
   lines.push(
     theme.fg(
       "muted",
@@ -225,6 +260,68 @@ export function toSubagentCommandMessage(result: {
   };
 }
 
+function watchdogStateLabels(details: WatchdogWarningInput): string[] {
+  const labels: string[] = [];
+  if (details.state === "displayed") labels.push("displayed");
+  if (details.state === "stale") labels.push("stale");
+  if (details.state === "failed") labels.push("failed review");
+  if (details.state === "stalemate") labels.push("stalemate");
+  if (details.autoFollowAttempt !== undefined) {
+    labels.push(`auto-follow attempt ${details.autoFollowAttempt}`);
+  }
+  return labels;
+}
+
+export function buildWatchdogWarningText(
+  details: WatchdogWarningInput,
+  expanded: boolean,
+  theme: RenderTheme,
+): string {
+  const color = details.severity === "blocker" ? "error" : "warning";
+  const subject = details.severity === "blocker" ? "Watchdog Blocker" : "Watchdog Concern";
+  const parts = formatWatchdogWarningText(details);
+  const labels = watchdogStateLabels(details).join(", ");
+  const lines = [
+    statusHeader(
+      theme.fg(color, "⚠"),
+      theme.fg("toolTitle", theme.bold(subject)),
+      labels ? theme.fg(color, labels) : "",
+    ),
+  ];
+  const metadata = metadataLine([
+    details.category,
+    details.agentId ? `agent ${details.agentId}` : "",
+  ]);
+  if (metadata) lines.push(theme.fg("dim", metadata));
+  lines.push(theme.fg("dim", `  ⎿  ${details.summary}`));
+  if (expanded) {
+    lines.push(theme.fg("dim", `  ${parts.evidenceLine}`));
+    lines.push(theme.fg("dim", `  ${parts.actionLine}`));
+    lines.push(theme.fg("dim", `  ${parts.categoryLine}`));
+  }
+  return lines.join("\n");
+}
+
+export function buildIntercomRequestText(
+  details: IntercomRequest,
+  theme: RenderTheme,
+): string {
+  const metadata = metadataLine([
+    `agent ${details.agentId}`,
+    `request ${details.id}`,
+    details.expectsReply ? "reply requested" : "no reply needed",
+  ]);
+  return [
+    statusHeader(
+      theme.fg("accent", "◆"),
+      theme.fg("toolTitle", theme.bold(details.agentName)),
+      theme.fg("dim", details.reason.replaceAll("_", " ")),
+    ),
+    theme.fg("dim", metadata),
+    theme.fg("dim", `  ⎿  ${details.message}`),
+  ].join("\n");
+}
+
 type NotifTheme = { fg(color: string, text: string): string; bold(text: string): string };
 
 export function buildNotificationText(
@@ -233,37 +330,39 @@ export function buildNotificationText(
   theme: NotifTheme,
 ): string {
   const isError = d.status === "error" || d.status === "stopped" || d.status === "aborted";
-  const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
   const statusText = isError
     ? d.status
     : d.status === "steered"
       ? "completed (steered)"
       : "completed";
+  const lines = [
+    statusHeader(
+      theme.fg(isError ? "error" : "success", isError ? "✗" : "✓"),
+      theme.bold(d.description),
+      theme.fg("dim", statusText),
+    ),
+  ];
 
-  let line = `${icon} ${theme.bold(d.description)} ${theme.fg("dim", statusText)}`;
-
-  const parts: string[] = [];
-  if (d.turnCount > 0) parts.push(formatTurns(d.turnCount, d.maxTurns));
-  if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
-  if (d.totalTokens > 0) parts.push(formatTokens(d.totalTokens));
-  if (d.durationMs > 0) parts.push(formatMs(d.durationMs));
-  if (parts.length) {
-    line +=
-      "\n  " +
-      parts.map((p) => theme.fg("dim", p)).join(` ${theme.fg("dim", "·")} `);
-  }
+  const metadata = metadataLine([
+    d.turnCount > 0 ? formatTurns(d.turnCount, d.maxTurns) : "",
+    d.toolUses > 0 ? `${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}` : "",
+    d.totalTokens > 0 ? formatTokens(d.totalTokens) : "",
+    d.durationMs > 0 ? formatMs(d.durationMs) : "",
+  ]);
+  if (metadata) lines.push(theme.fg("dim", metadata));
 
   if (expanded) {
-    const lines = d.resultPreview.split("\n").slice(0, 30);
-    for (const l of lines) line += `\n${theme.fg("dim", `  ${l}`)}`;
+    for (const line of d.resultPreview.split("\n").slice(0, 30)) {
+      lines.push(theme.fg("dim", `  ${line}`));
+    }
   } else {
     const preview = d.resultPreview.split("\n")[0]?.slice(0, 80) ?? "";
-    line += `\n  ${theme.fg("dim", `⎿  ${preview}`)}`;
+    lines.push(theme.fg("dim", `  ⎿  ${preview}`));
   }
 
   if (d.outputFile) {
-    line += `\n  ${theme.fg("muted", `transcript: ${d.outputFile}`)}`;
+    lines.push(theme.fg("muted", `  transcript: ${d.outputFile}`));
   }
 
-  return line;
+  return lines.join("\n");
 }
