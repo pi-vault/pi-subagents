@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## 2026-08-29 - [0.4.1]
 
 ### Fixed
 
@@ -13,7 +13,7 @@ All notable changes to this project will be documented in this file.
 - Align pi-subagents-owned overlays, widgets, fleet navigation, conversation viewing, and inline status rendering with a compact dashboard hierarchy that follows Pi's active theme.
 - Raise the tested Pi development baseline to `0.84.3`; Pi `0.84.3+` and Node.js `24.15.0+` are required.
 
-## [0.4.0] - 2026-07-17
+## 2026-07-17 - [0.4.0]
 
 ### Added
 
@@ -61,7 +61,7 @@ All notable changes to this project will be documented in this file.
 - Node.js requirement remains `>=24.15.0`.
 - `timeout_ms` frontmatter (deprecated since 0.3.0) is now fully ignored; migrate to `max_turns`.
 
-## [0.3.0] - 2026-07-05 - 2026-06-14
+## 2026-07-05 - [0.3.0]
 
 ### Changed
 
@@ -81,7 +81,7 @@ All notable changes to this project will be documented in this file.
 - Deduplicated serialized `skills` values when writing agent definitions.
 - Addressed follow-up code review issues in the extracted subagent execution modules.
 
-## [0.2.0] - 2026-06-14
+## 2026-06-14 - [0.2.0]
 
 ### Added
 
@@ -104,7 +104,7 @@ All notable changes to this project will be documented in this file.
 - Fixed foreground agent rendering so slash agent cards stay live during quiet periods.
 - Fixed menu selection handling to guard against an undefined selection result.
 
-## [0.1.0] - 2026-06-07
+## 2026-06-07 - [0.1.0]
 
 ### Added
 
